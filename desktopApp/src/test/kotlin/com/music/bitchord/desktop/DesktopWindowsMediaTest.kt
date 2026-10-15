@@ -23,6 +23,7 @@ class DesktopWindowsMediaTest {
                 onNext = { pressed += "next" },
                 onPrevious = { pressed += "previous" },
                 onStop = { pressed += "stop" },
+                onSeek = {},
             ),
         )
     }

@@ -137,6 +137,32 @@ class DesktopCanvasTest {
         )
     }
 
+    @Test
+    fun `motion chooses one AVC rendition before probing the master`() {
+        val master = "https://mvod.itunes.apple.com/x/P359420040_default.m3u8"
+        val manifest = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=3840x2160,CODECS="hvc1.1.6.L120.90"
+            hevc.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.4d401e"
+            small.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,CODECS="avc1.4d401f"
+            target.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS="avc1.4d4028"
+            large.m3u8
+        """.trimIndent()
+        assertEquals("https://mvod.itunes.apple.com/x/target.m3u8", selectCanvasVariant(master, manifest, 1280))
+        assertEquals("https://mvod.itunes.apple.com/x/small.m3u8", selectCanvasVariant(master, manifest, 540))
+        assertEquals("https://mvod.itunes.apple.com/x/large.m3u8", selectCanvasVariant(master, manifest, 4096))
+    }
+
+    @Test
+    fun `a media playlist and an unsafe variant are not mistaken for a master rendition`() {
+        val master = "https://mvod.itunes.apple.com/x/P359420040_default.m3u8"
+        assertNull(selectCanvasVariant(master, "#EXTM3U\n#EXTINF:2,\nsegment.ts", 540))
+        assertNull(selectCanvasVariant(master, "#EXTM3U\n#EXT-X-STREAM-INF:RESOLUTION=1280x720\nfile:///private", 540))
+    }
+
     private fun field(number: Int, value: String): ByteArray {
         val bytes = value.toByteArray(StandardCharsets.UTF_8)
         return byteArrayOf((number shl 3 or 2).toByte()) + varint(bytes.size) + bytes
