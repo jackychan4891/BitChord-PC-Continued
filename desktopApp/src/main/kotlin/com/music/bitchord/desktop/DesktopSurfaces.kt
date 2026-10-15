@@ -1,5 +1,6 @@
 package com.music.bitchord.desktop
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
@@ -17,7 +18,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.border
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -38,6 +43,33 @@ internal val DesktopCardInsetFill = Color(0x14FFFFFF)
 
 /** The hairline that bounds a card, and separates one row from the next. */
 internal val DesktopCardEdge = Color(0x1FFFFFFF)
+
+/**
+ * The DropdownMenu every small desktop menu opens as — the song menu's own card fill and
+ * hairline, so no menu reads lighter, rounder or taller-rowed than the next.
+ */
+@Composable
+internal fun DesktopDropdownMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    CompositionLocalProvider(
+        LocalTextStyle provides MaterialTheme.typography.bodyMedium,
+        LocalMinimumInteractiveComponentSize provides 32.dp,
+    ) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismissRequest,
+            modifier = modifier,
+            shape = RoundedCornerShape(12.dp),
+            containerColor = DesktopCardFill,
+            border = BorderStroke(0.5.dp, DesktopCardEdge),
+            content = content,
+        )
+    }
+}
 
 /** What a row reads at while the pointer is on it. */
 internal val DesktopRowHover = Color(0x1AFFFFFF)

@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
@@ -47,14 +48,21 @@ import androidx.compose.ui.Modifier
 import org.jetbrains.compose.resources.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.addOutline
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
@@ -113,6 +121,28 @@ private val LandscapeArtShape = RoundedCornerShape(LANDSCAPE_ART_CORNER)
 private val LANDSCAPE_HANDLE_STRIP = 24.dp
 
 /**
+ * How much of the desktop left column the transport and the toggle row take.
+ *
+ * The sleeve is sized to leave this much under it, so the controls sit close
+ * beneath the cover instead of the sleeve being centred in the whole column and
+ * shunting them down to its foot. Only the desktop window uses it; a
+ * phone-height window keeps the sleeve filling the column above its row.
+ */
+private val LANDSCAPE_DESKTOP_CONTROLS_RESERVE = 300.dp
+
+/**
+ * How far the desktop lyric sheet is lifted off the foot of its column.
+ *
+ * The sleeve now rests a little above the middle of the window, so the words are
+ * raised by roughly the same amount to sit level with the middle of the cover
+ * rather than the middle of the screen. It is applied to the scroll viewport
+ * alone — see [LandscapeLyricsPane]'s [bottomInset][LandscapeLyricsPane] — so
+ * the attribution bar under the sheet stays pinned to the foot, level with the
+ * bottom of the transport in the other column.
+ */
+internal val LANDSCAPE_LYRICS_BOTTOM_LIFT = 240.dp
+
+/**
  * The player in a landscape window — a tablet, or a phone on its side. See
  * [landscapePlayerAvailable].
  *
@@ -137,13 +167,20 @@ private val LANDSCAPE_HANDLE_STRIP = 24.dp
 internal fun LandscapePlayerLayout(
     pane: PlayerPane,
     background: @Composable (Modifier) -> Unit,
-    /** The sleeve; handed a modifier that already fixes its square size. */
-    artwork: @Composable (Modifier) -> Unit,
+    /** The sleeve; handed a modifier that already fixes its square size, and whether the Automix
+     * aura should be clipped to the sleeve's rounded shape (desktop) rather than its square bounds. */
+    artwork: @Composable (Modifier, glowRounded: Boolean) -> Unit,
     /** The row under the sleeve, emitted into its column. */
     actions: @Composable () -> Unit,
-    /** Credits and transport. [compact] is a phone-height window. */
-    mainPane: @Composable (compact: Boolean) -> Unit,
-    lyricsPane: @Composable () -> Unit,
+    /**
+     * Credits, scrubber, transport and volume. On a desktop window this sits
+     * directly under the sleeve in the left column and is always visible, so
+     * the right column is free for the lyric sheet; on a phone-height window it
+     * is the right column's main pane instead, exactly as before.
+     */
+    controls: @Composable (compact: Boolean) -> Unit,
+    /** The lyric sheet. [compact] is a phone-height window. */
+    lyricsPane: @Composable (compact: Boolean) -> Unit,
     queuePane: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -158,6 +195,13 @@ internal fun LandscapePlayerLayout(
         ) {
             val compact = maxHeight < LANDSCAPE_COMPACT_HEIGHT
             val gutter = if (compact) LANDSCAPE_GUTTER_COMPACT else PLAYER_GUTTER
+
+            // On a desktop window the transport sits under the sleeve in the
+            // left column, so the main state shows the lyric sheet here rather
+            // than the controls — words fill this space, as in Apple Music. The
+            // queue still toggles over it. A phone-height window is untouched:
+            // its main pane is the transport, exactly as before.
+            val shown = if (!compact && pane == PlayerPane.Main) PlayerPane.Lyrics else pane
 
             Row(
                 modifier = Modifier
@@ -174,26 +218,55 @@ internal fun LandscapePlayerLayout(
                         .fillMaxHeight()
                         .padding(horizontal = gutter),
                     horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = if (compact) Arrangement.Top else Arrangement.Center,
                 ) {
-                    // The sleeve is square and takes whichever of the two axes
-                    // runs out first once the row below has had its height —
-                    // the column's width on a big tablet, the height on
-                    // anything shorter. Measured here rather than estimated,
-                    // so the row under it can never be pushed off the bottom.
-                    BoxWithConstraints(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        artwork(Modifier.size(minOf(maxWidth, maxHeight)))
+                    if (compact) {
+                        // The sleeve is square and takes whichever of the two
+                        // axes runs out first once the row below has had its
+                        // height — the column's width on a big tablet, the
+                        // height on anything shorter. Measured here rather than
+                        // estimated, so the row under it can never be pushed off
+                        // the bottom.
+                        BoxWithConstraints(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            artwork(Modifier.size(minOf(maxWidth, maxHeight)), false)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        actions()
+                    } else {
+                        // On a desktop window the transport lives here, right
+                        // under the sleeve and always on screen, the way Apple
+                        // Music lays the fullscreen player out. The sleeve is
+                        // capped to [LANDSCAPE_DESKTOP_CONTROLS_RESERVE] less
+                        // than the column so there is room under it, and the box
+                        // wraps that square exactly — no slack left below the
+                        // cover to shove the controls back down to the foot.
+                        BoxWithConstraints(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            artwork(
+                                Modifier.size(
+                                    minOf(maxWidth, maxHeight - LANDSCAPE_DESKTOP_CONTROLS_RESERVE),
+                                ),
+                                true,
+                            )
+                        }
+                        Spacer(Modifier.height(24.dp))
+                        controls(false)
+                        // The volume bar and the lyrics/output/queue row are
+                        // folded into the player's overflow, which the song
+                        // menu's "More…" opens — so the sleeve and the
+                        // transport are all this column shows.
                     }
-                    Spacer(Modifier.height(if (compact) 12.dp else 24.dp))
-                    actions()
                 }
 
                 AnimatedContent(
-                    targetState = pane,
+                    targetState = shown,
                     transitionSpec = {
                         fadeIn(
                             tween(
@@ -207,15 +280,15 @@ internal fun LandscapePlayerLayout(
                         .weight(1f)
                         .fillMaxHeight(),
                     label = "landscapePane",
-                ) { shown ->
-                    when (shown) {
+                ) { paneShown ->
+                    when (paneShown) {
                         PlayerPane.Main -> Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(horizontal = gutter),
                             contentAlignment = Alignment.Center,
                         ) {
-                            mainPane(compact)
+                            controls(compact)
                         }
                         // The lyric sheet and the queue both reach back across
                         // [PLAYER_GUTTER] on their own (see
@@ -227,7 +300,7 @@ internal fun LandscapePlayerLayout(
                                 .fillMaxSize()
                                 .padding(horizontal = PLAYER_GUTTER),
                         ) {
-                            lyricsPane()
+                            lyricsPane(compact)
                         }
                         PlayerPane.Queue -> Box(
                             Modifier
@@ -255,6 +328,15 @@ internal fun LandscapePlayerLayout(
         }
     }
 }
+
+/** The aura only dips to two-thirds between beats: a bloom that vanished entirely read as a flicker. */
+private const val GLOW_REST = 0.66f
+
+/** The aura's peak opacity. Full-strength white over the backdrop read as a blown-out halo. */
+private const val GLOW_PEAK = 0.5f
+
+/** Aura radius as a multiple of the sleeve's shorter side, so it reaches past the corners. */
+private const val GLOW_RADIUS = 0.95f
 
 /**
  * The landscape player's sleeve: the still cover, and over it the looping
@@ -287,10 +369,57 @@ internal fun LandscapeArtwork(
     sleeveShape: () -> Shape = { LandscapeArtShape },
     /** How much of the sleeve's shadow is cast, 1 at rest. */
     shadowFraction: () -> Float = { 1f },
+    /**
+     * The colour of the aura that blooms around the sleeve while an Automix blend runs. Tint it
+     * with the artwork's own palette where one is at hand; it defaults to a neutral light.
+     */
+    glowColor: Color = Color.White,
+    /**
+     * Clip the Automix aura to the sleeve's rounded shape rather than its square bounds. The
+     * desktop player sets this so the white bloom that pulses during a blend reads as a rounded
+     * halo, not a square flash; the phone-landscape player leaves it off and is unchanged.
+     */
+    glowRounded: Boolean = false,
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val casts = artLoaded || canvasRendered
-    Box(modifier = modifier) {
+    // The same beat clock the scrubber and the "Mixing" label breathe on, so the aura pulses in
+    // step with them. Held as a State and read only inside the draw below: the blend republishes
+    // every fade tick, and collecting it by value here would recompose the sleeve for a change
+    // only the canvas needs.
+    val mixBlend = PlayerSettings.smartMixBlend.collectAsStateWithLifecycle()
+    val reduceAnimation by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val glowPulse = rememberMixPulse({ mixBlend.value }, enabled = !reduceAnimation)
+    Box(
+        modifier = modifier
+            // Behind the sleeve, bleeding past its edges: a soft bloom that fades in with the
+            // blend and beats with it. Read in the draw, so the pulse repaints the aura every
+            // frame without recomposing the sleeve.
+            .drawBehind {
+                val cover = glowPulse.cover
+                if (cover <= 0f) return@drawBehind
+                val alpha = cover * glowPulse.alpha(1f, restShare = GLOW_REST) * GLOW_PEAK
+                if (alpha <= 0f) return@drawBehind
+                val radius = size.minDimension * GLOW_RADIUS
+                val brush = Brush.radialGradient(
+                    colorStops = arrayOf(
+                        0.42f to Color.Transparent,
+                        0.66f to glowColor.copy(alpha = alpha),
+                        1f to Color.Transparent,
+                    ),
+                    center = center,
+                    radius = radius,
+                )
+                if (glowRounded) {
+                    val outline = sleeveShape().createOutline(size, layoutDirection, this)
+                    clipPath(Path().apply { addOutline(outline) }) {
+                        drawRect(brush = brush)
+                    }
+                } else {
+                    drawRect(brush = brush)
+                }
+            },
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -461,7 +590,7 @@ internal fun LandscapeCredits(
         if (signedIn && song.localUri == null) {
             val liked = likeStatus == LikeStatus.LIKE
             CircleGlyph(
-                icon = if (liked) BitChordIcons.HeartFilled else BitChordIcons.Heart,
+                icon = if (liked) BitChordIcons.StarFilled else BitChordIcons.Star,
                 contentDescription = stringResource(
                     if (liked) Res.string.remove_from_liked else Res.string.like,
                 ),
@@ -501,6 +630,26 @@ internal fun LandscapeLyricsPane(
     pickBar: @Composable () -> Unit = {},
     romanizationToggle: @Composable () -> Unit,
     translationToggle: @Composable () -> Unit,
+    /**
+     * How far the scroll viewport is lifted off the foot of the column, short of
+     * the bar below it. Raises the line being sung toward the middle of the
+     * sleeve on a desktop window without moving the bar — see
+     * [LANDSCAPE_LYRICS_BOTTOM_LIFT].
+     */
+    bottomInset: Dp = 0.dp,
+    /**
+     * Whether the romanize / source / translate bar sits under the sheet. A
+     * desktop window folds it into the player's overflow and shows the sheet
+     * alone; every other caller keeps it.
+     */
+    showBar: Boolean = true,
+    /**
+     * Whether the bar's centred status line is drawn — the "Lyrics by …"
+     * caption, its loading and translation siblings. The desktop player moved
+     * the provider into its song menu, so its docked lyric column drops this
+     * line while keeping the two toggles either side of it.
+     */
+    showStatus: Boolean = true,
     modifier: Modifier = Modifier,
     panel: @Composable (Modifier) -> Unit,
 ) {
@@ -508,7 +657,8 @@ internal fun LandscapeLyricsPane(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .padding(bottom = bottomInset),
         ) {
             if (hasLyrics) {
                 panel(Modifier.fillMaxSize())
@@ -532,7 +682,7 @@ internal fun LandscapeLyricsPane(
         // where.
         if (picking) {
             Box(Modifier.fillMaxWidth()) { pickBar() }
-        } else {
+        } else if (showBar) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -548,10 +698,12 @@ internal fun LandscapeLyricsPane(
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                LyricsStatusWithChange(
-                    status = status,
-                    onStatusClick = onStatusClick,
-                )
+                if (showStatus) {
+                    LyricsStatusWithChange(
+                        status = status,
+                        onStatusClick = onStatusClick,
+                    )
+                }
             }
             Box(Modifier.size(34.dp)) { if (hasLyrics) translationToggle() }
         }

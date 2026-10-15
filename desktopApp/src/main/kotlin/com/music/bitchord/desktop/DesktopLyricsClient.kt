@@ -56,11 +56,18 @@ object DesktopLyricsClient {
     /**
      * The track's lyrics from the configured providers — or, with [only], from that one provider,
      * which is how the player's provider picker asks for a specific source's answer.
+     *
+     * [onSourceStarted] and [onSourceResult] report each provider's race as it runs, so the song
+     * menu's provider drawer can show what each one turned up rather than only the winner. They
+     * fire off the IO dispatcher and only for a lookup that actually reaches the network — a cache
+     * hit or a local file's embedded words return at once and report nothing.
      */
     suspend fun lookup(
         song: Song,
         durationMs: Long = song.durationMillis(),
         only: String? = null,
+        onSourceStarted: ((LyricsSource) -> Unit)? = null,
+        onSourceResult: ((LyricsSource, Boolean) -> Unit)? = null,
     ): Result<DesktopLyrics> {
         val persistence = DesktopPersistence()
         // Off in Settings means no lookup at all rather than a lookup nobody sees.
@@ -74,7 +81,11 @@ object DesktopLyricsClient {
         // the feature being off.
         if (asked.isEmpty()) return Result.failure(IllegalStateException("No lyrics sources are enabled"))
 
-        val cacheKey = "${song.videoId}|$durationMs|${only.orEmpty()}"
+        // The title and artist are part of the key, not just the video id: the
+        // player's manual search asks the same track's providers under a typed
+        // query, and a cache keyed only on the id would hand back the earlier
+        // automatic answer and look as though the search had done nothing.
+        val cacheKey = "${song.videoId}|$durationMs|${song.title}|${song.artist}|${only.orEmpty()}"
         cache[cacheKey]?.takeIf { System.currentTimeMillis() - it.createdAt < CACHE_TTL_MS }?.let { return it.result }
 
         // A downloaded or local file carries its own words; asking servers for a string already
@@ -92,6 +103,8 @@ object DesktopLyricsClient {
                 sources = asked.toSet(),
                 order = asked,
                 prioritizeSyllableSync = persistence.boolean(KEY_PRIORITIZE_SYLLABLES, false),
+                onSourceStarted = onSourceStarted,
+                onSourceResult = { source, result -> onSourceResult?.invoke(source, result != null) },
             )
             if (found == null) {
                 Result.failure(IllegalStateException("Lyrics unavailable"))

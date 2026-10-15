@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -36,11 +37,15 @@ import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material.icons.rounded.ThumbDownOffAlt
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +57,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -63,7 +69,9 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.music.bitchord.data.model.LikeStatus
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.ui.LyricsProviderState
 import com.music.bitchord.ui.icons.BitChordIcons
+import java.util.Locale
 
 /** The verbs the song menu needs that the player does not otherwise know about. */
 internal data class DesktopSongActions(
@@ -87,7 +95,17 @@ internal data class DesktopSongActions(
     val onShare: (Song) -> Unit,
 )
 
-/** The "…" beside the player's heart, and the menu it opens. */
+/**
+ * One lyrics provider as the song menu's provider drawer shows it: its label,
+ * what its lookup turned up, and whether it is the one the sheet shows now.
+ */
+internal data class DesktopLyricsProviderRow(
+    val label: String,
+    val state: LyricsProviderState,
+    val current: Boolean,
+)
+
+/** The "…" beside the player's star, and the menu it opens. */
 @Composable
 internal fun DesktopSongMenuAnchor(
     song: Song,
@@ -125,6 +143,54 @@ internal fun DesktopSongMenuFor(
     onRevertToOriginal: (() -> Unit)?,
     onUpgradeQuality: (() -> Unit)?,
     onDismiss: () -> Unit,
+    /**
+     * Opens the player's own overflow — the volume bar, the lyrics/output/queue
+     * row and the lyric-sheet footer, which a desktop player hides behind this
+     * menu rather than showing on the sleeve column. Only the player's menu
+     * passes it; a song menu raised from a list has no player to overflow into.
+     */
+    onMore: (() -> Unit)? = null,
+    /**
+     * Show the lyric sheet, or the queue, in the player's content column. The
+     * desktop player keeps these two as rows on this menu rather than glyphs in
+     * its overflow. Null on a menu raised from a list, which has no player to
+     * switch.
+     */
+    onShowLyrics: (() -> Unit)? = null,
+    onShowQueue: (() -> Unit)? = null,
+    /**
+     * Asks the shared player to switch the lyric sheet between the originals and
+     * their translation — the toggle the desktop overflow used to hold, now a row
+     * on this menu. Null on a menu raised from a list, which has no player.
+     */
+    onTranslate: (() -> Unit)? = null,
+    /** Whether the sheet shows its translation now, for the row's checkmark. */
+    showingTranslation: Boolean = false,
+    /** Whether the playing track has lyrics to translate; false greys the row out. */
+    translateEnabled: Boolean = true,
+    /**
+     * The lyrics providers to offer, each with its search state and whether it
+     * is the one the sheet shows now. Passing a non-empty list with an
+     * [onSelectLyricsProvider] adds a "Lyrics provider" row that opens them —
+     * and the manual search box above them — inline. Null on a menu raised from
+     * a list, which has no lyrics to switch.
+     */
+    lyricsProviders: List<DesktopLyricsProviderRow> = emptyList(),
+    onSelectLyricsProvider: ((String) -> Unit)? = null,
+    /**
+     * Runs a manual lyrics lookup for a typed title and artist, across every
+     * enabled provider. The submenu stays open through it, so the provider list
+     * below the search box updates as the race resolves.
+     */
+    onSearchLyrics: ((title: String, artist: String) -> Unit)? = null,
+    /**
+     * The player's current lyrics offset and the means to change it. Passing a
+     * setter adds a "Lyrics offset" row that opens a stepper; the offset shifts
+     * every synced lyric against the clock and, on desktop, resets to zero for a
+     * new track. Null on a menu raised from a list, which has no player to nudge.
+     */
+    lyricsOffsetMs: Int = 0,
+    onSetLyricsOffset: ((Int) -> Unit)? = null,
 ) {
     val close = onDismiss
     DesktopSongMenu(
@@ -156,6 +222,19 @@ internal fun DesktopSongMenuFor(
         onSleepTimer = { actions.onSleepTimer(it); close() },
         onSleepAfterTrack = { actions.onSleepAfterTrack(); close() },
         onShare = { actions.onShare(song); close() },
+        onMore = onMore,
+        onShowLyrics = onShowLyrics?.let { { it(); close() } },
+        onShowQueue = onShowQueue?.let { { it(); close() } },
+        onTranslate = onTranslate?.let { { it(); close() } },
+        showingTranslation = showingTranslation,
+        translateEnabled = translateEnabled,
+        // Neither closes the menu: the provider submenu shows the search running
+        // and the state landing on each row, which closing would hide.
+        lyricsProviders = lyricsProviders,
+        onSelectLyricsProvider = onSelectLyricsProvider,
+        onSearchLyrics = onSearchLyrics,
+        lyricsOffsetMs = lyricsOffsetMs,
+        onSetLyricsOffset = onSetLyricsOffset,
         onDismiss = close,
     )
 }
@@ -187,9 +266,28 @@ internal fun DesktopSongMenu(
     onSleepTimer: (Int?) -> Unit,
     onSleepAfterTrack: () -> Unit,
     onShare: () -> Unit,
+    /** Opens the player's own overflow; null on a menu raised from a list. */
+    onMore: (() -> Unit)? = null,
+    /** Show the lyric sheet / the queue; null when there is no player to switch. */
+    onShowLyrics: (() -> Unit)? = null,
+    onShowQueue: (() -> Unit)? = null,
+    /** Show the translation of the lyric sheet; null when there is no player to switch. */
+    onTranslate: (() -> Unit)? = null,
+    showingTranslation: Boolean = false,
+    translateEnabled: Boolean = true,
+    /** Providers to offer with their search state; empty hides the "Lyrics provider" row. */
+    lyricsProviders: List<DesktopLyricsProviderRow> = emptyList(),
+    onSelectLyricsProvider: ((String) -> Unit)? = null,
+    /** Manual title+artist lookup across the enabled providers; null hides the search box. */
+    onSearchLyrics: ((title: String, artist: String) -> Unit)? = null,
+    /** The player's lyrics offset and its setter; a null setter hides the "Lyrics offset" row. */
+    lyricsOffsetMs: Int = 0,
+    onSetLyricsOffset: ((Int) -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     var pickingSleepTimer by remember { mutableStateOf(false) }
+    var pickingLyricsProvider by remember { mutableStateOf(false) }
+    var pickingLyricsOffset by remember { mutableStateOf(false) }
     val liked = likeStatus == LikeStatus.LIKE
     val disliked = likeStatus == LikeStatus.DISLIKE
     // A local file or a finished download has no YouTube identity behind it to rate, queue into a
@@ -197,6 +295,49 @@ internal fun DesktopSongMenu(
     val isOffline = song.localUri != null
 
     DesktopMenuSurface(onDismiss = onDismiss) {
+        // One drawer for both: the manual search box on top, and under it every
+        // provider with what its lookup turned up — the lyric sheet's old footer
+        // and its provider picker, folded into the song menu.
+        if (pickingLyricsProvider) {
+            DesktopMenuHeader(DesktopStrings["d_lyrics_provider", "Lyrics provider"]) { pickingLyricsProvider = false }
+            DesktopMenuDivider()
+            if (onSearchLyrics != null) {
+                DesktopLyricsSearchForm(
+                    initialTitle = song.title,
+                    initialArtist = song.artist,
+                    onSearch = { title, artist -> onSearchLyrics(title, artist) },
+                )
+                DesktopMenuDivider()
+            }
+            lyricsProviders.forEach { provider ->
+                val status = when {
+                    provider.current -> DesktopStrings["d_found", "Found"]
+                    provider.state == LyricsProviderState.FOUND -> DesktopStrings["d_found", "Found"]
+                    provider.state == LyricsProviderState.NOT_FOUND -> DesktopStrings["d_not_found", "Not found"]
+                    provider.state == LyricsProviderState.FETCHING -> DesktopStrings["d_searching", "Searching…"]
+                    else -> ""
+                }
+                DesktopMenuRow(
+                    icon = BitChordIcons.MusicNote,
+                    label = provider.label,
+                    value = status,
+                    selected = provider.current,
+                    // A provider the search already drew a blank on cannot be
+                    // switched to; the current one is what is already showing.
+                    enabled = !provider.current && provider.state != LyricsProviderState.NOT_FOUND,
+                ) { onSelectLyricsProvider?.invoke(provider.label) }
+            }
+            return@DesktopMenuSurface
+        }
+        // The lyric sheet's offset drawer folded into this menu: two steppers and
+        // a reset, shifting every synced line against the clock by a tenth of a
+        // second at a time.
+        if (pickingLyricsOffset && onSetLyricsOffset != null) {
+            DesktopMenuHeader(DesktopStrings["d_lyrics_offset", "Lyrics offset"]) { pickingLyricsOffset = false }
+            DesktopMenuDivider()
+            DesktopLyricsOffsetControl(lyricsOffsetMs) { onSetLyricsOffset(it) }
+            return@DesktopMenuSurface
+        }
         if (pickingSleepTimer) {
             DesktopMenuHeader("Sleep timer") { pickingSleepTimer = false }
             DesktopMenuDivider()
@@ -232,7 +373,7 @@ internal fun DesktopSongMenu(
 
         if (signedIn && !isOffline) {
             DesktopMenuRow(
-                icon = if (liked) BitChordIcons.HeartFilled else BitChordIcons.Heart,
+                icon = if (liked) BitChordIcons.StarFilled else BitChordIcons.Star,
                 label = if (liked) "Remove from liked" else "Like",
                 tint = if (liked) DesktopAccent else null,
                 onClick = onToggleLike,
@@ -275,6 +416,47 @@ internal fun DesktopSongMenu(
         DesktopMenuRow(Icons.Rounded.Radio, DesktopStrings["start_radio", "Start radio"], onClick = onStartRadio)
         DesktopMenuRow(Icons.AutoMirrored.Rounded.PlaylistPlay, DesktopStrings["play_next", "Play next"], onClick = onPlayNext)
         DesktopMenuRow(Icons.AutoMirrored.Rounded.QueueMusic, DesktopStrings["add_to_queue", "Add to queue"], onClick = onAddToQueue)
+        // The queue the player's content column shows, brought up into this
+        // transport block rather than left down in the lyrics group. Only the
+        // player's menu passes it.
+        onShowQueue?.let {
+            DesktopMenuRow(BitChordIcons.Queue, DesktopStrings["d_view_queue", "View queue"], onClick = it)
+        }
+
+        // The lyric sheet the player's content column can show, and the ways of
+        // reading it: the translation the overflow used to hold now lives here,
+        // and "Lyrics provider" opens the search box and the list of providers
+        // with what each turned up, the sheet's old footer folded into this menu.
+        // Only the player's menu passes any of them.
+        if (onShowLyrics != null || onTranslate != null || onSelectLyricsProvider != null || onSetLyricsOffset != null) {
+            DesktopMenuDivider()
+            onShowLyrics?.let {
+                DesktopMenuRow(BitChordIcons.LyricsQuote, DesktopStrings["d_view_lyrics", "View lyrics"], onClick = it)
+            }
+            onTranslate?.let {
+                DesktopMenuRow(
+                    icon = Icons.Rounded.Translate,
+                    label = DesktopStrings["d_translate", "Translate"],
+                    enabled = translateEnabled,
+                    selected = showingTranslation,
+                    onClick = it,
+                )
+            }
+            if (onSelectLyricsProvider != null && lyricsProviders.isNotEmpty()) {
+                DesktopMenuRow(
+                    icon = BitChordIcons.MusicNote,
+                    label = DesktopStrings["d_lyrics_provider", "Lyrics provider"],
+                    value = lyricsProviders.firstOrNull { it.current }?.label.orEmpty(),
+                ) { pickingLyricsProvider = true }
+            }
+            if (onSetLyricsOffset != null) {
+                DesktopMenuRow(
+                    icon = Icons.Rounded.Tune,
+                    label = DesktopStrings["d_lyrics_offset", "Lyrics offset"],
+                    value = if (lyricsOffsetMs != 0) formatLyricsOffset(lyricsOffsetMs) else "",
+                ) { pickingLyricsOffset = true }
+            }
+        }
 
         val albumId = song.albumId
         val artistId = song.artistId
@@ -297,6 +479,10 @@ internal fun DesktopSongMenu(
         if (!isOffline) {
             DesktopMenuRow(Icons.Rounded.Share, DesktopStrings["share", "Share"], onClick = onShare)
         }
+        onMore?.let {
+            DesktopMenuDivider()
+            DesktopMenuRow(Icons.Rounded.Tune, DesktopStrings["d_more", "More…"], onClick = it)
+        }
     }
 }
 
@@ -305,6 +491,120 @@ private fun sleepTimerLabel(minutes: Int?, afterTrack: Boolean): String = when {
     minutes != null -> "$minutes min"
     else -> ""
 }
+
+/**
+ * The "Search lyrics" submenu's body: a title and an artist field, prefilled
+ * with the track's own credits, and the two ways out. A manual ask for when the
+ * automatic lookup found nothing and the listener knows better than the tag —
+ * a cover, a mislabelled upload, a feature the credits left off.
+ */
+@Composable
+private fun DesktopLyricsSearchForm(
+    initialTitle: String,
+    initialArtist: String,
+    onSearch: (title: String, artist: String) -> Unit,
+) {
+    var title by remember { mutableStateOf(initialTitle) }
+    var artist by remember { mutableStateOf(initialArtist) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        OutlinedTextField(
+            value = title,
+            onValueChange = { title = it },
+            label = { Text(DesktopStrings["d_song_title", "Song title"]) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = artist,
+            onValueChange = { artist = it },
+            label = { Text(DesktopStrings["d_song_artists", "Song artists"]) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(onClick = { onSearch(title.trim(), artist.trim()) }, enabled = title.isNotBlank()) {
+                Text(DesktopStrings["d_search", "Search"])
+            }
+        }
+    }
+}
+
+/**
+ * The "Lyrics offset" submenu's body: two steppers either side of the current shift and, once it
+ * is off zero, a reset. A tenth of a second at a time, within the same five-second range the
+ * lyric sheet's own drawer uses, so a line landing a beat early or late can be nudged into place.
+ */
+@Composable
+private fun DesktopLyricsOffsetControl(currentMs: Int, onChange: (Int) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DesktopOffsetStepper("−", enabled = currentMs > MIN_LYRICS_OFFSET_MS) {
+                onChange(currentMs - LYRICS_OFFSET_STEP_MS)
+            }
+            Text(
+                text = formatLyricsOffset(currentMs),
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White,
+            )
+            DesktopOffsetStepper("+", enabled = currentMs < MAX_LYRICS_OFFSET_MS) {
+                onChange(currentMs + LYRICS_OFFSET_STEP_MS)
+            }
+        }
+        if (currentMs != 0) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                TextButton(onClick = { onChange(0) }) {
+                    Text(DesktopStrings["d_reset", "Reset"])
+                }
+            }
+        }
+    }
+}
+
+/** One round −/+ button of the offset control, dimmed once the range is reached. */
+@Composable
+private fun DesktopOffsetStepper(label: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = if (enabled) 0.08f else 0.03f))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleLarge,
+            color = if (enabled) Color.White else DesktopSecondary,
+        )
+    }
+}
+
+private fun formatLyricsOffset(offsetMs: Int): String =
+    String.format(Locale.getDefault(), "%+.1f s", offsetMs / 1_000f)
+
+/** The offset's step and its five-second range either way, matching the lyric sheet's drawer. */
+private const val LYRICS_OFFSET_STEP_MS = 100
+private const val MIN_LYRICS_OFFSET_MS = -5_000
+private const val MAX_LYRICS_OFFSET_MS = 5_000
 
 /** The panel a menu is drawn in: a floating card in the app's own glass. */
 @Composable
@@ -453,7 +753,7 @@ private fun DesktopMenuRow(
     }
 }
 
-/** The "…" the menu hangs off, sized and tinted to sit beside the player's heart. */
+/** The "…" the menu hangs off, sized and tinted to sit beside the player's star. */
 @Composable
 internal fun DesktopMoreButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val interaction = remember { MutableInteractionSource() }

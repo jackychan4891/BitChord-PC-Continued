@@ -53,6 +53,18 @@ internal data class DesktopQueue(
     }
 
     /**
+     * The next [limit] tracks after [currentId], read the same way as [followingFor] — including the
+     * wrap-around that repeat-all plays through. What playback warms ahead of their turn.
+     */
+    fun followingManyFor(currentId: String, repeatAll: Boolean, limit: Int): List<Song> {
+        if (limit <= 0 || songs.isEmpty()) return emptyList()
+        val at = if (current?.videoId == currentId) index else songs.indexOfFirst { it.videoId == currentId }
+        if (at < 0) return emptyList()
+        val ahead = songs.drop(at + 1)
+        return if (!repeatAll) ahead.take(limit) else (ahead + songs.take(at + 1)).take(limit)
+    }
+
+    /**
      * The queue once a crossfade has handed playback to [songId]: one step on, as Next would have
      * taken it, wrapping only where repeat-all's crossfade did.
      */

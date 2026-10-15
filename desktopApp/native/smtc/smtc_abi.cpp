@@ -43,6 +43,10 @@ std::atomic<bool> g_finished{false};
 HWND g_window = nullptr;
 ISystemMediaTransportControls* g_controls = nullptr;
 EventRegistrationToken g_button_token{};
+// Held for as long as the library lives: the seek event is registered on it and
+// has to be taken back off it before the controls are released.
+ISystemMediaTransportControls2* g_controls2 = nullptr;
+EventRegistrationToken g_seek_token{};
 std::mutex g_mutex;
 
 constexpr UINT WM_BITCHORD_UPDATE = WM_APP + 1;
@@ -120,6 +124,25 @@ void notify(jint button) {
     if (attached) g_vm->DetachCurrentThread();
 }
 
+/** Tells the player the shell's scrubber was dragged to [position_ms]. */
+void notify_seek(long long position_ms) {
+    if (g_vm == nullptr) return;
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (g_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void**>(&env), nullptr) != JNI_OK) return;
+        attached = true;
+    }
+    jclass type = env->FindClass("com/music/bitchord/desktop/DesktopWindowsMedia");
+    if (type != nullptr) {
+        jmethodID method = env->GetStaticMethodID(type, "onSeek", "(J)V");
+        if (method != nullptr) env->CallStaticVoidMethod(type, method, static_cast<jlong>(position_ms));
+        env->DeleteLocalRef(type);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (attached) g_vm->DetachCurrentThread();
+}
+
 using ButtonHandler = ITypedEventHandler<SystemMediaTransportControls*, SystemMediaTransportControlsButtonPressedEventArgs*>;
 
 /** The ButtonPressed delegate. Lives as long as the library; its count only guards misuse. */
@@ -159,6 +182,43 @@ private:
 };
 
 ButtonPressed g_button_handler;
+
+using SeekHandler = ITypedEventHandler<
+    SystemMediaTransportControls*, PlaybackPositionChangeRequestedEventArgs*>;
+
+/** The PlaybackPositionChangeRequested delegate — the shell's scrubber being let go. */
+class PositionChangeRequested final : public SeekHandler {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
+        if (out == nullptr) return E_POINTER;
+        if (id == __uuidof(IUnknown) || id == __uuidof(IAgileObject) || id == __uuidof(SeekHandler)) {
+            *out = static_cast<SeekHandler*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++count_; }
+    ULONG STDMETHODCALLTYPE Release() override { return --count_; }
+
+    HRESULT STDMETHODCALLTYPE Invoke(
+        ISystemMediaTransportControls*,
+        IPlaybackPositionChangeRequestedEventArgs* args) override {
+        if (args == nullptr) return S_OK;
+        TimeSpan position{};
+        if (SUCCEEDED(args->get_RequestedPlaybackPosition(&position))) {
+            // A WinRT TimeSpan is 100 ns ticks; the player wants milliseconds.
+            notify_seek(position.Duration / 10'000);
+        }
+        return S_OK;
+    }
+
+private:
+    std::atomic<ULONG> count_{1};
+};
+
+PositionChangeRequested g_seek_handler;
 
 /** WinRT TimeSpan is in 100 ns ticks. */
 TimeSpan ticks(long long ms) { return TimeSpan{ms * 10'000}; }
@@ -278,6 +338,13 @@ bool create_controls() {
     g_controls->put_IsPreviousEnabled(true);
     g_controls->put_IsStopEnabled(true);
     g_controls->add_ButtonPressed(&g_button_handler, &g_button_token);
+    // The scrubber the timeline properties enable is what raises this; without it
+    // dragging the shell's progress bar would do nothing.
+    if (SUCCEEDED(g_controls->QueryInterface(
+            __uuidof(ISystemMediaTransportControls2), reinterpret_cast<void**>(&g_controls2))) &&
+        g_controls2 != nullptr) {
+        g_controls2->add_PlaybackPositionChangeRequested(&g_seek_handler, &g_seek_token);
+    }
     return true;
 }
 
@@ -311,6 +378,10 @@ void pump() {
 
     {
         std::lock_guard<std::mutex> guard(g_mutex);
+        if (g_controls2 != nullptr) {
+            g_controls2->remove_PlaybackPositionChangeRequested(g_seek_token);
+            release(g_controls2);
+        }
         if (g_controls != nullptr) {
             g_controls->remove_ButtonPressed(g_button_token);
             g_controls->put_IsEnabled(false);

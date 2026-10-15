@@ -24,6 +24,7 @@ import coil3.compose.LocalPlatformContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.music.bitchord.data.canvas.CanvasArtwork
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.artworkAt
@@ -93,7 +94,12 @@ internal fun rememberCanvasArtwork(song: Song): CanvasArtwork? {
  * Everything here is keyed on the cover's [url] — see [rememberPlayerArtwork].
  */
 @Stable
-internal class PlayerArtwork(val url: String?, private val context: PlatformContext) {
+internal class PlayerArtwork(
+    val url: String?,
+    private val context: PlatformContext,
+    /** Cross-dissolve from the outgoing cover when the track changes; 0 cuts instead. */
+    private val crossfadeMs: Int = 0,
+) {
     /**
      * Whether the cover is on screen. Keyed on the artwork rather than on the
      * track, because that is what it actually describes and because only Coil
@@ -148,6 +154,10 @@ internal class PlayerArtwork(val url: String?, private val context: PlatformCont
             // make of the same cover and goes on sharing their memory-cache
             // entry. The disk key is unaffected either way.
             .apply { if (attempt > 0) memoryCacheKeyExtra("attempt", attempt.toString()) }
+            // A track change dissolves the outgoing cover into the incoming one
+            // rather than cutting. A transition, not part of the cache key, so the
+            // mesh and the palette go on sharing this cover's memory entry.
+            .apply { if (crossfadeMs > 0) crossfade(crossfadeMs) }
             .build()
     }
 
@@ -172,7 +182,11 @@ internal class PlayerArtwork(val url: String?, private val context: PlatformCont
 internal fun rememberPlayerArtwork(remoteArt: String?): PlayerArtwork {
     val context = LocalPlatformContext.current
     val artUrl = remoteArt?.artworkAt(ART_PX)
-    val art = remember(artUrl) { PlayerArtwork(artUrl, context) }
+    // "Reduce animation" turns the cover's cross-dissolve into a cut, the same as it
+    // does the palette's — see [ArtworkPalette].
+    val reduceAnimation by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val crossfadeMs = if (reduceAnimation) 0 else ART_CROSSFADE_MS
+    val art = remember(artUrl) { PlayerArtwork(artUrl, context, crossfadeMs) }
     LaunchedEffect(artUrl, art.failed) {
         // A track with no artwork at all fails immediately and would fail
         // identically three more times: there is no request to make, so there is

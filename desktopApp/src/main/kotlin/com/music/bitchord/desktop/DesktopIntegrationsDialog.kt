@@ -53,7 +53,7 @@ import kotlin.math.roundToInt
 @Composable
 internal fun DesktopIntegrationsDialog(
     song: Song?,
-    spotify: DesktopSpotifyConnection,
+    audioQuality: String?,
     onOpenLastfm: () -> Unit,
     onOpenListenBrainz: () -> Unit,
     onOpenDiscordToken: () -> Unit,
@@ -73,8 +73,7 @@ internal fun DesktopIntegrationsDialog(
                 color = Color.White,
                 modifier = Modifier.padding(start = panelInset(20.dp), end = panelInset(20.dp), top = 18.dp, bottom = 12.dp),
             )
-            SpotifySection(spotify)
-            DiscordSection(song, onOpenDiscordToken, onChoose = { choosing = it }, onEdit = { editing = it })
+            DiscordSection(song, audioQuality, onOpenDiscordToken, onChoose = { choosing = it }, onEdit = { editing = it })
             ScrobblingSection(onOpenLastfm, onOpenListenBrainz)
         }
         DesktopCardRule()
@@ -108,67 +107,10 @@ internal fun DesktopIntegrationsDialog(
     }
 }
 
-/** The Spotify account, as the app holds it: an `sp_dc` cookie, and how to get or drop one. */
-internal class DesktopSpotifyConnection(
-    val connected: Boolean,
-    /** Whether the sign-in window can be shown; without it only pasting is left. */
-    val canSignIn: Boolean,
-    val signingIn: Boolean,
-    val error: String?,
-    /** Opens the sign-in window, or closes the one already open. */
-    val onSignIn: () -> Unit,
-    val onPasteCookie: () -> Unit,
-    val onDisconnect: () -> Unit,
-)
-
-/** Android's Spotify group, with Canvas in place of the playlists the desktop does not show yet. */
-@Composable
-private fun SpotifySection(spotify: DesktopSpotifyConnection) {
-    PanelGroup(
-        header = "Spotify",
-        footer = spotify.error
-            ?: "Sign in to show Spotify Canvas behind your tracks. Playback uses YouTube Music.",
-    ) {
-        PanelActionRow(
-            title = "Spotify",
-            subtitle = when {
-                spotify.connected -> DesktopStrings["connected", "Connected"]
-                spotify.signingIn -> "Finish signing in in the Spotify window. Click to cancel"
-                spotify.canSignIn -> "Click to sign in"
-                else -> "Click to paste your sp_dc cookie"
-            },
-            destructive = false,
-            onClick = {
-                when {
-                    // Connected: the cookie page, to see or replace what is held.
-                    spotify.connected || !spotify.canSignIn -> spotify.onPasteCookie()
-                    else -> spotify.onSignIn()
-                }
-            },
-        )
-        if (spotify.connected) {
-            DesktopCardRule()
-            PanelActionRow(
-                title = DesktopStrings["spotify_disconnect", "Disconnect"],
-                subtitle = "Forgets the sp_dc cookie; Canvas stops until you sign in again",
-                destructive = true,
-                onClick = spotify.onDisconnect,
-            )
-        } else if (spotify.canSignIn && !spotify.signingIn) {
-            DesktopCardRule()
-            PanelActionRow(
-                title = "Paste a cookie instead",
-                subtitle = "Copy sp_dc from open.spotify.com yourself",
-                destructive = false,
-                onClick = spotify.onPasteCookie,
-            )
-        }
-    }
-}
-
 @Composable
 private fun DiscordSection(
     song: Song?,
+    audioQuality: String?,
     onOpenDiscordToken: () -> Unit,
     onChoose: (DiscordChoice) -> Unit,
     onEdit: (DiscordField) -> Unit,
@@ -186,6 +128,7 @@ private fun DiscordSection(
     val button1Visible by DesktopDiscordSettings.button1Visible.collectAsState()
     val button2Text by DesktopDiscordSettings.button2Text.collectAsState()
     val button2Visible by DesktopDiscordSettings.button2Visible.collectAsState()
+    val showAudioQuality by DesktopDiscordSettings.showAudioQuality.collectAsState()
     LaunchedEffect(Unit) { DesktopDiscordRpc.refreshLocalClient() }
 
     val connected = local || token.isNotBlank()
@@ -214,6 +157,17 @@ private fun DiscordSection(
             checked = useDetails,
             enabled = connected && rpcEnabled,
             onCheckedChange = DesktopDiscordSettings::setUseDetails,
+        )
+        DesktopCardRule()
+        PanelSwitchRow(
+            title = DesktopStrings["discord_show_audio_quality", "Show audio quality"],
+            subtitle = DesktopStrings[
+                "discord_show_audio_quality_subtitle",
+                "Hi-Res, lossless and Dolby specs on the presence card",
+            ],
+            checked = showAudioQuality,
+            enabled = connected && rpcEnabled,
+            onCheckedChange = DesktopDiscordSettings::setShowAudioQuality,
         )
         DesktopCardRule()
         PanelSwitchRow(
@@ -322,6 +276,7 @@ private fun DiscordSection(
             heading = activityName.ifEmpty { DesktopDiscordSettings.APP_NAME },
             verb = DesktopDiscordSettings.activityVerb(activityType),
             useDetails = useDetails,
+            largeText = audioQuality.takeIf { showAudioQuality } ?: song?.albumName,
             button1Text = button1Text,
             button1Visible = button1Visible,
             button2Text = button2Text,
@@ -351,7 +306,10 @@ private fun DiscordSection(
 }
 
 @Composable
-private fun ScrobblingSection(onOpenLastfm: () -> Unit, onOpenListenBrainz: () -> Unit) {
+private fun ScrobblingSection(
+    onOpenLastfm: () -> Unit,
+    onOpenListenBrainz: () -> Unit,
+) {
     val lastfmEnabled by DesktopScrobbleSettings.lastfmEnabled.collectAsState()
     val lastfmUser by DesktopScrobbleSettings.lastfmUsername.collectAsState()
     val lastfmSession by DesktopScrobbleSettings.lastfmSessionKey.collectAsState()
@@ -387,17 +345,22 @@ private fun ScrobblingSection(onOpenLastfm: () -> Unit, onOpenListenBrainz: () -
         PanelSwitchRow(
             title = "Last.fm",
             subtitle = when {
-                !DesktopScrobbling.canSignInToLastFm -> "This build has no Last.fm API key"
                 signedIn -> "Signed in as $lastfmUser"
                 else -> "Tap to sign in"
             },
             checked = lastfmEnabled,
-            enabled = DesktopScrobbling.canSignInToLastFm,
             onCheckedChange = { checked ->
                 if (checked && !signedIn) onOpenLastfm() else DesktopScrobbleSettings.setLastfmEnabled(checked)
             },
-            onClick = { if (signedIn) DesktopScrobbleSettings.signOutOfLastfm() else onOpenLastfm() },
+            onClick = {
+                if (signedIn) DesktopScrobbleSettings.signOutOfLastfm() else onOpenLastfm()
+            },
         )
+        // The API key and shared secret are no longer a separate step here: a
+        // build that shipped without baked-in credentials would grey the switch
+        // out and leave nowhere to go, so the sign-in dialog asks for all four
+        // values at once — key, secret, username, password — the way Android's
+        // AppSettings lets the listener bring their own from last.fm/api.
         if (lastfmEnabled && signedIn) {
             val scrobble by DesktopScrobbleSettings.lastfmScrobble.collectAsState()
             val nowPlaying by DesktopScrobbleSettings.lastfmNowPlaying.collectAsState()
@@ -468,6 +431,7 @@ private fun RichPresencePreview(
     heading: String,
     verb: String,
     useDetails: Boolean,
+    largeText: String?,
     button1Text: String,
     button1Visible: Boolean,
     button2Text: String,
@@ -510,7 +474,7 @@ private fun RichPresencePreview(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                song?.albumName?.let {
+                largeText?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,

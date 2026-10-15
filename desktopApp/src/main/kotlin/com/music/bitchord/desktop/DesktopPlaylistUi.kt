@@ -2,6 +2,7 @@ package com.music.bitchord.desktop
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,14 +18,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Public
@@ -35,9 +39,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,14 +55,21 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.music.bitchord.data.model.PlaylistPrivacy
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.data.model.UiState
 import com.music.bitchord.data.model.UserPlaylist
+import com.music.bitchord.ui.components.contextClick
 import com.music.bitchord.ui.icons.BitChordIcons
 
 /** Where a track goes: one of the account's playlists, a local one, or a new one. */
@@ -329,6 +344,231 @@ internal fun DesktopDeletePlaylistDialog(
 }
 
 /**
+ * Dragging the rows of a playlist the account owns into a new order, then sending it.
+ *
+ * The list is fetched whole rather than taken from the page on screen: a reorder names every entry
+ * it moves against, and one read short would push the rows it never saw.
+ */
+@Composable
+internal fun DesktopReorderPlaylistDialog(
+    browseId: String,
+    busy: Boolean,
+    error: String?,
+    onSave: (original: List<Song>, reordered: List<Song>) -> Unit,
+    onDismiss: () -> Unit,
+    /** The app's song menu, planted under the cursor by the host this list runs in. */
+    songContextMenu: @Composable (Song, () -> Unit) -> Unit,
+) {
+    val entries by produceState<UiState<List<Song>>>(UiState.Loading, browseId) {
+        value = DesktopSearchClient.playlistEntries(browseId).fold(
+            onSuccess = { UiState.Success(it) },
+            onFailure = { UiState.Error(it.message ?: "Could not load the playlist") },
+        )
+    }
+    // Null until a row has been dragged: an untouched list has nothing to send.
+    var draft by remember(browseId) { mutableStateOf<List<Song>?>(null) }
+
+    DesktopDialogFrame(onDismiss = onDismiss) {
+        DialogHeading(
+            DesktopStrings["reorder_playlist", "Edit order"],
+            DesktopStrings["d_reorder_subtitle", "Drag the rows into the order you want, then save."],
+        )
+        error?.let { DialogError(it) }
+        when (val state = entries) {
+            UiState.Loading -> Box(
+                Modifier.fillMaxWidth().height(240.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = DesktopAccent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+            }
+
+            is UiState.Error -> Box(
+                Modifier.fillMaxWidth().height(240.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    state.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DesktopSecondary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 22.dp),
+                )
+            }
+
+            is UiState.Success -> DesktopPointerMenuHost<Song>(
+                menu = { song, onDismiss -> songContextMenu(song, onDismiss) },
+                modifier = Modifier.fillMaxWidth().height(380.dp),
+            ) { openContextMenu ->
+                CompositionLocalProvider(LocalDesktopContextMenu provides openContextMenu) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                        ReorderableSongList(
+                            songs = state.data,
+                            draft = draft,
+                            onReorder = { draft = it },
+                        )
+                    }
+                }
+            }
+        }
+        DialogButtons(
+            busy = busy,
+            confirmLabel = DesktopStrings["save", "Save"],
+            confirmEnabled = draft != null,
+            onConfirm = {
+                val original = (entries as? UiState.Success)?.data
+                val reordered = draft
+                if (original != null && reordered != null) onSave(original, reordered)
+            },
+            onDismiss = onDismiss,
+        )
+    }
+}
+
+/**
+ * The draggable rows. A plain column, not a lazy list: the drag measures itself against the rows it
+ * has, and a lazy list would recycle one out from under the pointer.
+ */
+@Composable
+private fun ReorderableSongList(
+    songs: List<Song>,
+    draft: List<Song>?,
+    onReorder: (List<Song>) -> Unit,
+) {
+    // The list as the user last left it, or the one that was loaded while nothing has been dragged.
+    var live by remember(songs) { mutableStateOf(draft ?: songs) }
+    var dragged by remember { mutableStateOf<String?>(null) }
+    var totalDrag by remember { mutableStateOf(0f) }
+    var startIndex by remember { mutableStateOf(0) }
+    var startOrder by remember { mutableStateOf<List<String>>(emptyList()) }
+    val heights = remember { mutableStateMapOf<String, Float>() }
+
+    // An entry's stable name: its set-video-id, falling back to its place for one without.
+    fun keyOf(song: Song, index: Int) = song.setVideoId ?: "${song.videoId}-$index"
+    fun topOf(list: List<String>, index: Int): Float {
+        var top = 0f
+        for (slot in 0 until index.coerceAtMost(list.size)) top += heights[list[slot]] ?: 0f
+        return top
+    }
+
+    val keys = remember(live) { live.mapIndexed { index, song -> keyOf(song, index) } }
+    Column {
+        keys.forEachIndexed { slot, key ->
+            key(key) {
+                val song = live[slot]
+                val dragging = key == dragged
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .onSizeChanged { heights[key] = it.height.toFloat() }
+                        .zIndex(if (dragging) 1f else 0f)
+                        // Read in the draw phase, so a drag moves the row without recomposing the list.
+                        .graphicsLayer {
+                            translationY = if (dragging) {
+                                totalDrag - (topOf(keys, keys.indexOf(key)) - topOf(startOrder, startIndex))
+                            } else {
+                                0f
+                            }
+                        }
+                        .background(if (dragging) Color.White.copy(alpha = 0.08f) else Color.Transparent),
+                ) {
+                    if (slot > 0) DesktopCardRule()
+                    ReorderSongRow(
+                        song = song,
+                        number = slot + 1,
+                        onDragStart = {
+                            dragged = key
+                            totalDrag = 0f
+                            startOrder = keys
+                            startIndex = keys.indexOf(key)
+                        },
+                        onDragEnd = {
+                            dragged = null
+                            onReorder(live)
+                        },
+                        onDragCancel = {
+                            dragged = null
+                            live = songs
+                        },
+                        onDrag = { amount ->
+                            totalDrag += amount
+                            val layout = startOrder.map { heights[it] ?: 0f }
+                            if (layout.all { it > 0f }) {
+                                val target = reorderTargetSlot(layout, startIndex, totalDrag)
+                                val at = keys.indexOf(key)
+                                if (target != at) {
+                                    live = live.toMutableList().apply { add(target, removeAt(at)) }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReorderSongRow(
+    song: Song,
+    number: Int,
+    onDragStart: () -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
+    onDrag: (Float) -> Unit,
+) {
+    val openContextMenu = LocalDesktopContextMenu.current
+    Row(
+        Modifier.fillMaxWidth().contextClick { openContextMenu(song) }.padding(horizontal = 14.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Rounded.DragHandle,
+            DesktopStrings["drag_to_reorder", "Drag to reorder"],
+            tint = DesktopSecondary,
+            modifier = Modifier
+                .size(20.dp)
+                .pointerInput(song.setVideoId, song.videoId) {
+                    detectDragGestures(
+                        onDragStart = { onDragStart() },
+                        onDragEnd = { onDragEnd() },
+                        onDragCancel = { onDragCancel() },
+                    ) { change, amount ->
+                        change.consume()
+                        onDrag(amount.y)
+                    }
+                },
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            number.toString(),
+            Modifier.width(24.dp),
+            color = DesktopSecondary,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Spacer(Modifier.width(8.dp))
+        DesktopArtwork(song.thumbnailUrl, Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                song.title,
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                song.artist,
+                color = DesktopSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
  * The panel every dialog on this page sits in: the app's own glass over a scrim, rather than
  * Material's surface.
  */
@@ -420,6 +660,7 @@ private fun DialogAction(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
+            .desktopHoverFill(corner = 0.dp)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,

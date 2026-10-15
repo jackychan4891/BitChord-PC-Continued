@@ -123,11 +123,18 @@ internal object DesktopDiscordRpc {
             clear()
             return
         }
-        val key = "${song.videoId}|${state.durationMs}|$speed"
-        if (key == lastKey) return
-        lastKey = key
         val position = state.positionMs
         val duration = state.durationMs.takeIf { it > 0 } ?: 0L
+        // The card's optional third line, from the engine's measured format — a
+        // premium stream earns it, an ordinary lossy one leaves the album name up.
+        val audioQuality = desktopDiscordAudioQualityLine(state.streamFormat)
+            .takeIf { DesktopDiscordSettings.showAudioQuality.value }
+        // The decoder measures the format a beat after the track starts, so the
+        // line is part of what decides a re-push: without it the card would keep
+        // the album name it first went up with for the rest of a lossless track.
+        val key = "${song.videoId}|${state.durationMs}|$speed|$audioQuality"
+        if (key == lastKey) return
+        lastKey = key
         scope.launch {
             val now = System.currentTimeMillis()
             val elapsed = (position / speed).toLong()
@@ -142,7 +149,7 @@ internal object DesktopDiscordRpc {
             val local = ipc
             if (local != null) {
                 val sent = runCatching {
-                    local.setActivity(ipcActivity(song, title, now - elapsed, now + remaining))
+                    local.setActivity(ipcActivity(song, title, now - elapsed, now + remaining, audioQuality))
                 }.isSuccess
                 if (sent) return@launch
                 // A client that has quit takes its socket with it.
@@ -173,7 +180,7 @@ internal object DesktopDiscordRpc {
                         song.artworkAt(ART_PX)?.takeIf { it.startsWith("http") } ?: FALLBACK_ART_URL,
                     ),
                     smallImage = null,
-                    largeText = song.albumName,
+                    largeText = audioQuality ?: song.albumName,
                     buttons = buttonLabels(song).takeIf { it.isNotEmpty() },
                     type = when (DesktopDiscordSettings.activityType.value) {
                         "playing" -> KizzyRPC.Type.PLAYING
@@ -211,7 +218,13 @@ internal object DesktopDiscordRpc {
      * is what needs an account token, and the client resolves an http asset by
      * itself.
      */
-    private fun ipcActivity(song: Song, title: String, startMs: Long, endMs: Long): JsonObject = buildJsonObject {
+    private fun ipcActivity(
+        song: Song,
+        title: String,
+        startMs: Long,
+        endMs: Long,
+        audioQuality: String?,
+    ): JsonObject = buildJsonObject {
         put("type", DesktopDiscordSettings.activityNumber(DesktopDiscordSettings.activityType.value))
         DesktopDiscordSettings.activityName.value.takeIf(String::isNotBlank)?.let { put("name", it) }
         put("details", title)
@@ -225,7 +238,7 @@ internal object DesktopDiscordRpc {
         }
         putJsonObject("assets") {
             put("large_image", song.artworkAt(ART_PX)?.takeIf { it.startsWith("http") } ?: FALLBACK_ART_URL)
-            song.albumName?.let { put("large_text", it) }
+            (audioQuality ?: song.albumName)?.let { put("large_text", it) }
         }
         val labels = buttonLabels(song)
         if (labels.isNotEmpty()) {

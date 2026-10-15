@@ -87,3 +87,38 @@ internal fun Modifier.desktopHoverWash(): Modifier = composed {
 }
 
 private const val WASH_MS = 120
+
+/**
+ * A list row's acknowledgement of the pointer: a faint rounded wash behind the whole row.
+ *
+ * The sidebar rows answered the pointer only once selected, so pointing at an unselected one did
+ * nothing until it was clicked. Apple Music lights a row the moment the cursor enters it; this is
+ * that wash, kept lighter than the selected pill so hovering never reads as chosen. It draws its own
+ * rounded rect rather than relying on the caller's clip, so it can sit anywhere in the chain.
+ */
+@Composable
+internal fun Modifier.desktopHoverFill(
+    corner: androidx.compose.ui.unit.Dp = ROW_HOVER_CORNER,
+    alpha: Float = ROW_HOVER_ALPHA,
+): Modifier = composed {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val wash by animateFloatAsState(
+        targetValue = if (hovered) 1f else 0f,
+        animationSpec = tween(WASH_MS),
+        label = "hoverFill",
+    )
+    this
+        .hoverable(interaction)
+        .drawBehind {
+            if (wash <= 0.01f) return@drawBehind
+            val radius = corner.toPx()
+            drawRoundRect(
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = alpha * wash),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius),
+            )
+        }
+}
+
+private val ROW_HOVER_CORNER = 7.dp
+private const val ROW_HOVER_ALPHA = 0.07f

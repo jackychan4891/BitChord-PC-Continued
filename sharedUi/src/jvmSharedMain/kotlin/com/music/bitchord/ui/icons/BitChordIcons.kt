@@ -416,17 +416,17 @@ object BitChordIcons {
     }
 
     /**
-     * The player's like control, in two weights.
+     * The player's like control, in two weights — Apple Music's star.
      *
      * Filled rather than merely tinted when set: the player draws every glyph
      * white on artwork, where a colour change alone is the one signal the
      * backdrop can swallow. A shape change survives any album cover.
      */
-    val Heart: ImageVector by lazy { heart("bc_heart", filled = false) }
+    val Star: ImageVector by lazy { star("bc_star", filled = false) }
 
-    val HeartFilled: ImageVector by lazy { heart("bc_heart_filled", filled = true) }
+    val StarFilled: ImageVector by lazy { star("bc_star_filled", filled = true) }
 
-    private fun heart(name: String, filled: Boolean): ImageVector =
+    private fun star(name: String, filled: Boolean): ImageVector =
         ImageVector.Builder(
             name = name,
             defaultWidth = 24.dp, defaultHeight = 24.dp,
@@ -439,12 +439,18 @@ object BitChordIcons {
                 strokeLineJoin = StrokeJoin.Round,
                 fill = if (filled) stroke else null,
             ) {
-                // Two lobes meeting at the top notch, falling to a single point.
-                moveTo(12f, 20f)
-                curveTo(12f, 20f, 3.2f, 14.6f, 3.2f, 8.9f)
-                arcToRelative(4.5f, 4.5f, 0f, isMoreThanHalf = false, isPositiveArc = true, 8.8f, -1.5f)
-                arcToRelative(4.5f, 4.5f, 0f, isMoreThanHalf = false, isPositiveArc = true, 8.8f, 1.5f)
-                curveTo(20.8f, 14.6f, 12f, 20f, 12f, 20f)
+                // The classic five-point star, top point first, alternating outer
+                // points and inner notches around the compass.
+                moveTo(12f, 2f)
+                lineTo(14.81f, 8.63f)
+                lineTo(22f, 9.24f)
+                lineTo(16.54f, 13.97f)
+                lineTo(18.18f, 21f)
+                lineTo(12f, 17.27f)
+                lineTo(5.82f, 21f)
+                lineTo(7.46f, 13.97f)
+                lineTo(2f, 9.24f)
+                lineTo(9.19f, 8.63f)
                 close()
             }
         }.build()
@@ -618,6 +624,30 @@ object BitChordIcons {
                 moveTo(9.7f, 18.5f); lineTo(9.7f, 5.5f)
                 moveTo(14.3f, 16.5f); lineTo(14.3f, 7.5f)
                 moveTo(19f, 14.5f); lineTo(19f, 9.5f)
+            }
+        }.build()
+    }
+
+    /**
+     * A symmetric audio waveform — the glyph for the lossless and hi-res lossless
+     * quality badges, in place of the generic headphones they used to carry.
+     */
+    val Lossless: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_lossless",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+            ) {
+                moveTo(4f, 10f); lineTo(4f, 14f)
+                moveTo(8f, 7.4f); lineTo(8f, 16.6f)
+                moveTo(12f, 4.4f); lineTo(12f, 19.6f)
+                moveTo(16f, 7.4f); lineTo(16f, 16.6f)
+                moveTo(20f, 10f); lineTo(20f, 14f)
             }
         }.build()
     }

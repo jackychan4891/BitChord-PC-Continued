@@ -1,7 +1,10 @@
 package com.music.bitchord.desktop
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.clickable
@@ -22,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -29,6 +33,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -92,6 +98,8 @@ internal val LocalDesktopWindowScope = staticCompositionLocalOf<WindowScope?> { 
 @Composable
 internal fun DesktopTitleBarDragArea(
     modifier: Modifier = Modifier,
+    /** A press that ends without a drag clicks the bar — the top bar opens the player with it. */
+    onTap: (() -> Unit)? = null,
     content: @Composable () -> Unit = {},
 ) {
     val scope = LocalDesktopWindowScope.current
@@ -100,13 +108,27 @@ internal fun DesktopTitleBarDragArea(
         Box(modifier) { content() }
         return
     }
-    // Behind the content rather than around it. Wrapped around it, the drag area saw every press
-    // in the toolbar too — dragging the volume slider moved the window with it. As a sibling
-    // underneath, anything with its own pointer input (buttons, sliders) is hit first and the
-    // press never reaches here; only empty toolbar falls through to move the window.
+    // The gesture lives on a sibling underneath the content: anything with its
+    // own pointer input (buttons, sliders) is hit first and consumes the press,
+    // so only the empty toolbar moves the window. The press colour is drawn by a
+    // second sibling above the content, so the tint covers the whole bar even
+    // when the press lands on a control.
+    val pressSource = remember { MutableInteractionSource() }
     Box(modifier) {
-        Box(Modifier.matchParentSize().captionPress(scope, actions))
+        Box(
+            Modifier
+                .matchParentSize()
+                .captionPress(pressSource, scope, actions, onTap),
+        )
         content()
+        if (onTap != null) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .clip(RoundedCornerShape(BAR_PRESS_CORNER))
+                    .indication(pressSource, LocalIndication.current),
+            )
+        }
     }
 }
 
@@ -215,6 +237,9 @@ private val MAC_DOT_RADIUS = 6.dp
 private val GLYPH_HALF = 2.5.dp
 private val HAIRLINE = 0.75.dp
 
+/** How much the bar's press highlight rounds its corners. */
+private val BAR_PRESS_CORNER = 8.dp
+
 private val MAC_CLOSE = Color(0xFFFF5F57)
 private val MAC_MINIMIZE = Color(0xFFFFBD2E)
 private val MAC_MAXIMIZE = Color(0xFF28C840)
@@ -231,13 +256,23 @@ private val MAC_GLYPH = Color(0xB3000000)
  * Windows knows, so it never sends the caption's own double click. Without the native frame the
  * window is moved from the pointer, as WindowDraggableArea did.
  */
-private fun Modifier.captionPress(scope: WindowScope, actions: DesktopWindowActions?): Modifier =
-    pointerInput(scope, actions) {
+private fun Modifier.captionPress(
+    interaction: MutableInteractionSource?,
+    scope: WindowScope,
+    actions: DesktopWindowActions?,
+    onTap: (() -> Unit)?,
+): Modifier =
+    pointerInput(scope, actions, onTap, interaction) {
         var lastPressAt = 0L
         var lastPressPosition = Offset.Zero
         awaitEachGesture {
-            val down = awaitFirstDown()
-            val double = down.uptimeMillis - lastPressAt <= viewConfiguration.doubleTapTimeoutMillis &&
+            // Consumed presses are seen too: a control in the bar claimed the
+            // down, and the bar only lends it the press colour. The click, the
+            // double click and the drag all stay with the control.
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val claimed = down.isConsumed
+            val double = !claimed &&
+                down.uptimeMillis - lastPressAt <= viewConfiguration.doubleTapTimeoutMillis &&
                 (down.position - lastPressPosition).getDistance() <= viewConfiguration.touchSlop
             if (double) {
                 lastPressAt = 0L
@@ -245,8 +280,47 @@ private fun Modifier.captionPress(scope: WindowScope, actions: DesktopWindowActi
                 actions?.toggleMaximize()
                 return@awaitEachGesture
             }
-            lastPressAt = down.uptimeMillis
-            lastPressPosition = down.position
+            if (!claimed) {
+                lastPressAt = down.uptimeMillis
+                lastPressPosition = down.position
+            }
+            // A press that ends where it began is the bar's click; only a pointer that crosses
+            // the touch slop is a window move. Waiting for that split lets one empty space
+            // answer to both.
+            if (onTap != null) {
+                // tryEmit rather than emit: this gesture scope's suspension is
+                // restricted, so the suspend emit is out of reach here.
+                val press = interaction?.let { source ->
+                    PressInteraction.Press(down.position).also { source.tryEmit(it) }
+                }
+                if (claimed) {
+                    // Only the colour is the bar's: watch the press out without
+                    // touching its events, and leave the click to its control.
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        if (event.changes.none { it.id == down.id && it.pressed }) break
+                    }
+                    if (press != null) interaction.tryEmit(PressInteraction.Release(press))
+                    return@awaitEachGesture
+                }
+                var dragged = false
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Main)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                        dragged = true
+                        change.consume()
+                        break
+                    }
+                }
+                if (!dragged) {
+                    if (press != null) interaction.tryEmit(PressInteraction.Release(press))
+                    onTap()
+                    return@awaitEachGesture
+                }
+                if (press != null) interaction.tryEmit(PressInteraction.Cancel(press))
+            }
             if (DesktopWindowsFrame.startDrag()) return@awaitEachGesture
             if (DesktopPlatform.isMac && DesktopMacFrame.startDrag()) return@awaitEachGesture
             val window = scope.window

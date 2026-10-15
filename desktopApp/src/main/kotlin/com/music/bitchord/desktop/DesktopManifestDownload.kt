@@ -4,6 +4,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.io.File
 import java.io.OutputStream
+import java.net.HttpURLConnection
 import java.net.URI
 import java.util.Locale
 import kotlin.math.ceil
@@ -47,13 +48,21 @@ internal object DesktopManifestDownload {
         userAgent: String,
         onProgress: (done: Long, total: Long) -> Unit,
     ) {
-        fun fetch(target: String): ByteArray =
-            DesktopDownloadHttp.client.newCall(DesktopDownloadHttp.request(target, userAgent, stream.headers))
-                .execute()
-                .use { response ->
-                    check(response.isSuccessful) { "Segment failed (HTTP ${response.code})" }
-                    response.body.bytes()
-                }
+        fun fetch(target: String): ByteArray {
+            val connection = URI(target).toURL().openConnection() as? HttpURLConnection
+                ?: error("Downloads require an HTTP audio stream")
+            connection.connectTimeout = 20_000
+            connection.readTimeout = 30_000
+            connection.setRequestProperty("User-Agent", userAgent)
+            stream.headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
+            try {
+                val status = connection.responseCode
+                check(status in 200..299) { "Segment failed (HTTP $status)" }
+                return connection.inputStream.use { it.readBytes() }
+            } finally {
+                connection.disconnect()
+            }
+        }
 
         val base = URI(stream.url)
         val index = String(fetch(stream.url), Charsets.UTF_8)

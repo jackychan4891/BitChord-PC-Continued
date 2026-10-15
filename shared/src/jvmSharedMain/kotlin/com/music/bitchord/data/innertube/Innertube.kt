@@ -65,21 +65,27 @@ object Innertube {
     @Volatile
     var appLanguage: () -> String? = { null }
 
-    val currentLocaleTag: String
+    val currentLanguage: String
         get() {
             val raw = appLanguage()?.ifEmpty { null }
-                ?: Locale.getDefault().toLanguageTag().ifEmpty { "en" }
-            return com.music.bitchord.data.LocaleTags.normalizeAppTag(raw)
+                ?: Locale.getDefault().language.ifEmpty { "en" }
+            return when (raw.lowercase(Locale.ROOT)) {
+                "iw" -> "he"
+                "in" -> "id"
+                "ji" -> "yi"
+                else -> raw
+            }
         }
 
-    val currentLanguage: String
-        get() = com.music.bitchord.data.LocaleTags.ytHl(currentLocaleTag)
-
-    val currentRegion: String
-        get() = com.music.bitchord.data.LocaleTags.ytGl(currentLocaleTag)
-
     private val acceptLanguageHeader: String
-        get() = com.music.bitchord.data.LocaleTags.acceptLanguage(currentLocaleTag)
+        get() {
+            val lang = currentLanguage
+            return if (lang == "en") {
+                "en-US,en;q=0.9"
+            } else {
+                "$lang,en-US;q=0.8,en;q=0.7"
+            }
+        }
 
     private const val MUSIC_BASE = "https://music.youtube.com/youtubei/v1"
     private const val MUSIC_ORIGIN = "https://music.youtube.com"
@@ -806,8 +812,8 @@ object Innertube {
             parameter("cbrver", "141.0.0.0")
             parameter("cos", "Windows")
             parameter("cosver", "10.0")
-            parameter("hl", currentLanguage.replace('-', '_'))
-            parameter("cr", currentRegion)
+            parameter("hl", "en_US")
+            parameter("cr", "US")
             extras()
             statsHeaders(session)
         }.status.value
@@ -1131,7 +1137,7 @@ object Innertube {
                                 put("clientName", "WEB_REMIX")
                                 put("clientVersion", clientVersion)
                                 put("hl", currentLanguage)
-                                put("gl", currentRegion)
+                                put("gl", "US")
                                 visitorData?.let { put("visitorData", it) }
                             }
                             putJsonObject("user") {
@@ -1179,8 +1185,6 @@ object Innertube {
                 header("Referer", "$MUSIC_ORIGIN/")
                 header("X-YouTube-Client-Name", WEB_REMIX_CLIENT_ID)
                 header("X-YouTube-Client-Version", clientVersion)
-                header("Accept-Language", acceptLanguageHeader)
-                parameter("hl", currentLanguage)
                 visitorData?.let { header("X-Goog-Visitor-Id", it) }
                 // No Cookie / Authorization headers — anonymous request.
                 setBody(
@@ -1189,8 +1193,8 @@ object Innertube {
                             putJsonObject("client") {
                                 put("clientName", "WEB_REMIX")
                                 put("clientVersion", clientVersion)
-                                put("hl", currentLanguage)
-                                put("gl", currentRegion)
+                                put("hl", "en")
+                                put("gl", "US")
                                 visitorData?.let { put("visitorData", it) }
                             }
                             putJsonObject("user") {

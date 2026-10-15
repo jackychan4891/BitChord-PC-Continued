@@ -177,6 +177,40 @@ const val HERO_CARD_RATIO = 0.92f
  */
 fun heroCardWidth(available: Dp): Dp = minOf(available * HERO_CARD_FRACTION, HERO_CARD_MAX_WIDTH)
 
+/** A Home "Made for You" card's proportions: portrait, as on Apple Music's Home. */
+const val MADE_FOR_YOU_RATIO = 0.78f
+
+/** Share of the row a Made-for-You card takes, so the next one peeks in past it. */
+private const val MADE_FOR_YOU_FRACTION = 0.24f
+
+/** How wide a Made-for-You card is ever allowed to get. */
+private val MADE_FOR_YOU_MAX_WIDTH = 240.dp
+
+/**
+ * How wide a Home "Made for You" card should be in a row [available] wide —
+ * shared by the real card and the skeleton that stands in for it, which have
+ * to agree to the pixel or the feed jumps when the data lands.
+ */
+fun madeForYouCardWidth(available: Dp): Dp =
+    minOf(available * MADE_FOR_YOU_FRACTION, MADE_FOR_YOU_MAX_WIDTH)
+
+/** A landscape shelf card's proportions: wider than it is tall. */
+const val LANDSCAPE_CARD_RATIO = 1.5f
+
+/** Share of the row a landscape card takes, so the next one peeks in past it. */
+private const val LANDSCAPE_CARD_FRACTION = 0.30f
+
+/** How wide a landscape card is ever allowed to get. */
+private val LANDSCAPE_CARD_MAX_WIDTH = 340.dp
+
+/**
+ * How wide a landscape shelf card should be in a row [available] wide — shared
+ * by the real card and the skeleton that stands in for it, which have to agree
+ * to the pixel or the feed jumps when the data lands.
+ */
+fun landscapeCardWidth(available: Dp): Dp =
+    minOf(available * LANDSCAPE_CARD_FRACTION, LANDSCAPE_CARD_MAX_WIDTH)
+
 /** Share of the row a page of tracks takes, so the next page peeks in past it. */
 private const val TRACK_COLUMN_FRACTION = 0.88f
 

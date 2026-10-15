@@ -81,6 +81,14 @@ if(WIN32)
     set_target_properties(bitchord_analysis PROPERTIES PREFIX "")
 endif()
 
+# The app unpacks this DLL into its private runtime directory and loads it from
+# there, where MinGW's own libstdc++/libgcc/winpthread DLLs are not. Linking them
+# statically is what makes the library self-contained; leaving them dynamic makes
+# it import libwinpthread-1.dll and fail to load on a machine without MinGW.
+if(MINGW)
+    target_link_options(bitchord_analysis PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
+
 # The Windows media controls, which are WinRT. MSVC builds them with C++/WinRT;
 # MinGW has no C++/WinRT, so it builds smtc_abi.cpp — the same exports written
 # against the raw ABI headers — whenever its headers carry the Media namespace.

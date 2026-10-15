@@ -29,6 +29,7 @@ internal class DesktopOverlays {
     var playlistDialog by mutableStateOf(false)
     var rename by mutableStateOf(false)
     var delete by mutableStateOf(false)
+    var reorder by mutableStateOf(false)
     var nowPlaying by mutableStateOf(false)
 
     /**

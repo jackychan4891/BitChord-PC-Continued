@@ -65,11 +65,16 @@ object DesktopScrobbling {
     val listenBrainzConfigured: Boolean
         get() = listenBrainzToken() != null && DesktopScrobbleSettings.listenBrainzEnabled.value
 
+    // A key the listener entered in Settings wins; a build that baked one in
+    // (or ran with one in the environment) is the fallback, exactly as on
+    // Android where AppSettings.lastfmApiKey falls back to BuildConfig.
     private val apiKey: String?
-        get() = property("bitchord.lastfm.key") ?: env("BITCHORD_LASTFM_API_KEY")
+        get() = DesktopScrobbleSettings.lastfmApiKey.value.takeIf(String::isNotBlank)
+            ?: property("bitchord.lastfm.key") ?: env("BITCHORD_LASTFM_API_KEY")
 
     private val apiSecret: String?
-        get() = property("bitchord.lastfm.secret") ?: env("BITCHORD_LASTFM_API_SECRET")
+        get() = DesktopScrobbleSettings.lastfmApiSecret.value.takeIf(String::isNotBlank)
+            ?: property("bitchord.lastfm.secret") ?: env("BITCHORD_LASTFM_API_SECRET")
 
     private fun sessionKey(): String? =
         DesktopScrobbleSettings.lastfmSessionKey.value.takeIf(String::isNotBlank)

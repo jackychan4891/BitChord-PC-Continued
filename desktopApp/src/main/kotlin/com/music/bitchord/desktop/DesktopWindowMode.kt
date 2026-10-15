@@ -36,6 +36,9 @@ internal object DesktopWindowMode {
      * double-clicking the title bar has always done.
      */
     fun toggleMaximized() {
+        if (DesktopPlatform.isWindows && _fullScreen.value && DesktopWindowsFrame.setFullscreen(false)) {
+            DesktopWindowBackdrop.apply()
+        }
         _fullScreen.value = false
         set(if (_placement.value == WindowPlacement.Maximized) WindowPlacement.Floating else WindowPlacement.Maximized)
     }
@@ -57,6 +60,16 @@ internal object DesktopWindowMode {
 
     private fun setFullScreen(on: Boolean) {
         _fullScreen.value = on
+        // On Windows the only thing that covers a taskbar told to stay on top is a native borderless
+        // window raised above it; no Compose placement does, and true Fullscreen paints the screen
+        // white. With that in place the window's placement is left as it was — it is the Win32 style
+        // that changes, not the placement.
+        if (DesktopPlatform.isWindows && DesktopWindowsFrame.setFullscreen(on)) {
+            // The native window resets DWM's frame margin on the way out; the chosen material goes
+            // back over it so the window is exactly as it was before fullscreen.
+            if (!on) DesktopWindowBackdrop.apply()
+            return
+        }
         set(if (on) fillsScreen else WindowPlacement.Floating)
     }
 

@@ -25,6 +25,12 @@ internal object DesktopScrobbleSettings {
     private val _lastfmScrobble = flag(KEY_LASTFM_SCROBBLE, true)
     private val _lastfmNowPlaying = flag(KEY_LASTFM_NOW_PLAYING, true)
     private val _lastfmPrimaryArtistOnly = flag(KEY_LASTFM_PRIMARY_ARTIST, false)
+    // A build without baked-in credentials can still scrobble: the listener
+    // enters their own Last.fm API key and shared secret here, exactly as
+    // Android's AppSettings lets them. Signing in and scrobbling use these
+    // first, and fall back to the build-time key only where they are left blank.
+    private val _lastfmApiKey = text(KEY_LASTFM_API_KEY)
+    private val _lastfmApiSecret = text(KEY_LASTFM_API_SECRET)
 
     private val _listenBrainzEnabled = flag(KEY_LISTENBRAINZ_ENABLED, false)
     private val _listenBrainzToken = text(KEY_LISTENBRAINZ_TOKEN)
@@ -40,6 +46,8 @@ internal object DesktopScrobbleSettings {
     val lastfmScrobble: StateFlow<Boolean> = _lastfmScrobble
     val lastfmNowPlaying: StateFlow<Boolean> = _lastfmNowPlaying
     val lastfmPrimaryArtistOnly: StateFlow<Boolean> = _lastfmPrimaryArtistOnly
+    val lastfmApiKey: StateFlow<String> = _lastfmApiKey
+    val lastfmApiSecret: StateFlow<String> = _lastfmApiSecret
 
     val listenBrainzEnabled: StateFlow<Boolean> = _listenBrainzEnabled
     val listenBrainzToken: StateFlow<String> = _listenBrainzToken
@@ -62,6 +70,16 @@ internal object DesktopScrobbleSettings {
     fun setListenBrainzToken(value: String) {
         persistence.saveString(KEY_LISTENBRAINZ_TOKEN, value)
         _listenBrainzToken.value = value
+    }
+
+    fun setLastfmApiKey(value: String) {
+        persistence.saveString(KEY_LASTFM_API_KEY, value)
+        _lastfmApiKey.value = value
+    }
+
+    fun setLastfmApiSecret(value: String) {
+        persistence.saveString(KEY_LASTFM_API_SECRET, value)
+        _lastfmApiSecret.value = value
     }
 
     fun setMinDuration(value: Int) {
@@ -110,6 +128,8 @@ internal object DesktopScrobbleSettings {
     private const val KEY_LASTFM_SCROBBLE = "lastfm_scrobble_enabled"
     private const val KEY_LASTFM_NOW_PLAYING = "lastfm_now_playing"
     private const val KEY_LASTFM_PRIMARY_ARTIST = "lastfm_primary_artist_only"
+    private const val KEY_LASTFM_API_KEY = "lastfm_api_key"
+    private const val KEY_LASTFM_API_SECRET = "lastfm_api_secret"
     private const val KEY_LISTENBRAINZ_ENABLED = "listenbrainz_enabled"
     private const val KEY_LISTENBRAINZ_TOKEN = "listenbrainz_token"
     private const val KEY_LISTENBRAINZ_PRIMARY_ARTIST = "listenbrainz_primary_artist_only"

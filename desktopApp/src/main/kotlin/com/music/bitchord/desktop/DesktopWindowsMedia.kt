@@ -31,6 +31,8 @@ internal object DesktopWindowsMedia {
         val onNext: () -> Unit,
         val onPrevious: () -> Unit,
         val onStop: () -> Unit,
+        /** Moves playback to a position the shell's scrubber was dragged to, in milliseconds. */
+        val onSeek: (Long) -> Unit,
     )
 
     private val available: Boolean by lazy {
@@ -92,6 +94,12 @@ internal object DesktopWindowsMedia {
             BUTTON_PREVIOUS -> target.onPrevious()
             BUTTON_STOP -> target.onStop()
         }
+    }
+
+    /** Called from the native side when the shell's scrubber is dragged to a new position. */
+    @JvmStatic
+    fun onSeek(positionMs: Long) {
+        controller?.onSeek(positionMs)
     }
 
     private external fun nativeStart(): Boolean

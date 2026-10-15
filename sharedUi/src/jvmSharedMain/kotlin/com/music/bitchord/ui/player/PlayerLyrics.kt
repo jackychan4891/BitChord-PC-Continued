@@ -4,10 +4,11 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animate
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -116,7 +117,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.playback.PlaybackPosition
 import com.music.bitchord.sharedui.resources.*
-import com.music.bitchord.data.LocaleTags
 import com.music.bitchord.data.lyrics.CharGrowth
 import com.music.bitchord.data.lyrics.isGeniusSectionHeader
 import com.music.bitchord.data.lyrics.GrowingWord
@@ -140,7 +140,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-
 
 /**
  * How far back the part of the playing line that hasn't been sung yet is held.
@@ -296,13 +295,61 @@ private val GAP_ROW_SPACING = 16.dp
 /**
  * How the stack falls away either side of the line being sung.
  *
- * Indexed by distance from it. Far subtler than a linear ramp: the two lines
- * around the playing one stay legible so you can read ahead and behind, and
- * only past that does the panel let go. The last entry stands for everything
- * further out, which is most of the list.
+ * Indexed by distance from it. Steep from the very next line: the line after the
+ * one being sung is already clearly let go, rather than the stack holding nearly
+ * full brightness for two or three lines and only fading past that. It still
+ * settles to a floor rather than nothing, so a little read-ahead stays legible.
  */
-private val LINE_FALLOFF_ALPHA = floatArrayOf(1f, 0.8f, 0.7f, 0.58f, 0.46f)
-private val LINE_FALLOFF_BLUR = arrayOf(0.dp, 1.dp, 1.dp, 1.7.dp, 2.4.dp)
+private val LINE_FALLOFF_ALPHA = floatArrayOf(1f, 0.42f, 0.28f, 0.2f, 0.16f)
+
+/**
+ * How the lines already sung fall away above the playing one.
+ *
+ * Unlike the read-ahead falloff above, this one runs straight to nothing: a line
+ * is fully gone the moment it is no longer the one being sung, rather than
+ * lingering as a half-lit ghost. The lines ahead keep their gentler ramp, so
+ * what is coming stays legible.
+ */
+private val LINE_SUNG_ALPHA = floatArrayOf(1f, 0f)
+
+/**
+ * How far a line defocuses per row of distance from the one being sung, and the
+ * ceiling on it — carried over from the accompanist lyrics animation, which
+ * measures blur in *pixels* (`blurDelta = 3`) rather than dp. That distinction
+ * is the whole reason the old dp version read as "too blurry": on a HiDPI
+ * desktop a 3dp radius is already ~6 real pixels, so every off-focus row was
+ * defocused twice over. Measuring in pixels keeps the depth of field the same
+ * whether the reader is on a 1x or a 2x panel.
+ */
+private const val LYRIC_BLUR_PX_PER_LINE = 3f
+private const val LYRIC_BLUR_MAX_PX = 22f
+
+/** The window each row eases its blur and brightness across when focus moves. */
+private const val LYRIC_BLUR_MS = 300
+
+/**
+ * How long the panel takes to glide the next line up into the anchor. The library
+ * uses one fixed, clearly-ramped scroll (`tween(650, FastOutSlowIn)`) rather than
+ * a duration tied to how far the lead runs ahead, so the handover is always seen
+ * as a movement instead of a snap.
+ */
+private const val SCROLL_GLIDE_MS = 650
+
+/**
+ * Reads a falloff curve at a fractional line distance instead of a whole one,
+ * so a receding line eases continuously between the sampled stops rather than
+ * snapping to the next slot each time the focus advances. Clamps at both ends.
+ */
+private fun falloffAlpha(values: FloatArray, x: Float): Float {
+    if (x <= 0f) return values.first()
+    val last = values.lastIndex
+    if (x >= last) return values[last]
+    val i = x.toInt()
+    return values[i] + (values[i + 1] - values[i]) * (x - i)
+}
+
+/** How far above the geometric middle the sung line rests — it sat a touch low. */
+private const val LINE_CENTRE_RAISE = 0.07f
 
 /**
  * The shape of the page the lyrics are going to fill.
@@ -334,8 +381,13 @@ private const val SKELETON_PERIOD_MS = 1_400
 /** What a line reads at while the list is being scrolled by hand. */
 private const val BROWSING_ALPHA = 0.8f
 
-/** The playing line sits at 1; the rest sit fractionally back from it. */
-private const val INACTIVE_SCALE = 0.98f
+/**
+ * Every line keeps its full size; only the line being sung is sharp and the rest
+ * fall back through blur and brightness. The off-focus rows used to sit a touch
+ * smaller (0.98), but scaled-down *and* blurred read as squished rather than
+ * receding, so the depth of field is carried by blur alone.
+ */
+private const val INACTIVE_SCALE = 1f
 
 /** A line under a finger dips, the way a button does. */
 private const val PRESSED_SCALE = 0.96f
@@ -1574,6 +1626,12 @@ internal fun LyricsPanel(
     onPickLine: (Int) -> Unit = {},
     /** Tap while picking: add or drop that line. */
     onTogglePick: (Int) -> Unit = {},
+    /**
+     * How far above the geometric middle the sung line rests, as a share of
+     * the viewport. The player keeps the small default; the window's lyric
+     * column sits higher so the words read nearer the top.
+     */
+    centreRaise: Float = LINE_CENTRE_RAISE,
     modifier: Modifier = Modifier,
 ) {
     val panelPlaying = isPlaying && active
@@ -1616,19 +1674,27 @@ internal fun LyricsPanel(
     // the blur and the movement are one gesture.
     val focusLine = if (leadLine >= 0) leadLine else scrollLine
     val listState = rememberLazyListState()
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }.collect(onScrollingChange)
-    }
-    // LayoutInfo changes on every scroll frame. Observe only height here so
-    // the entire lyrics list is not recomposed for every scrolling pixel.
     val viewportHeight by remember(listState) {
         derivedStateOf { listState.layoutInfo.viewportSize.height }
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect(onScrollingChange)
     }
     val keepScroll = remember(listState) { keepScrollInList(listState) }
     var browsingByDrag by remember { mutableStateOf(false) }
     // While picking lines, the panel must not auto-scroll — the reader needs
     // the list to stay put so they can tap the lines they want.
     val browsing = browsingByDrag || picking
+    // The library flattens the whole depth of field while somebody scrolls the
+    // panel by hand, so no row is being pointed at, and brings it back when the
+    // panel resumes following the song. One shared animation drives every row's
+    // blur at once, so the stack eases in and out of focus together instead of
+    // row by row.
+    val focusBlurFactor = animateFloatAsState(
+        targetValue = if (browsing) 0f else 1f,
+        animationSpec = tween(if (browsing) 100 else LYRIC_BLUR_MS),
+        label = "lyricFocusBlur",
+    )
     val onBottomHalfTap: () -> Unit = {
         // A pick has the whole panel to itself: the controls that a tap down
         // there would pull back in are the player's transport, and it must not
@@ -1727,34 +1793,30 @@ internal fun LyricsPanel(
         if (active && isSynced && !browsing &&
             focusLine >= 0 && focusLine in lines.indices
         ) {
-            snapshotFlow { listState.layoutInfo.viewportSize.height }.first { it > 0 }
-            // Keep the same top anchor whether the playback controls are visible or hidden.
+            val viewport = snapshotFlow { listState.layoutInfo.viewportSize.height }.first { it > 0 }
+            // An item's real on-screen position is its offset measured from the viewport's start,
+            // and the start sits at a negative offset while the half-viewport leading inset is
+            // still above the content. So viewport-y = offset - viewportStartOffset. Centring the
+            // line means moving that on-screen position to half the viewport, which near the start
+            // is a *forward* scroll — never the negative delta a plain offset - viewport/2 produces
+            // and which then clamps against the top of the list and moves nothing.
+            val start = listState.layoutInfo.viewportStartOffset
+            val centre = viewport / 2f - viewport * centreRaise
             val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusLine }
-            when {
-                !placed -> {
-                    listState.scrollToItem(focusLine, scrollOffset = 0)
-                    placed = true
-                }
-                // Already on screen, which is the ordinary case of handing over
-                // to the next line: its distance is known, so the move can be
-                // given the run-up's own duration and curve instead of the
-                // list's default spring.
-                visible != null -> {
-                    val span = scrollLead(lines, clock.longValue).toInt()
-                    run = ScrollRun(run.id + 1, visible.offset.toFloat(), span)
-                    // The same curve the rows catch up on. Two different
-                    // curves and a row with no delay at all still trails the
-                    // list it is sitting in, which is most of the way to
-                    // looking like the panel cannot keep up with itself.
-                    listState.animateScrollBy(
-                        value = visible.offset.toFloat(),
-                        animationSpec = tween(durationMillis = span, easing = LYRIC_EASING),
-                    )
-                }
-                // Somewhere off screen — after a seek, or a long instrumental
-                // scrolled past. How far is not known without laying the rows
-                // out, so this hands back to the list's own staged scroll.
-                else -> listState.animateScrollToItem(focusLine, scrollOffset = 0)
+            if (!placed) {
+                listState.scrollToItem(focusLine, scrollOffset = (centre + start).toInt())
+                placed = true
+            } else if (visible != null) {
+                // One fixed, clearly-ramped glide rather than a duration borrowed
+                // from the lead: the new line is seen rising into the anchor, which
+                // is the "move up" the reference animation reads as and a
+                // lead-timed scroll was too quick to show.
+                listState.animateScrollBy(
+                    value = visible.offset - start - centre,
+                    animationSpec = tween(SCROLL_GLIDE_MS, easing = FastOutSlowInEasing),
+                )
+            } else {
+                listState.animateScrollToItem(focusLine, scrollOffset = (centre + start).toInt())
             }
         }
     }
@@ -1777,6 +1839,11 @@ internal fun LyricsPanel(
         return
     }
 
+    // Synced lines are centred as they are sung, which needs as much room above the first as
+    // below the last: half a viewport of padding either end lets even the opening and closing
+    // lines reach the centre. Unsynced lyrics are read, not followed, so they keep the old
+    // top-anchored inset.
+    val halfViewportDp = with(LocalDensity.current) { viewportHeight.toDp() } * 0.5f
     LazyColumn(
         state = listState,
         modifier = modifier
@@ -1793,7 +1860,7 @@ internal fun LyricsPanel(
         // list hands that much back — otherwise the lines would sit a glow's
         // width further apart and further in than they used to.
         contentPadding = PaddingValues(
-            top = 40.dp - GLOW_ROOM,
+            top = ((if (isSynced) halfViewportDp else 40.dp) - GLOW_ROOM).coerceAtLeast(0.dp),
             bottom = with(LocalDensity.current) { viewportHeight.toDp() } * 0.8f,
             start = PLAYER_GUTTER - GLOW_ROOM,
             end = PLAYER_GUTTER - GLOW_ROOM,
@@ -1840,31 +1907,53 @@ internal fun LyricsPanel(
             // there is no sweep behind it to keep the sung line lit, and it
             // read as dim while it was still being sung.
             val offset = if (scrollLine < 0) 0 else index - scrollLine
-            val distance = abs(offset)
             val isActive = isSynced && index in activeRows
             // Symmetric either side of the playing line, and shallow: the two
             // rows around it stay readable so you can follow back over what was
             // just sung as well as ahead, and everything past that recedes to
             // the same floor rather than fading to nothing.
-            val step = distance.coerceAtMost(LINE_FALLOFF_ALPHA.lastIndex)
-            val blur by animateDpAsState(
-                targetValue = when {
-                    !isSynced || reduceDynamicBlur || !lyricsBlur || browsing || isActive -> 0.dp
-                    else -> LINE_FALLOFF_BLUR[step]
-                },
-                animationSpec = tween(LYRIC_SETTLE_MS, easing = LYRIC_EASING),
+            val sung = offset < 0
+            // The library measures a row against the *block* of lines being sung,
+            // not a single gliding float: distance is how many rows outside that
+            // block this line sits, so it is an integer that only changes when
+            // focus actually moves. Each row then eases its own blur and
+            // brightness to that value over the blur window, which is what lets a
+            // receding line slide through every intermediate radius without ever
+            // fighting the list's own scroll the way the shared glide did.
+            val activeMin = activeRows.minOrNull()
+            val activeMax = activeRows.maxOrNull()
+            val distance = when {
+                activeMin == null || activeMax == null -> 0f
+                else -> maxOf(0f, (activeMin - index).toFloat(), (index - activeMax).toFloat())
+            }
+            // Pixels, capped short — the depth of field the animation is known for,
+            // minus the double-defocus a dp radius incurred on a HiDPI panel. The
+            // line being sung (and a hand-scrolled stack) drop to none at all.
+            val blurTargetPx = when {
+                !isSynced || reduceDynamicBlur || !lyricsBlur || browsing || isActive -> 0f
+                else -> (distance * LYRIC_BLUR_PX_PER_LINE).coerceAtMost(LYRIC_BLUR_MAX_PX)
+            }
+            val blurPx by animateFloatAsState(
+                targetValue = blurTargetPx,
+                animationSpec = tween(LYRIC_BLUR_MS, easing = LYRIC_EASING),
                 label = "lyricBlur",
             )
+            val blur: Dp = with(LocalDensity.current) {
+                (blurPx * focusBlurFactor.value).toDp()
+            }
+            val alphaTarget: Float = when {
+                !isSynced -> 0.95f
+                isActive -> 1f
+                // Reading by hand is not following along: the stack flattens
+                // to one brightness so no row is being pointed at.
+                browsing -> BROWSING_ALPHA
+                // A line already sung rises and lets go; one still ahead stays legible.
+                sung -> falloffAlpha(LINE_SUNG_ALPHA, distance)
+                else -> falloffAlpha(LINE_FALLOFF_ALPHA, distance)
+            }
             val lineAlpha by animateFloatAsState(
-                targetValue = when {
-                    !isSynced -> 0.95f
-                    isActive -> 1f
-                    // Reading by hand is not following along: the stack flattens
-                    // to one brightness so no row is being pointed at.
-                    browsing -> BROWSING_ALPHA
-                    else -> LINE_FALLOFF_ALPHA[step]
-                },
-                animationSpec = tween(LYRIC_SETTLE_MS, easing = LYRIC_EASING),
+                targetValue = alphaTarget,
+                animationSpec = tween(LYRIC_BLUR_MS, easing = LYRIC_EASING),
                 label = "lyricAlpha",
             )
             if (line.isGap) {
@@ -1980,24 +2069,23 @@ internal fun LyricsPanel(
                 // Behind the panel's focus, so the words close up to full
                 // brightness as it leaves rather than when the last syllable
                 // lands — the dim, the blur and the movement together.
-                val sung = offset < 0
-                // Rows behind the one being scrolled to are the ones that
-                // fan out; the ones it is moving away from arrive together.
-                val behind = if (run.delta >= 0f) index - focusLine else focusLine - index
-                val staggerDelay = behind.coerceIn(0, STAGGER_STEPS) *
-                    STAGGER_FRACTION * run.durationMs
                 val interaction = remember { MutableInteractionSource() }
                 val pressed by interaction.collectIsPressedAsState()
+                // The library's scale: a line comes forward to full size slowly
+                // when it takes focus, and lets go a touch quicker when it hands
+                // over — one easing in each direction rather than the same curve
+                // both ways.
                 val scale by animateFloatAsState(
                     targetValue = when {
                         pressed -> PRESSED_SCALE
                         isActive -> 1f
                         else -> INACTIVE_SCALE
                     },
-                    animationSpec = tween(
-                        durationMillis = if (pressed) 120 else LYRIC_SETTLE_MS,
-                        easing = LYRIC_EASING,
-                    ),
+                    animationSpec = when {
+                        pressed -> tween(120, easing = LYRIC_EASING)
+                        isActive -> tween(600, easing = LinearOutSlowInEasing)
+                        else -> tween(300, easing = EaseInOut)
+                    },
                     label = "lyricScale",
                 )
                 // Apple's bloom on the line being sung. Fades in and out with
@@ -2025,29 +2113,6 @@ internal fun LyricsPanel(
                         scaleY = scale
                         transformOrigin = TransformOrigin(if (alignEnd) 1f else 0f, 0.5f)
                         alpha = lineAlpha
-                        // Held back against the list's own movement: the list
-                        // has already taken this row part of the way, so giving
-                        // back what it has not earned yet is what leaves it
-                        // trailing. One curve for both, so a row with no delay
-                        // sits exactly still against the list and the rows that
-                        // do have one are the only thing that moves.
-                        //
-                        // Rows with nothing to catch up on never read the clock
-                        // at all, so a handover only invalidates the handful of
-                        // layers that are actually fanning out.
-                        translationY = if (staggerDelay <= 0f) {
-                            0f
-                        } else {
-                            val elapsed = since.floatValue
-                            run.delta * (
-                                LYRIC_EASING.transform(
-                                    (elapsed / run.durationMs).coerceIn(0f, 1f),
-                                ) - LYRIC_EASING.transform(
-                                    ((elapsed - staggerDelay) / run.durationMs)
-                                        .coerceIn(0f, 1f),
-                                )
-                                )
-                        }
                     }
                     .blur(blur, BlurredEdgeTreatment.Unbounded)
                     .clip(RoundedCornerShape(10.dp))
@@ -2259,7 +2324,7 @@ internal fun LyricsPanel(
                 }
             }
         }
-    }
+        }
 }
 
 /**
@@ -2722,15 +2787,10 @@ internal fun rememberLyricsTranslation(
     // Settings wins where it has been set; blank means follow the app. Only the
     // app-language path is reduced to a base language — a code chosen in
     // Settings is already exactly what the endpoint wants and narrowing it
-    // would throw away the script half of zh-TW. Chinese is the exception on the
-    // app path too: bare "zh" comes back Simplified, so the script maps to zh-TW / zh-CN.
+    // would throw away the script half of zh-TW.
     val translationLanguage = remember(configuredLocale, preferredTranslation) {
         preferredTranslation.ifBlank {
-            if (LocaleTags.isChineseTag(configuredLocale)) {
-                LocaleTags.translationWireTarget(configuredLocale)
-            } else {
-                Locale.forLanguageTag(configuredLocale).language.ifBlank { "en" }
-            }
+            Locale.forLanguageTag(configuredLocale).language.ifBlank { "en" }
         }
     }
     val translationLanguageName = remember(configuredLocale, translationLanguage) {

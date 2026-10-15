@@ -94,6 +94,25 @@ void notify(jint button) {
     if (attached) g_vm->DetachCurrentThread();
 }
 
+/** Tells the player the shell's scrubber was dragged to [position_ms]. */
+void notify_seek(long long position_ms) {
+    if (g_vm == nullptr) return;
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (g_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void**>(&env), nullptr) != JNI_OK) return;
+        attached = true;
+    }
+    jclass type = env->FindClass("com/music/bitchord/desktop/DesktopWindowsMedia");
+    if (type != nullptr) {
+        jmethodID method = env->GetStaticMethodID(type, "onSeek", "(J)V");
+        if (method != nullptr) env->CallStaticVoidMethod(type, method, static_cast<jlong>(position_ms));
+        env->DeleteLocalRef(type);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (attached) g_vm->DetachCurrentThread();
+}
+
 void apply(const Update& update) {
     std::lock_guard<std::mutex> guard(g_mutex);
     if (g_controls == nullptr) return;
@@ -190,6 +209,13 @@ void pump() {
             default: break;
         }
     });
+    // The scrubber the timeline properties enable is what raises this; without it
+    // dragging the shell's progress bar would do nothing.
+    g_controls.PlaybackPositionChangeRequested(
+        [](auto&&, const PlaybackPositionChangeRequestedEventArgs& args) {
+            notify_seek(std::chrono::duration_cast<std::chrono::milliseconds>(
+                args.RequestedPlaybackPosition()).count());
+        });
 
     g_running = true;
 

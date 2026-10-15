@@ -21,6 +21,7 @@ internal object DesktopDiscordSettings {
     private val _button1Visible = MutableStateFlow(persistence.boolean(KEY_BUTTON_1_VISIBLE, true))
     private val _button2Text = MutableStateFlow(persistence.string(KEY_BUTTON_2_TEXT, ""))
     private val _button2Visible = MutableStateFlow(persistence.boolean(KEY_BUTTON_2_VISIBLE, true))
+    private val _showAudioQuality = MutableStateFlow(persistence.boolean(KEY_SHOW_AUDIO_QUALITY, true))
 
     /** Whether the song goes on the bold line instead of the artist. */
     val useDetails: StateFlow<Boolean> = _useDetails
@@ -33,10 +34,14 @@ internal object DesktopDiscordSettings {
     val button2Text: StateFlow<String> = _button2Text
     val button2Visible: StateFlow<Boolean> = _button2Visible
 
+    /** Whether a measured premium format earns the card's third line. */
+    val showAudioQuality: StateFlow<Boolean> = _showAudioQuality
+
     fun setUseDetails(value: Boolean) = flag(_useDetails, KEY_USE_DETAILS, value)
     fun setAdvancedMode(value: Boolean) = flag(_advancedMode, KEY_ADVANCED, value)
     fun setButton1Visible(value: Boolean) = flag(_button1Visible, KEY_BUTTON_1_VISIBLE, value)
     fun setButton2Visible(value: Boolean) = flag(_button2Visible, KEY_BUTTON_2_VISIBLE, value)
+    fun setShowAudioQuality(value: Boolean) = flag(_showAudioQuality, KEY_SHOW_AUDIO_QUALITY, value)
 
     fun setStatus(value: String) = text(_status, KEY_STATUS, value)
     fun setActivityType(value: String) = text(_activityType, KEY_ACTIVITY_TYPE, value)
@@ -101,4 +106,5 @@ internal object DesktopDiscordSettings {
     private const val KEY_BUTTON_1_VISIBLE = "discord_button_1_visible"
     private const val KEY_BUTTON_2_TEXT = "discord_button_2_text"
     private const val KEY_BUTTON_2_VISIBLE = "discord_button_2_visible"
+    private const val KEY_SHOW_AUDIO_QUALITY = "discord_show_audio_quality"
 }

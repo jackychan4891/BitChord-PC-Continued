@@ -8,14 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -46,23 +43,25 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.music.bitchord.data.model.Song
-import com.music.bitchord.data.spotify.SpotifyImportTrack
-import com.music.bitchord.data.spotify.SpotifyImporter
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
- * Signing in to Last.fm with a username and password.
+ * Signing in to Last.fm — the whole setup in one dialog.
  *
- * Android's `LastfmLoginAlert`: two fields, and the error takes the
- * description's place rather than appearing beside it, because a wrong password
- * is the only thing anybody needs told at that moment. The password is sent to
- * `auth.getMobileSession` and never stored — only the session key it returns.
+ * Last.fm signs every request with the *app's* API key and shared secret, so a
+ * build that shipped without them baked in (no `local.properties`) still needs
+ * them before the account password means anything. Android lets the listener
+ * enter those two under AppSettings; here they join the username and password on
+ * one screen so there is a single, obvious way in rather than a switch that is
+ * greyed out until a key turns up from somewhere. The key and secret are kept so
+ * later scrobbles can sign themselves; the password is sent to
+ * `auth.getMobileSession` once and only the returned session key is stored.
  */
 @Composable
 internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
-    var username by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf(DesktopScrobbleSettings.lastfmApiKey.value) }
+    var apiSecret by remember { mutableStateOf(DesktopScrobbleSettings.lastfmApiSecret.value) }
+    var username by remember { mutableStateOf(DesktopScrobbleSettings.lastfmUsername.value) }
     var password by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -70,10 +69,16 @@ internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 
+    val ready = apiKey.isNotBlank() && apiSecret.isNotBlank() && username.isNotBlank() && password.isNotBlank()
+
     fun submit() {
-        if (busy || username.isBlank() || password.isBlank()) return
+        if (busy || !ready) return
         busy = true
         error = null
+        // Save the app credentials first: the sign-in request is signed with them,
+        // and every scrobble afterwards reads them back from here.
+        DesktopScrobbleSettings.setLastfmApiKey(apiKey.trim())
+        DesktopScrobbleSettings.setLastfmApiSecret(apiSecret.trim())
         scope.launch {
             DesktopScrobbling.signInToLastFm(username.trim(), password)
                 .onSuccess { onDismiss() }
@@ -82,19 +87,38 @@ internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
         }
     }
 
-    DesktopDialogPanel(onDismiss = onDismiss, maxWidth = 380) {
+    DesktopDialogPanel(onDismiss = onDismiss, maxWidth = 400) {
         DialogHeading(
             title = DesktopStrings["d_sign_in_to_last_fm", "Sign in to Last.fm"],
-            message = error ?: "Your password is sent to Last.fm once and never stored.",
+            message = error
+                ?: "Your password is sent to Last.fm once and never stored. The API key " +
+                "and shared secret are your app's, from last.fm/api.",
             isError = error != null,
         )
+        DialogField(
+            value = apiKey,
+            onValueChange = { apiKey = it },
+            placeholder = DesktopStrings["lastfm_api_key", "API key"],
+            enabled = !busy,
+            imeAction = ImeAction.Next,
+            modifier = Modifier.focusRequester(focus),
+        )
+        Spacer(Modifier.height(8.dp))
+        DialogField(
+            value = apiSecret,
+            onValueChange = { apiSecret = it },
+            placeholder = DesktopStrings["lastfm_shared_secret", "Shared secret"],
+            enabled = !busy,
+            isPassword = true,
+            imeAction = ImeAction.Next,
+        )
+        Spacer(Modifier.height(8.dp))
         DialogField(
             value = username,
             onValueChange = { username = it },
             placeholder = DesktopStrings["username", "Username"],
             enabled = !busy,
             imeAction = ImeAction.Next,
-            modifier = Modifier.focusRequester(focus),
         )
         Spacer(Modifier.height(8.dp))
         DialogField(
@@ -105,9 +129,21 @@ internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
             isPassword = true,
             onSubmit = ::submit,
         )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = panelInset(22.dp)),
+            horizontalArrangement = Arrangement.Start,
+        ) {
+            TextButton(onClick = { DesktopExternalLinks.open("https://www.last.fm/api/account/create") }) {
+                Text(
+                    DesktopStrings["d_get_an_api_key", "Get an API key"],
+                    color = DesktopSecondary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
         DialogActions(
             confirm = if (busy) "Signing in…" else "Sign in",
-            confirmEnabled = !busy && username.isNotBlank() && password.isNotBlank(),
+            confirmEnabled = !busy && ready,
             busy = busy,
             onConfirm = ::submit,
             onDismiss = onDismiss,
@@ -245,155 +281,6 @@ private fun DialogHeading(title: String, message: String, isError: Boolean = fal
             color = if (isError) DesktopDestructive else DesktopSecondary,
             textAlign = if (LocalDesktopPanelIsPage.current) TextAlign.Start else TextAlign.Center,
         )
-    }
-}
-
-/**
- * Paste a Spotify playlist link, match its songs on YouTube Music, keep the result: the phone's
- * `SpotifyImportAlert`. [onImported] makes the playlist and returns a note when it ended up
- * somewhere the listener would not expect. Songs with no match are listed afterwards rather than
- * dropped without a word. The link has to be public; no Spotify sign-in is involved.
- */
-@Composable
-internal fun DesktopSpotifyImportDialog(
-    signedIn: Boolean,
-    onImported: suspend (title: String, songs: List<Song>) -> String?,
-    onDismiss: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var link by remember { mutableStateOf("") }
-    var working by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var failed by remember { mutableStateOf(false) }
-    var unmatched by remember { mutableStateOf<List<SpotifyImportTrack>?>(null) }
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    val title = DesktopStrings["spotify_import_title", "Import Spotify playlist"]
-
-    fun start() {
-        if (working) return
-        val id = SpotifyImporter.extractPlaylistId(link) ?: run {
-            status = DesktopStrings["spotify_import_invalid", "That isn't a Spotify playlist link."]
-            failed = true
-            return
-        }
-        working = true
-        failed = false
-        status = DesktopStrings["spotify_import_fetching", "Reading the Spotify playlist…"]
-        scope.launch {
-            try {
-                val (name, tracks) = SpotifyImporter.fetchPlaylistTracks(id)
-                val (songs, missed) = SpotifyImporter.resolveToSongs(tracks) { done, total ->
-                    status = DesktopStrings.format("spotify_import_matching", done, total, fallback = "Matching songs %1\$d of %2\$d")
-                }
-                if (songs.isEmpty()) {
-                    error(DesktopStrings["spotify_import_none", "None of those songs were found on YouTube Music."])
-                }
-                val note = onImported(name, songs)
-                if (missed.isEmpty() && note == null) {
-                    onDismiss()
-                } else {
-                    status = note
-                    unmatched = missed
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                DesktopTrackLog.log("spotify import failed: ${failure.message}")
-                status = DesktopStrings.format(
-                    "spotify_import_failed",
-                    failure.message.orEmpty(),
-                    fallback = "Couldn't import the playlist: %1\$s",
-                )
-                failed = true
-            }
-            working = false
-        }
-    }
-
-    // Not dismissed mid-import, which would leave the matching running with nowhere to report.
-    DesktopDialogPanel(onDismiss = { if (!working) onDismiss() }, maxWidth = 420, popup = true) {
-        val missed = unmatched
-        if (missed == null) {
-            DialogHeading(
-                title = title,
-                message = if (signedIn) {
-                    DesktopStrings["spotify_import_description", "Paste a public playlist link. Songs are matched on YouTube Music."]
-                } else {
-                    DesktopStrings[
-                        "spotify_import_description_local",
-                        "Paste a public playlist link. Songs are matched on YouTube Music and saved on this device.",
-                    ]
-                },
-            )
-            DialogField(
-                value = link,
-                onValueChange = {
-                    link = it
-                    if (failed) status = null
-                    failed = false
-                },
-                placeholder = DesktopStrings["spotify_import_hint", "open.spotify.com/playlist/…"],
-                enabled = !working,
-                onSubmit = ::start,
-                modifier = Modifier.focusRequester(focus),
-            )
-            status?.let {
-                Text(
-                    it,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = panelInset(22.dp), vertical = 6.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (failed) DesktopDestructive else DesktopSecondary,
-                    textAlign = TextAlign.Center,
-                )
-            }
-            DialogActions(
-                confirm = DesktopStrings["spotify_import_button", "Import"],
-                confirmEnabled = link.isNotBlank() && !working,
-                busy = working,
-                onConfirm = ::start,
-                onDismiss = onDismiss,
-            )
-        } else {
-            DialogHeading(
-                title = title,
-                message = listOfNotNull(
-                    status,
-                    DesktopStrings.format(
-                        "spotify_import_unmatched",
-                        missed.size,
-                        fallback = "%1\$d songs weren't found on YouTube Music",
-                    ).takeIf { missed.isNotEmpty() },
-                ).joinToString("\n"),
-            )
-            if (missed.isNotEmpty()) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = panelInset(22.dp))
-                        .heightIn(max = 200.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    missed.forEach { track ->
-                        Text(
-                            if (track.artist.isBlank()) track.title else "${track.title} · ${track.artist}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = DesktopSecondary,
-                        )
-                    }
-                }
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = panelInset(16.dp), vertical = 12.dp),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                TextButton(onClick = onDismiss) { Text(DesktopStrings["done", "Done"], color = DesktopAccent) }
-            }
-        }
     }
 }
 

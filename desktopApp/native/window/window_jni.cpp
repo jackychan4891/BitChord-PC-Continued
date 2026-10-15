@@ -27,6 +27,15 @@ namespace {
 HWND g_window = nullptr;
 WNDPROC g_original_proc = nullptr;
 
+// The style and rectangle the window had before it went borderless fullscreen, kept so exiting can
+// put the caption window back exactly where it was.
+LONG_PTR g_fullscreen_style = 0;
+RECT g_fullscreen_rect{};
+bool g_fullscreen_active = false;
+// The oversized monitor rectangle fullscreen is pinned to; WM_WINDOWPOSCHANGING forces every move
+// and resize back to it so nothing — AWT, the shell, the taskbar raising itself — can uncover it.
+RECT g_fullscreen_target{};
+
 // Posted from Java to start a caption drag on the thread that owns the window; see frame_proc.
 constexpr UINT WM_BITCHORD_DRAG = WM_APP + 0x42;
 // SC_MOVE through the caption: the same move loop a real title bar starts.
@@ -86,7 +95,21 @@ LRESULT CALLBACK frame_proc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         return 0;
     }
 
-    if (message == WM_NCHITTEST && !IsZoomed(window)) {
+    if (message == WM_WINDOWPOSCHANGING && g_fullscreen_active && lparam != 0) {
+        // While fullscreen, every attempted move or resize — AWT reasserting its own bounds, the
+        // taskbar raising itself, a focus change — is rewritten to the pinned, oversized monitor
+        // rectangle at the top of the z-order. This is what keeps the taskbar from peeking back.
+        auto* pos = reinterpret_cast<WINDOWPOS*>(lparam);
+        pos->hwndInsertAfter = HWND_TOPMOST;
+        pos->flags &= ~static_cast<UINT>(SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE);
+        pos->x = g_fullscreen_target.left;
+        pos->y = g_fullscreen_target.top;
+        pos->cx = g_fullscreen_target.right - g_fullscreen_target.left;
+        pos->cy = g_fullscreen_target.bottom - g_fullscreen_target.top;
+        return 0;
+    }
+
+    if (message == WM_NCHITTEST && !IsZoomed(window) && !g_fullscreen_active) {
         POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
         RECT bounds{};
         GetWindowRect(window, &bounds);
@@ -209,6 +232,76 @@ bool send_system_command(UINT command) {
     HWND window = g_window;
     return window != nullptr && IsWindow(window) &&
         PostMessageW(window, WM_SYSCOMMAND, command, 0) != 0;
+}
+
+/**
+ * Fills the whole monitor — taskbar included — with a frameless window above it. A maximized window
+ * can never cover a taskbar told to stay on top, so this is what the player's full-screen button
+ * and F11 ask for. The window's own style and rectangle survive the trip and come back on exit.
+ *
+ * The popup is pushed a few pixels past every edge of the monitor, so DWM's rounded-corner cutout
+ * and any sub-pixel seam where the surface used to stop land off-screen rather than showing the
+ * desktop through them. WM_WINDOWPOSCHANGING pins that rectangle and the topmost band from then on.
+ */
+bool set_fullscreen(HWND window, bool on) {
+    if (window == nullptr || !IsWindow(window)) return false;
+
+    if (on) {
+        if (g_fullscreen_active) return true;
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        const HMONITOR handle = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        if (handle == nullptr || GetMonitorInfoW(handle, &monitor) == FALSE) return false;
+
+        g_fullscreen_style = GetWindowLongPtrW(window, GWL_STYLE);
+        if (GetWindowRect(window, &g_fullscreen_rect) == FALSE) return false;
+        constexpr int OVERSHOOT = 8;
+        g_fullscreen_target = RECT{
+            monitor.rcMonitor.left - OVERSHOOT,
+            monitor.rcMonitor.top - OVERSHOOT,
+            monitor.rcMonitor.right + OVERSHOOT,
+            monitor.rcMonitor.bottom + OVERSHOOT,
+        };
+
+        // Corners squared off and no extended frame: the material and the rounded-corner mask are
+        // what left the see-through ring around the edges. The flag goes up first so the enabling
+        // SetWindowPos below is itself clamped to the pinned rectangle.
+        g_fullscreen_active = true;
+        const int square = 1;  // DWMWCP_DONOTROUND
+        DwmSetWindowAttribute(
+            window, static_cast<DWMWINDOWATTRIBUTE>(DWMWA_WINDOW_CORNER_PREFERENCE),
+            &square, sizeof(square));
+        const MARGINS no_frame{0, 0, 0, 0};
+        DwmExtendFrameIntoClientArea(window, &no_frame);
+
+        SetWindowLongPtrW(window, GWL_STYLE, WS_POPUP | (g_fullscreen_style & WS_VISIBLE));
+        SetWindowPos(
+            window, HWND_TOPMOST,
+            g_fullscreen_target.left, g_fullscreen_target.top,
+            g_fullscreen_target.right - g_fullscreen_target.left,
+            g_fullscreen_target.bottom - g_fullscreen_target.top,
+            SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        return true;
+    }
+
+    if (!g_fullscreen_active) return true;
+    g_fullscreen_active = false;
+    const int rounded = 2;  // DWMWCP_ROUND
+    DwmSetWindowAttribute(
+        window, static_cast<DWMWINDOWATTRIBUTE>(DWMWA_WINDOW_CORNER_PREFERENCE),
+        &rounded, sizeof(rounded));
+
+    SetWindowLongPtrW(window, GWL_STYLE, g_fullscreen_style);
+    SetWindowPos(
+        window, HWND_NOTOPMOST,
+        g_fullscreen_rect.left, g_fullscreen_rect.top,
+        g_fullscreen_rect.right - g_fullscreen_rect.left,
+        g_fullscreen_rect.bottom - g_fullscreen_rect.top,
+        SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    // Hand the frame's own shadow margin and any material back; DesktopWindowBackdrop.apply()
+    // re-asserts the chosen material over the top of this on the Kotlin side.
+    const MARGINS shadow_frame{1, 1, 1, 1};
+    DwmExtendFrameIntoClientArea(window, &shadow_frame);
+    return true;
 }
 
 // ---- Shared-mode Windows audio --------------------------------------------
@@ -731,6 +824,11 @@ Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativeToggleMaximize(JNIEnv*
     if (window == nullptr || !IsWindow(window)) return JNI_FALSE;
     return send_system_command(IsZoomed(window) ? SC_RESTORE : SC_MAXIMIZE)
         ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativeSetFullscreen(JNIEnv*, jclass, jboolean on) {
+    return set_fullscreen(g_window, on == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jint JNICALL

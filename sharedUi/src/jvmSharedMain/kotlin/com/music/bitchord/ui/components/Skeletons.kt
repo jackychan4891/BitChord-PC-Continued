@@ -173,40 +173,31 @@ private fun HeroShelfSkeleton() {
     }
 }
 
-/** Reserved at the top of Play while Recents loads, matching its saved layout. */
-fun LazyListScope.recentlyPlayedSkeleton(listLayout: Boolean) {
-    item(key = "skeleton:recently-played") {
-        Column(Modifier.padding(bottom = 26.dp)) {
-            RecentsHeaderSkeleton()
-            if (listLayout) {
-                BoxWithConstraints {
-                    val columnWidth = trackColumnWidth(maxWidth)
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        userScrollEnabled = false,
-                    ) {
-                        item {
-                            Column(Modifier.width(columnWidth)) {
-                                repeat(4) { index -> CompactSongRowSkeleton(index) }
-                            }
-                        }
-                    }
-                }
-            } else {
-                BoxWithConstraints {
-                    val cardWidth = heroCardWidth(maxWidth)
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        userScrollEnabled = false,
-                    ) {
-                        items(2) {
-                            ShimmerBox(
-                                modifier = Modifier.width(cardWidth).aspectRatio(HERO_CARD_RATIO),
-                                shape = RoundedCornerShape(18.dp),
-                            )
-                        }
+/** Reserved at the top of Home while Recents loads: the portrait row it becomes. */
+fun LazyListScope.recentlyPlayedSkeleton() {
+    item(key = "skeleton:recently-played") { MadeForYouShelfSkeleton() }
+}
+
+/** A Made-for-You placeholder row: landscape cards with their caption line. */
+@Composable
+private fun MadeForYouShelfSkeleton() {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        SectionHeaderSkeleton()
+        BoxWithConstraints {
+            val cardWidth = madeForYouCardWidth(maxWidth)
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                userScrollEnabled = false,
+            ) {
+                items(2) {
+                    Column(Modifier.width(cardWidth)) {
+                        ShimmerBox(
+                            modifier = Modifier.width(cardWidth).aspectRatio(MADE_FOR_YOU_RATIO),
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        SkeletonLine(fraction = 0.6f, height = 12.dp)
                     }
                 }
             }
@@ -214,21 +205,43 @@ fun LazyListScope.recentlyPlayedSkeleton(listLayout: Boolean) {
     }
 }
 
-/** Recents heading plus the adjacent list/grid toggle placeholder. */
+/** A landscape placeholder row: wide cards with their caption line. */
 @Composable
-private fun RecentsHeaderSkeleton() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = PAGE_GUTTER, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.weight(1f)) {
-            SkeletonLine(fraction = TitleWidths.first() * 0.7f, height = 18.dp)
+private fun LandscapeShelfSkeleton() {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        SectionHeaderSkeleton()
+        BoxWithConstraints {
+            val cardWidth = landscapeCardWidth(maxWidth)
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                userScrollEnabled = false,
+            ) {
+                items(2) {
+                    Column(Modifier.width(cardWidth)) {
+                        ShimmerBox(
+                            modifier = Modifier.width(cardWidth).aspectRatio(LANDSCAPE_CARD_RATIO),
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        SkeletonLine(fraction = 0.6f, height = 12.dp)
+                    }
+                }
+            }
         }
-        Spacer(Modifier.width(8.dp))
-        ShimmerBox(Modifier.size(32.dp), CircleShape)
     }
+}
+
+/**
+ * Home's placeholders in the feed's own order: Recents' portrait row, the
+ * albums-and-singles landscape row, then the square rows every remaining
+ * shelf runs.
+ */
+fun LazyListScope.homeFeedSkeleton() {
+    item(key = "skeleton:home:recents") { MadeForYouShelfSkeleton() }
+    item(key = "skeleton:home:albums-singles") { LandscapeShelfSkeleton() }
+    item(key = "skeleton:home:square-1") { ShelfSkeleton(index = 0) }
+    item(key = "skeleton:home:square-2") { ShelfSkeleton(index = 1) }
 }
 
 /** The compact carousel of square cards used by every shelf below the first. */

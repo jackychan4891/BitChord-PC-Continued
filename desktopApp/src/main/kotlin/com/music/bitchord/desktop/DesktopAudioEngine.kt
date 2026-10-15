@@ -13,6 +13,7 @@ import com.music.bitchord.playback.smart.TransitionPlan
 import com.music.bitchord.playback.smart.TransitionStyle
 import com.music.bitchord.playback.smart.TransitionTrackInfo
 import com.music.bitchord.playback.smart.echoTailSeconds
+import com.music.bitchord.playback.smart.planSkipMix
 import com.music.bitchord.playback.smart.planTransition
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -29,11 +30,19 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.coroutineContext
 import kotlin.math.ceil
 
 /** Playback, decoded here rather than behind JavaFX. */
+/** How far before a SponsorBlock span begins the jump fires, absorbing position-tick granularity. */
+private const val SPONSOR_LEAD_MS = 250L
+
+/** Stop short of a span's end by this much, so the landing is never still inside the segment. */
+private const val SPONSOR_TAIL_MS = 400L
+
 /**
  * Interleaved samples the blend has fed the incoming decoder, as that track's own elapsed time.
  *
@@ -80,6 +89,47 @@ class DesktopPlaybackEngine(
         }
     }
 
+    // SponsorBlock: jump over the non-music spans a YouTube upload carries. Segments are fetched
+    // per track on this scope; the jump goes through the same seek the scrubber uses, so it lands
+    // on the audio thread and resets the playhead exactly as a manual seek would.
+    private var sponsorSegments: List<SponsorSegment> = emptyList()
+    private var sponsorVideoId: String? = null
+    private var sponsorSkippedEnd = -1L
+    private val sponsorJob = scope.launch {
+        state.collect { snapshot ->
+            if (!DesktopSponsorBlock.enabled.value || snapshot.mixing) {
+                sponsorSegments = emptyList()
+                if (!DesktopSponsorBlock.enabled.value) sponsorVideoId = null
+                return@collect
+            }
+            val song = snapshot.song ?: return@collect
+            if (song.videoId != sponsorVideoId) {
+                sponsorVideoId = song.videoId
+                sponsorSkippedEnd = -1L
+                sponsorSegments = DesktopSponsorBlock.segmentsFor(song.videoId)
+                val id = song.videoId
+                scope.launch {
+                    DesktopSponsorBlock.load(id)
+                    if (sponsorVideoId == id) sponsorSegments = DesktopSponsorBlock.segmentsFor(id)
+                }
+            }
+            val positionMs = snapshot.positionMs
+            // A rewind back before a jump re-arms that segment, so seeking in stays the listener's.
+            if (sponsorSkippedEnd >= 0 && positionMs < sponsorSkippedEnd) sponsorSkippedEnd = -1L
+            if (positionMs == sponsorSkippedEnd) return@collect
+            val segment = sponsorSegments.firstOrNull {
+                it.endMs != sponsorSkippedEnd &&
+                    positionMs >= it.startMs - SPONSOR_LEAD_MS &&
+                    positionMs < it.endMs - SPONSOR_TAIL_MS
+            } ?: return@collect
+            sponsorSkippedEnd = segment.endMs
+            DesktopTrackLog.log(
+                "SponsorBlock: skipping non-music ${segment.startMs}-${segment.endMs}ms on '${song.title}'",
+            )
+            seekTo(segment.endMs)
+        }
+    }
+
     init {
         // Windows' endpoint watcher bumps the same signal from the OS's own push; Linux asks the
         // kernel on a poll — see [DesktopLinuxAudioWatcher]. A device change reconfigures a
@@ -117,10 +167,32 @@ class DesktopPlaybackEngine(
     @Volatile private var audioQuality = "HIGH"
     @Volatile private var crossfadeSeconds = 0
     @Volatile private var automixEnabled = false
+    /**
+     * Whether a manual skip may blend into the next track instead of cutting. When on but neither
+     * Automix nor a Crossfade length is set, it still keeps the incoming deck prepared so a skip has
+     * something to mix into — see [transitionSecondsFor] and [beginSkipMix].
+     */
+    @Volatile private var skipMixEnabled = false
+    /**
+     * Apple-style Automix phrase length in bars: 0 leaves the adaptive planner in
+     * charge, 8 or 16 asks the shared planner for a mix of exactly that many bars.
+     */
+    @Volatile private var automixPhraseBars = 0
     @Volatile private var nextSong: Song? = null
 
     /** [nextSong]'s downloaded file, when it has one, for its analysis. */
     @Volatile private var nextLocalStream: DesktopStream? = null
+
+    /**
+     * The track whose incoming deck is open and ready to blend into, read from outside the audio
+     * thread only to answer [beginSkipMix] — a manual skip can only mix when this already names the
+     * song being skipped to. It is set when a [Command.Upcoming] lands and cleared once the deck is
+     * promoted, flushed or dropped.
+     */
+    @Volatile private var nextDeckOpenId: String? = null
+
+    /** Whether a blend is currently running, so a second skip cannot interrupt one at its seam. */
+    @Volatile private var blendActive = false
 
     /**
      * A [nextSong] an addon may serve, not yet resolved: it is held until the transition into it
@@ -175,6 +247,8 @@ class DesktopPlaybackEngine(
         /** A better copy of the incoming track, found after it was opened; see [upgradeIncoming]. */
         class ReplaceUpcoming(val track: Track) : Command
         class SeekTo(val millis: Long) : Command
+        /** Blend into the already-prepared next track right now, over [fadeSeconds]. */
+        class MixNow(val fadeSeconds: Int) : Command
         data object ClearUpcoming : Command
         data object Reconfigure : Command
         data object Flush : Command
@@ -222,6 +296,17 @@ class DesktopPlaybackEngine(
         incomingSearchingFor = null
         _state.value = DesktopPlaybackState(song = song, volume = volume, isLoading = true)
         resolveJob = scope.launch {
+            // Already open from the read-ahead: hand it to the audio thread instead of asking the
+            // sources again for a stream this computer is holding right now.
+            takeWarmDeck(song, excludedSourceId)?.let { warm ->
+                if (startAtMs > 0) {
+                    warm.decoder.seek(startAtMs * 1_000)
+                    warm.startUs = startAtMs * 1_000
+                }
+                DesktopTrackLog.log("playing '${song.title}' from the preloaded deck")
+                commands += Command.Start(warm, playWhenReady)
+                return@launch
+            }
             // Only when the file is really there: a download record can outlive the file it names,
             // and handing the decoder a path that is not there fails as "could not open stream"
             // with nothing to say why. A missing one falls through to the sources instead.
@@ -448,17 +533,97 @@ class DesktopPlaybackEngine(
     /** Sets the source quality ceiling used the next time a track is resolved. */
     fun setAudioQuality(quality: String) {
         audioQuality = quality.uppercase()
+        // Opened at the old ceiling, and the listener has just said they want a different one.
+        clearWarmDecks()
     }
 
     fun setCrossfadeSeconds(seconds: Int) {
         crossfadeSeconds = seconds.coerceIn(0, MAX_CROSSFADE_SECONDS)
-        if (crossfadeSeconds == 0 && !automixEnabled) clearUpcoming()
+        if (crossfadeSeconds == 0 && !automixEnabled && !skipMixEnabled) clearUpcoming()
     }
 
     /** Enables Android's separate Automix setting. */
     fun setAutomixEnabled(enabled: Boolean) {
         automixEnabled = enabled
-        if (!enabled && crossfadeSeconds == 0) clearUpcoming()
+        if (!enabled && crossfadeSeconds == 0 && !skipMixEnabled) clearUpcoming()
+    }
+
+    /** Enables blending into the next track on a manual skip; see [beginSkipMix]. */
+    fun setSkipMixEnabled(enabled: Boolean) {
+        skipMixEnabled = enabled
+        if (!enabled && !automixEnabled && crossfadeSeconds == 0) clearUpcoming()
+    }
+
+    /**
+     * Sets the Apple-style Automix phrase length. Only 8 or 16 bars are meaningful;
+     * anything else (including 0) turns the fixed-phrase mix off and hands timing
+     * back to the adaptive planner.
+     */
+    fun setAutomixPhraseBars(bars: Int) {
+        automixPhraseBars = if (bars == 8 || bars == 16) bars else 0
+    }
+
+    /**
+     * The skip [armSkipMixWait] is watching for, by identity: a second press hands over its token
+     * and the first waiter stands down.
+     */
+    @Volatile private var skipMixToken: Any? = null
+
+    /**
+     * Asks the engine to blend into the next track right now, rather than waiting for the outgoing
+     * one to run out. Returns whether a mix is coming — a manual skip can only mix into a track it
+     * has a deck for, and [onUnable] runs when there is neither one open nor one worth waiting on,
+     * so the caller's ordinary cut happens exactly as before.
+     *
+     * A track an addon may serve is never read ahead, and that is how a lossless or Hi-Res one
+     * behaved here: skipped to, it cut, because arming the deck is what the automatic transition
+     * does and that had not come due yet. Such a track is armed on the spot, raced against the plain
+     * sources the same way [armAddonUpcoming] races it, and mixed into as soon as the deck lands.
+     */
+    fun beginSkipMix(nextVideoId: String, fadeSeconds: Int, onUnable: () -> Unit): Boolean {
+        // Whatever skip was being waited for before this one is off: this press decides what happens
+        // next, and a waiter for a song that has since been cut to must not mix into it.
+        skipMixToken = null
+        if (blendActive) return false
+        val fade = fadeSeconds.coerceIn(2, MAX_CROSSFADE_SECONDS * 2)
+        if (nextDeckOpenId == nextVideoId) {
+            commands += Command.MixNow(fade)
+            return true
+        }
+        val held = awaitingArm.get()?.takeIf { it.videoId == nextVideoId } ?: return false
+        // Whoever gets there first owns the arm; the automatic one then finds nothing held for it.
+        if (!awaitingArm.compareAndSet(held, null)) return false
+        DesktopTrackLog.log("skip-mix arming '${held.title}' now")
+        resolveUpcoming(held, race = true)
+        armSkipMixWait(held.videoId, fade, onUnable)
+        return true
+    }
+
+    /**
+     * Runs the mix [beginSkipMix] armed as soon as its deck is open, or [onUnable] if it takes
+     * longer than the wait is worth: the outgoing track plays on meanwhile, so a source that answers
+     * late has nothing left to blend into.
+     */
+    private fun armSkipMixWait(videoId: String, fadeSeconds: Int, onUnable: () -> Unit) {
+        val token = Any()
+        skipMixToken = token
+        scope.launch {
+            val ready = withTimeoutOrNull(SKIP_MIX_ARM_TIMEOUT_MS) {
+                while (skipMixToken === token) {
+                    if (nextDeckOpenId == videoId) return@withTimeoutOrNull true
+                    delay(SKIP_MIX_ARM_POLL_MS)
+                }
+                false
+            }
+            if (skipMixToken !== token) return@launch
+            if (ready == true) {
+                commands += Command.MixNow(fadeSeconds)
+            } else if (ready == null && !blendActive) {
+                // Nothing answered in time, and the planner did not open a transition of its own
+                // while this waited: do the skip the ordinary way after all.
+                onUnable()
+            }
+        }
     }
 
     /** Resolves and prepares the next queue item without starting it. */
@@ -483,7 +648,7 @@ class DesktopPlaybackEngine(
         nextLocalStream = local
         // Measured on YouTube Opus (or the file) whatever will end up serving it, so Automix has
         // its analysis without anything being fetched from the source that will play it.
-        if (automixEnabled && !song.isVideoOrigin) {
+        if ((automixEnabled || skipMixEnabled) && !song.isVideoOrigin) {
             analyzer.request(song, local, song.durationText.durationSeconds())
         }
         if (local == null && DesktopMusicSources.mayServeFromAddon(song)) {
@@ -497,6 +662,143 @@ class DesktopPlaybackEngine(
         resolveUpcoming(song, local)
     }
 
+    // ---- read-ahead: the next few tracks, opened before their turn -------------------------------
+
+    /** An opened-ahead deck, with the moment it was opened — see [WARM_MAX_AGE_MS]. */
+    private class Warm(val track: Track, val openedAtMs: Long)
+
+    /**
+     * The tracks kept open ahead of their turn, by id, longest-held first.
+     *
+     * A deck here has already done everything a cold start does — walked the sources for a stream
+     * URL, opened FFmpeg on it, decoded eight seconds — and then waits with its read-ahead thread
+     * parked on a full buffer. Handing it to [Command.Start] is what takes the gap out between
+     * songs; nothing in the blend machinery sees one until then.
+     */
+    private val warmDecks = LinkedHashMap<String, Warm>()
+
+    /** What [preloadUpcoming] has asked for and nothing has been opened for yet. */
+    private val warmPending = ArrayDeque<Song>()
+
+    /** The ids worth warming right now; anything else is closed the next time the app calls in. */
+    private var warmWanted = HashSet<String>()
+
+    /** The warmer, or null when none is running. Both it and [preloadUpcoming] decide under [warmLock]. */
+    private var warmJob: Job? = null
+    private val warmLock = Any()
+
+    /**
+     * Keeps up to [PRELOAD_SONGS] of [songs] open and decoded ahead of their turn.
+     *
+     * Idempotent, so the app can call it on every move of the queue: what is still wanted stays
+     * open, what is not gets closed, and what is missing is queued for the warmer. Tracks that play
+     * from a downloaded file are left out — a local open has nothing to wait for — and so are the
+     * ones an addon might serve, which are only asked for a stream once they are about to play.
+     */
+    fun preloadUpcoming(songs: List<Song>) {
+        val playing = _state.value.song?.videoId
+        val blending = nextSong?.videoId
+        val wanted = songs.asSequence()
+            .filter { it.videoId.isNotBlank() && it.videoId != playing && it.videoId != blending }
+            .distinctBy { it.videoId }
+            .take(PRELOAD_SONGS)
+            .toList()
+        val discarded = ArrayList<Track>()
+        synchronized(warmLock) {
+            warmWanted = wanted.mapTo(HashSet(), Song::videoId)
+            warmPending.clear()
+            wanted.forEach { song -> if (song.videoId !in warmDecks) warmPending.addLast(song) }
+            val stale = warmDecks.keys.filterNot { it in warmWanted }
+            stale.forEach { id -> warmDecks.remove(id)?.let { discarded += it.track } }
+            if (warmJob == null) warmJob = scope.launch { keepWarm() }
+        }
+        discarded.forEach { it.decoder.close() }
+    }
+
+    /** Warms one track at a time — three source walks at once is traffic the listener would hear. */
+    private suspend fun keepWarm() {
+        val self = coroutineContext[Job]
+        while (running.get()) {
+            val song = synchronized(warmLock) {
+                val next = warmPending.firstOrNull { it.videoId in warmWanted && it.videoId !in warmDecks }
+                if (next != null) warmPending.remove(next)
+                else if (warmJob === self) warmJob = null
+                next
+            } ?: return
+            openWarm(song, self)
+        }
+    }
+
+    /** Resolves and opens [song] early, and keeps the deck only while it is still worth keeping. */
+    private suspend fun openWarm(song: Song, worker: Job?) {
+        if (DesktopDownloadManager.savedFile(song) != null) return
+        if (DesktopMusicSources.mayServeFromAddon(song)) return
+        val stream = DesktopMusicSources.resolve(song, audioQuality).getOrElse {
+            DesktopTrackLog.log("could not preload '${song.title}': ${it.message}")
+            return
+        }
+        val track = openTrack(song, stream, startAtMs = 0).getOrElse {
+            DesktopTrackLog.log("could not open '${song.title}' for preloading: ${it.message}")
+            return
+        }
+        val ready = synchronized(warmLock) {
+            // The queue may have moved on, or playback have reached this track, while it was
+            // opening. A deck for the song now playing is of no use to anybody.
+            if (song.videoId !in warmWanted || warmJob !== worker || _state.value.song?.videoId == song.videoId) {
+                -1
+            } else {
+                warmDecks[song.videoId] = Warm(track, System.currentTimeMillis())
+                warmDecks.size
+            }
+        }
+        if (ready < 0) {
+            track.decoder.close()
+            return
+        }
+        DesktopTrackLog.log(
+            "preloaded '${song.title}' from ${DesktopMusicSources.sourceNameFor(stream)} — " +
+                "$ready track(s) ready ahead",
+        )
+    }
+
+    /**
+     * Hands [song]'s opened-ahead deck to the caller, or null when there is nothing worth taking.
+     *
+     * A deck older than [WARM_MAX_AGE_MS] is closed rather than played: a stream URL is not a
+     * permanent address, and one that has sat for that long is likelier to stall mid-song than to
+     * save the seconds it was meant to. A deck from a source the walk is being asked to skip —
+     * [excludedSourceId], or one this session has already struck off — goes the same way.
+     */
+    private fun takeWarmDeck(song: Song, excludedSourceId: String?): Track? {
+        val warm = synchronized(warmLock) {
+            warmPending.removeAll { it.videoId == song.videoId }
+            warmDecks.remove(song.videoId)
+        } ?: return null
+        val track = warm.track
+        val source = track.stream.sourceId
+        val unwanted = source != null && (source == excludedSourceId || source == refusedSources[song.videoId])
+        // A download plays from its file, here as everywhere else — a deck warmed before that file
+        // landed is no substitute for it.
+        val downloaded = DesktopDownloadManager.savedFile(song) != null
+        if (System.currentTimeMillis() - warm.openedAtMs > WARM_MAX_AGE_MS || unwanted || downloaded) {
+            track.decoder.close()
+            return null
+        }
+        return track
+    }
+
+    /** Closes every deck: resolved under a ceiling, or for a queue, that no longer holds. */
+    private fun clearWarmDecks() {
+        val decks = synchronized(warmLock) {
+            warmWanted = hashSetOf()
+            warmPending.clear()
+            val all = warmDecks.map { it.value.track }
+            warmDecks.clear()
+            all
+        }
+        decks.forEach { it.decoder.close() }
+    }
+
     /**
      * Resolves [song] (or takes its file) and opens it as the incoming track, off the audio thread.
      *
@@ -507,6 +809,13 @@ class DesktopPlaybackEngine(
      * on is swapped in when it answers; see [upgradeIncoming].
      */
     private fun resolveUpcoming(song: Song, local: DesktopStream? = null, race: Boolean = false) {
+        // The read-ahead may have it open already — a download is never warmed and an addon is
+        // never asked early, so a deck here is one the plain walk found on its own.
+        takeWarmDeck(song, null)?.let { warm ->
+            DesktopTrackLog.log("incoming '${song.title}' was already preloaded")
+            commands += Command.Upcoming(warm)
+            return
+        }
         nextResolveJob = scope.launch {
             val askedAt = System.nanoTime()
             val resolved: Result<DesktopLiveResolution> = when {
@@ -614,6 +923,7 @@ class DesktopPlaybackEngine(
         resolveJob?.cancel()
         nextResolveJob?.cancel()
         upgradeJob?.cancel()
+        clearWarmDecks()
         thread.interrupt()
         scope.cancel()
     }
@@ -641,6 +951,9 @@ class DesktopPlaybackEngine(
         next == null -> 0
         crossfadeSeconds > 0 -> crossfadeSeconds
         automixEnabled -> AUTOMIX_FALLBACK_SECONDS
+        // Skip-mix needs the incoming deck open to blend into, even when neither Automix nor a
+        // Crossfade length would otherwise prepare one.
+        skipMixEnabled -> AUTOMIX_FALLBACK_SECONDS
         else -> 0
     }
 
@@ -668,9 +981,30 @@ class DesktopPlaybackEngine(
     private val playhead = DesktopPlayhead()
     private var fadeRemaining = 0
     private var fadeTotal = 0
-    /** Fade plus any echo tail. [fadeTotal] remains the nominal fader span. */
+    /** Fade plus any echo/roll/reverb tail. [fadeTotal] remains the nominal fader span. */
     private var transitionTotal = 0
     private var transitionEcho: DesktopTransitionEcho? = null
+
+    /**
+     * Beat-roll and reverb-tail sends on the outgoing deck. The beat-roll only arms when the planner
+     * chose no echo — the echo owns "repeats as it leaves" — but the reverb tail can layer on top of
+     * one. [beatRepeatLatched] flips once, at the point the roll freezes.
+     */
+    private var transitionBeatRepeat: DesktopTransitionBeatRepeat? = null
+    private var transitionReverb: DesktopTransitionReverb? = null
+
+    /**
+     * The rotating texture sends on the outgoing deck — flanger, crush, phaser, vibrato or
+     * stereo width — chosen per transition by [chooseTextures] from what the plan reports about the
+     * pair. Up to two stack; a gain budget in [transitionFxCount] keeps the sum at one-effect level.
+     */
+    private var transitionTextures: List<DesktopTransitionTexture> = emptyList()
+    private var beatRepeatActive = false
+    private var beatRepeatLatched = false
+    private var reverbActive = false
+    private var textureActive = false
+    /** Number of parallel sends active this transition; each ramp is divided by it to hold level. */
+    private var transitionFxCount = 1
 
     /**
      * Samples of the incoming track already rendered under the outgoing one.
@@ -712,6 +1046,14 @@ class DesktopPlaybackEngine(
 
     /** The plan the running fade was started from, for the filter ride. */
     private var activePlan: TransitionPlan? = null
+
+    /**
+     * A skip-mix whose join falls on a beat the playhead has not reached yet, held here until it
+     * has. Audio-thread only, like [activePlan]: [startSkipMix] stores it on the press and
+     * [maybeStartCrossfade] arms it off the same tick that would start a natural transition, so the
+     * two grids meet in phase instead of flamming into each other.
+     */
+    private var pendingSkipPlan: TransitionPlan? = null
 
     private fun pump() {
         while (running.get()) {
@@ -861,7 +1203,42 @@ class DesktopPlaybackEngine(
                 } else {
                     0f
                 }
-                mixed[index] = (leaving * out + arriving * into) * trim
+                // Post-fader sends on the outgoing deck: a frozen beat-roll and a reverb tail. Added
+                // after the fader so they keep sounding once the outgoing dry has faded to nothing,
+                // ringing out over the incoming track through the extended tail.
+                var fxSend = 0f
+                val fxScale = 1f / transitionFxCount
+                if (beatRepeatActive) {
+                    val roll = transitionBeatRepeat
+                    if (roll != null) {
+                        if (progress >= ROLL_START && !beatRepeatLatched) {
+                            roll.latch()
+                            beatRepeatLatched = true
+                        }
+                        // Fed every sample so the ring always holds the last slice of live audio.
+                        val wet = roll.process(leaving, 1f, 0f)
+                        val ramp = ((progress - ROLL_START) / (1f - ROLL_START)).coerceIn(0f, 1f) * ROLL_SEND * fxScale
+                        fxSend += wet * ramp
+                    }
+                }
+                if (reverbActive) {
+                    val reverb = transitionReverb
+                    if (reverb != null) {
+                        val ramp = ((progress - REVERB_START) / (1f - REVERB_START)).coerceIn(0f, 1f) * REVERB_SEND * fxScale
+                        // Only fed once the ramp opens, so the tail is of the outgoing's exit, not a
+                        // wash of its whole fade; afterwards it rings from the combs' own feedback.
+                        if (ramp > 0f) fxSend += reverb.process(channel, leaving) * ramp
+                    }
+                }
+                if (textureActive) {
+                    val ramp = ((progress - TEXTURE_START) / (1f - TEXTURE_START)).coerceIn(0f, 1f) * TEXTURE_SEND * fxScale
+                    if (ramp > 0f) {
+                        for (texture in transitionTextures) {
+                            fxSend += texture.process(channel, leaving) * ramp
+                        }
+                    }
+                }
+                mixed[index] = ((leaving * out + arriving * into) + fxSend) * trim
                 index++
             }
             fadeRemaining -= span
@@ -1015,7 +1392,16 @@ class DesktopPlaybackEngine(
         val incoming = upcoming ?: return
         val plan = activePlan
         activePlan = null
+        pendingSkipPlan = null
         transitionEcho = null
+        transitionBeatRepeat = null
+        transitionReverb = null
+        transitionTextures = emptyList()
+        beatRepeatActive = false
+        beatRepeatLatched = false
+        reverbActive = false
+        textureActive = false
+        transitionFxCount = 1
         outgoingFilter.open()
         incomingFilter.open()
         current?.decoder?.close()
@@ -1058,6 +1444,8 @@ class DesktopPlaybackEngine(
         incomingSourceFrames = 0.0
         val announced = displaySwitched
         endBlend()
+        nextDeckOpenId = null
+        blendActive = false
         if (!announced) onCrossfaded(incoming.song)
     }
 
@@ -1111,7 +1499,7 @@ class DesktopPlaybackEngine(
      * it has moved further than a tick's jitter.
      */
     private fun publishBlend(playing: Boolean) {
-        if (!automixEnabled) return
+        if (!automixEnabled && !skipMixEnabled) return
         val track = current ?: return
         val incoming = upcoming ?: return
         val last = DesktopPlayerSettings.smartMixBlend.value
@@ -1157,6 +1545,7 @@ class DesktopPlaybackEngine(
                 is Command.Upcoming -> {
                     upcoming?.decoder?.close()
                     upcoming = command.track
+                    nextDeckOpenId = command.track.song.videoId
                 }
                 is Command.ReplaceUpcoming -> {
                     val track = command.track
@@ -1175,12 +1564,16 @@ class DesktopPlaybackEngine(
                     }
                 }
                 is Command.SeekTo -> performSeek(command.millis)
+                is Command.MixNow -> startSkipMix(command.fadeSeconds)
                 Command.Reconfigure -> reconfigureSink()
                 Command.ClearUpcoming -> {
                     upcoming?.decoder?.close()
                     upcoming = null
+                    nextDeckOpenId = null
+                    pendingSkipPlan = null
                     val wasBlending = fadeRemaining > 0
                     fadeRemaining = 0
+                    blendActive = false
                     if (wasBlending) endBlend()
                 }
                 Command.Flush -> {
@@ -1188,13 +1581,108 @@ class DesktopPlaybackEngine(
                     current = null
                     upcoming?.decoder?.close()
                     upcoming = null
+                    nextDeckOpenId = null
+                    pendingSkipPlan = null
                     fadeRemaining = 0
+                    blendActive = false
                     sink.flush()
                     framesWritten = sink.framesPlayed()
                     endBlend()
                 }
             }
         }
+    }
+
+    /**
+     * Starts a skip-mix on the audio thread: the incoming deck blends in instead of the outgoing
+     * track cutting. The request is gated in [beginSkipMix], which queues it once that deck is open
+     * — immediately when it was already, or after arming one that was held back; this gets the plan
+     * for it and hands it to the same [armIncomingBlend] the automatic transition arms with.
+     */
+    private fun startSkipMix(fadeSeconds: Int) {
+        val outgoing = current ?: return
+        val incoming = upcoming ?: return
+        if (fadeRemaining > 0) return
+        val positionMs = _state.value.positionMs
+        val plan = contextualSkipPlan(outgoing, incoming, positionMs / 1000.0, fadeSeconds.toDouble())
+            ?: plainSkipPlan(outgoing, incoming, positionMs, fadeSeconds.toDouble())
+        DesktopTrackLog.log(
+            "skip-mix into '${incoming.song.title}': ${"%.1f".format(plan.fadeSeconds)}s, " +
+                plan.transitionStyle +
+                (if (plan.transitionBeats > 0) ", ${plan.transitionBeats} beats" else "") +
+                (if (plan.incomingCueTime > 0) ", cued at ${"%.1f".format(plan.incomingCueTime)}s" else "") +
+                (if (plan.transitionStart > positionMs / 1000.0 + 0.05) {
+                    ", on the beat in ${"%.1f".format(plan.transitionStart - positionMs / 1000.0)}s"
+                } else {
+                    ""
+                }),
+        )
+        // A beat-matched join has to open on a beat, and the press did not land on one. The plan is
+        // held for the beat it asked for rather than armed here, so the two grids meet in phase;
+        // [maybeStartCrossfade] takes it off the audio thread's own position tick.
+        if (plan.transitionStart <= positionMs / 1000.0 + 0.02) {
+            pendingSkipPlan = null
+            armIncomingBlend(incoming, plan)
+        } else {
+            pendingSkipPlan = plan
+        }
+    }
+
+    /**
+     * What the shared Automix planner makes of this exact pair — its tier, a beat-matched blend or a
+     * filter ride, the tempo that meets the two, an overlap in whole bars, and the incoming track's
+     * own mix-in point rather than its first second — anchored on the beat after the press instead of
+     * on the end of the outgoing track.
+     *
+     * Null when there is nothing to plan on: no measured length, a mix the evidence will not carry,
+     * or not enough of the outgoing track left for one. [plainSkipPlan] then does what a skip always
+     * did.
+     */
+    private fun contextualSkipPlan(outgoing: Track, incoming: Track, positionSec: Double, fadeSeconds: Double): TransitionPlan? {
+        val durationMs = (outgoing.decoder.durationUs ?: 0L) / 1_000
+        if (durationMs <= 0) return null
+        val lengthSec = durationMs / 1000.0
+        if (lengthSec - positionSec < 2.0) return null
+        val plan = planSkipMix(
+            analysis = analyzer.analysisFor(outgoing.song.videoId),
+            nextAnalysis = analyzer.analysisFor(incoming.song.videoId),
+            currentTrack = outgoing.song.transitionInfo(durationMs),
+            nextTrack = incoming.song.transitionInfo((incoming.decoder.durationUs ?: 0L) / 1_000),
+            requestedStart = positionSec,
+            fadeSeconds = fadeSeconds,
+            // The beat-matched tier with its tempo stretch and its echo is Automix's; a skip asked
+            // for a contextual join, not for the whole advanced policy.
+            advanced = automixEnabled,
+        )
+        if (plan.blocked || plan.fadeSeconds < 2.0) return null
+        if (plan.transitionEnd <= lengthSec) return plan
+        // The beat it waits for can push the exit past the end of the file; shrink the overlap to the
+        // time there actually is rather than let the join run out from under itself.
+        val overlap = lengthSec - plan.transitionStart
+        if (overlap < 2.0) return null
+        return plan.copy(
+            transitionEnd = lengthSec,
+            fadeSeconds = overlap,
+            handoffDuration = overlap,
+        )
+    }
+
+    /** The fade a skip made before it could be planned: equal power, into the top of the next song. */
+    private fun plainSkipPlan(outgoing: Track, incoming: Track, positionMs: Long, fadeSeconds: Double): TransitionPlan {
+        val remainingOutMs = (outgoing.decoder.durationUs ?: 0L).let { if (it > 0) it / 1_000 - positionMs else Long.MAX_VALUE }
+        val remainingInMs = incoming.decoder.durationUs?.let { it / 1_000 } ?: Long.MAX_VALUE
+        val fade = fadeSeconds
+            .coerceAtMost(remainingOutMs / 1000.0)
+            .coerceAtMost(remainingInMs / 1000.0)
+            .coerceAtLeast(2.0)
+        val nowSec = positionMs / 1000.0
+        return TransitionPlan(
+            shouldStart = true,
+            transitionStart = nowSec,
+            transitionEnd = nowSec + fade,
+            fadeSeconds = fade,
+            transitionStyle = TransitionStyle.EQUAL_POWER,
+        )
     }
 
     /**
@@ -1214,7 +1702,16 @@ class DesktopPlaybackEngine(
         sink.flush()
         framesWritten = sink.framesPlayed()
         activePlan = null
+        pendingSkipPlan = null
         transitionEcho = null
+        transitionBeatRepeat = null
+        transitionReverb = null
+        transitionTextures = emptyList()
+        beatRepeatActive = false
+        beatRepeatLatched = false
+        reverbActive = false
+        textureActive = false
+        transitionFxCount = 1
         outgoingFilter.open()
         incomingFilter.open()
         startTrack(track, playWhenReady)
@@ -1294,9 +1791,9 @@ class DesktopPlaybackEngine(
         incomingFilter.configure(sink.format.channels, sink.format.sampleRate)
     }
 
-    /** Asks for a track to be analysed, if Automix is on and there is anything to analyse. */
+    /** Asks for a track to be analysed, if Automix or skip-mix is on and there is anything to analyse. */
     private fun requestAnalysis(track: Track) {
-        if (!automixEnabled) return
+        if (!automixEnabled && !skipMixEnabled) return
         val seconds = (track.decoder.durationUs ?: 0L) / 1_000_000.0
         val known = seconds.takeIf { it > 0 }
             ?: (track.song.durationText.durationSeconds())
@@ -1305,7 +1802,7 @@ class DesktopPlaybackEngine(
 
     /** Measures the pair around the playhead — the playing track first, then the one after it. */
     private fun requestAnalysisAround(track: Track) {
-        if (!automixEnabled) return
+        if (!automixEnabled && !skipMixEnabled) return
         val next = upcoming
         // A track held back from read-ahead has no decoder yet, but is measured all the same.
         val held = if (next == null) nextSong else null
@@ -1320,6 +1817,7 @@ class DesktopPlaybackEngine(
         // the blend is finished on the spot and the seek lands on that one.
         if (displaySwitched && upcoming != null) promoteUpcoming()
         val track = current ?: return
+        pendingSkipPlan = null
         val landed = track.decoder.seek(millis * 1_000)
         // TEMP seek diagnostics.
         DesktopTrackLog.log("seek performed: ${millis}ms on '${track.song.title}' ${if (landed) "ok" else "FAILED"}")
@@ -1466,6 +1964,17 @@ class DesktopPlaybackEngine(
             return
         }
         if (fadeRemaining > 0) return
+
+        // A skip-mix plan is waiting for its beat: check it before the natural planner.
+        val pending = pendingSkipPlan
+        if (pending != null) {
+            if (positionMs >= pending.transitionStart * 1000) {
+                pendingSkipPlan = null
+                armIncomingBlend(incoming, pending)
+            }
+            return
+        }
+
         val duration = (track.decoder.durationUs ?: return) / 1_000
         if (duration <= 0) return
 
@@ -1473,7 +1982,15 @@ class DesktopPlaybackEngine(
         publishTransitionWindow(track, plan, duration)
 
         if (!plan.shouldStart || plan.blocked) return
+        armIncomingBlend(incoming, plan)
+    }
 
+    /**
+     * Open the blend that is already armed on both decks. Shared by the position-gated planner and
+     * by a manual skip that asks to mix now: the only difference is which [TransitionPlan] is handed
+     * in, so both routes get the same cue, tempo, echo and texture arming.
+     */
+    private fun armIncomingBlend(incoming: Track, plan: TransitionPlan) {
         val seconds = plan.fadeSeconds.takeIf { it > 0 } ?: return
         // A planned transition says where the incoming track should be entered, which is the whole
         // difference between Automix and a crossfade.
@@ -1493,7 +2010,35 @@ class DesktopPlaybackEngine(
         )
         fadeTotal = (seconds * sink.format.sampleRate * sink.format.channels).toInt()
         val echoTail = (echoTailSeconds(plan.echoSeconds) * sink.format.sampleRate * sink.format.channels).toInt()
-        transitionTotal = fadeTotal + echoTail
+        // The beat-roll only arms on a smart DJ transition the planner gave no echo to — echo already
+        // owns "repeats as it leaves". Reverb and texture can layer on echo: a tail and a sweep do not
+        // conflict with delay repeats.
+        val djStyle = plan.transitionStyle == TransitionStyle.DJ_BLEND ||
+            plan.transitionStyle == TransitionStyle.DJ_FILTER
+        val noEcho = plan.echoSeconds <= 0.0
+        beatRepeatActive = noEcho && djStyle && plan.beatSeconds > 0.0 && plan.transitionBeats >= 4
+        reverbActive = djStyle
+        val textureKinds = if (djStyle) chooseTextures(plan) else emptyList()
+        textureActive = textureKinds.isNotEmpty()
+        beatRepeatLatched = false
+        transitionBeatRepeat = if (beatRepeatActive) {
+            val division = if (plan.beatSeconds < EIGHTH_NOTE_MAX_BEAT_SECONDS) 2.0 else 1.0
+            DesktopTransitionBeatRepeat(sink.format.sampleRate, sink.format.channels)
+                .also { it.configure(plan.beatSeconds / division) }
+        } else null
+        transitionReverb = if (reverbActive) {
+            DesktopTransitionReverb(sink.format.sampleRate, sink.format.channels).also { it.reset() }
+        } else null
+        transitionTextures = if (textureActive) {
+            textureKinds.map { kind -> newTexture(kind, sink.format.sampleRate, sink.format.channels).also { it.reset() } }
+        } else emptyList()
+        transitionFxCount = ((if (beatRepeatActive) 1 else 0) + (if (reverbActive) 1 else 0) + textureKinds.size).coerceAtLeast(1)
+        val fxTail = (
+            (if (beatRepeatActive) ROLL_TAIL_SECONDS else 0.0) +
+                (if (reverbActive) REVERB_TAIL_SECONDS else 0.0) +
+                (if (textureActive) TEXTURE_TAIL_SECONDS else 0.0)
+            ).let { (it * sink.format.sampleRate * sink.format.channels).toInt() }
+        transitionTotal = fadeTotal + echoTail + fxTail
         fadeRemaining = transitionTotal
         incomingSourceFrames = 0.0
         activePlan = plan
@@ -1508,6 +2053,42 @@ class DesktopPlaybackEngine(
         } else null
         outgoingFilter.flush()
         incomingFilter.flush()
+        blendActive = true
+    }
+
+    /**
+     * Up to two textures the outgoing tail gets for this plan, read from what the planner already
+     * knows about the pair. The primary matches the dominant characteristic; a secondary flanger
+     * adds gentle motion whenever the primary is not itself a flanger.
+     */
+    private fun chooseTextures(plan: TransitionPlan): List<TransitionTexture> {
+        val bpm = plan.outgoingBpm
+        if (bpm <= 0.0) return listOf(TransitionTexture.FLANGER)
+        val gap = kotlin.math.abs(plan.incomingBpm - plan.outgoingBpm)
+        val primary = when {
+            plan.vocalOverlap >= 0.5 -> TransitionTexture.STEREO
+            bpm >= 128.0 && plan.vocalOverlap <= 0.15 -> TransitionTexture.CRUSH
+            gap > 4.0 -> TransitionTexture.PHASER
+            bpm < 95.0 -> TransitionTexture.VIBRATO
+            else -> TransitionTexture.FLANGER
+        }
+        return if (primary == TransitionTexture.FLANGER) {
+            listOf(primary)
+        } else {
+            listOf(primary, TransitionTexture.FLANGER)
+        }
+    }
+
+    private fun newTexture(
+        kind: TransitionTexture,
+        sampleRate: Int,
+        channels: Int,
+    ): DesktopTransitionTexture = when (kind) {
+        TransitionTexture.CRUSH -> DesktopTransitionCrush(sampleRate, channels)
+        TransitionTexture.PHASER -> DesktopTransitionPhaser(sampleRate, channels)
+        TransitionTexture.VIBRATO -> DesktopTransitionVibrato(sampleRate, channels)
+        TransitionTexture.STEREO -> DesktopTransitionStereo(sampleRate, channels)
+        else -> DesktopTransitionFlanger(sampleRate, channels)
     }
 
     /** The marker on the scrubber, showing where the mix will happen before it happens. */
@@ -1577,6 +2158,9 @@ class DesktopPlaybackEngine(
             fadeSeconds = if (manualSeconds > 0) manualSeconds.toDouble() else AUTOMIX_FALLBACK_SECONDS.toDouble(),
             mode = if (smart) CrossfadeMode.SMART else CrossfadeMode.STANDARD,
             advanced = smart,
+            // A fixed phrase length only means anything under Automix; a manual
+            // crossfade keeps its slider length.
+            phraseBars = if (smart) automixPhraseBars else 0,
         )
     }
 
@@ -1700,11 +2284,47 @@ class DesktopPlaybackEngine(
          */
         private const val ADDON_ARM_LEAD_MS = 15_000L
 
+        /**
+         * How long a manual skip waits for the deck it armed for a lossless track. The outgoing song
+         * keeps playing through it, so the wait is only felt as a skip that has not landed yet — and
+         * a source slower than this is not going to be ready in time for a mix of any length.
+         */
+        private const val SKIP_MIX_ARM_TIMEOUT_MS = 6_000L
+        private const val SKIP_MIX_ARM_POLL_MS = 60L
+
         /** How long a better copy waits for the blend into its track to finish: up to a minute. */
         private const val BLEND_WAIT_POLLS = 300
         private const val BLEND_WAIT_POLL_MS = 200L
 
         const val MAX_CROSSFADE_SECONDS = 12
         const val AUTOMIX_FALLBACK_SECONDS = 6
+
+        /**
+         * How many of the tracks still to come are kept open ahead of their turn — enough that
+         * whatever Next lands on has already crossed the network, few enough that the read-ahead
+         * stays beneath the listening itself.
+         */
+        const val PRELOAD_SONGS = 3
+
+        /** How long a preloaded deck may sit before it is thrown away rather than played. */
+        private const val WARM_MAX_AGE_MS = 10 * 60_000L
+
+        // ---- outgoing-track FX for a smart transition the planner gave no echo ----
+        // A beat faster than this slices on the 1/8 (half-beat); slower material rolls on the 1/4
+        // (whole beat), so the repeat never turns into a machine-gun at high tempi.
+        private const val EIGHTH_NOTE_MAX_BEAT_SECONDS = 0.4
+        /** Where in the fade the roll freezes and starts repeating, and how loud its send peaks. */
+        private const val ROLL_START = 0.55f
+        private const val ROLL_SEND = 0.5f
+        /** Extra blend time so the roll and the reverb ring out after the outgoing dry is gone. */
+        private const val ROLL_TAIL_SECONDS = 0.9
+        private const val REVERB_TAIL_SECONDS = 1.4
+        /** The reverb opens over the last part of the fade and holds through the tail. */
+        private const val REVERB_START = 0.5f
+        private const val REVERB_SEND = 0.55f
+        /** The texture send widens or grits the outgoing tail over the last stretch of the fade. */
+        private const val TEXTURE_START = 0.4f
+        private const val TEXTURE_SEND = 0.4f
+        private const val TEXTURE_TAIL_SECONDS = 0.6
     }
 }

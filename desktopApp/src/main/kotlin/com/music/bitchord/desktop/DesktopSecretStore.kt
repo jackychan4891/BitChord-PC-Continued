@@ -14,15 +14,10 @@ internal object DesktopSecretStore {
 
     private const val DEFAULT_COLLECTION = "/org/freedesktop/secrets/aliases/default"
 
-    /**
-     * Runs [block] with an open Secret Service session, or returns null.
-     *
-     * Secret Service is a Linux session-bus API. Elsewhere there is no bus to reach, and the failed
-     * connect takes about ten seconds on macOS, which every account switch and sign-out paid.
-     */
+    /** Runs [block] with an open Secret Service session, or returns null. */
     private fun <T> withService(
         block: (DBusConnection, SecretServiceApi.Service, DBusPath) -> T?,
-    ): T? = if (!DesktopPlatform.isLinux) null else runCatching {
+    ): T? = runCatching {
         DBusConnectionBuilder.forSessionBus().withShared(false).build().use { connection ->
             val service = connection.getRemoteObject(
                 SecretServiceApi.BUS_NAME,

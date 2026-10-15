@@ -31,6 +31,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -193,6 +194,11 @@ internal fun PlayerScrubber(
     /** An analysed Automix handoff, drawn as a travelling sheen. */
     mixing: Boolean,
     transitionWindow: ClosedFloatingPointRange<Float>?,
+    /**
+     * Whether the Automix fill breathes on the blend's beat. The phone keeps its beat pulse; the
+     * desktop turns it off and runs a slow, gentle pulse instead, which reads calmer than a strobe.
+     */
+    slowMixPulse: Boolean = false,
     onScrub: (Float) -> Unit,
     onScrubFinished: () -> Unit,
     centerLabel: @Composable BoxScope.() -> Unit = {},
@@ -204,8 +210,13 @@ internal fun PlayerScrubber(
     // canvas needs.
     val mixBlend = PlayerSettings.smartMixBlend.collectAsStateWithLifecycle()
     val reduceAnimation by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
-    // One clock for the bar and the "Mixing" label, so they breathe on the same beat.
-    val mixPulse = rememberMixPulse({ mixBlend.value }, enabled = !reduceAnimation)
+    // One clock for the bar and the "Mixing" label. The desktop breathes slowly and gently; the
+    // phone keeps the beat pulse.
+    val mixPulse = rememberMixPulse(
+        { mixBlend.value },
+        enabled = !reduceAnimation,
+        slow = slowMixPulse,
+    )
     Column(Modifier.fillMaxWidth()) {
         ThinSlider(
             value = shown,
@@ -540,6 +551,12 @@ internal fun PlayerActionRow(
     onListenTogether: () -> Unit,
     /** Opens [ListenTogetherMembersSheet] rather than settings directly. */
     onOpenListenTogetherMembers: () -> Unit,
+    /**
+     * Whether the lyrics and queue glyphs are drawn at either end. The desktop
+     * player's overflow hides them — those two live on the song menu instead —
+     * and keeps only the middle pill; every other caller shows all three.
+     */
+    showLyricsAndQueue: Boolean = true,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         // Sized for the wider of the two capsules — the three-up one — in both
@@ -549,17 +566,20 @@ internal fun PlayerActionRow(
         val edgeInset = ((maxWidth - widestRow) / 4).coerceAtLeast(0.dp)
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = edgeInset),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement =
+                if (showLyricsAndQueue) Arrangement.SpaceBetween else Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            BottomGlyph(
-                icon = BitChordIcons.LyricsQuote,
-                contentDescription = stringResource(if (lyricsOpen) Res.string.close_lyrics else Res.string.open_lyrics),
-                // Lyrics and the queue are two things to show in one place, so
-                // opening either closes the other; lit to say which is up.
-                onClick = onToggleLyrics,
-                highlighted = lyricsOpen,
-            )
+            if (showLyricsAndQueue) {
+                BottomGlyph(
+                    icon = BitChordIcons.LyricsQuote,
+                    contentDescription = stringResource(if (lyricsOpen) Res.string.close_lyrics else Res.string.open_lyrics),
+                    // Lyrics and the queue are two things to show in one place, so
+                    // opening either closes the other; lit to say which is up.
+                    onClick = onToggleLyrics,
+                    highlighted = lyricsOpen,
+                )
+            }
             AnimatedContent(
                 targetState = queueOpen,
                 transitionSpec = {
@@ -630,13 +650,15 @@ internal fun PlayerActionRow(
                     )
                 }
             }
-            BottomGlyph(
-                icon = BitChordIcons.Queue,
-                contentDescription = stringResource(Res.string.up_next),
-                onClick = onToggleQueue,
-                highlighted = queueOpen,
-                haptic = if (queueOpen) Haptic.Tap else Haptic.Expand,
-            )
+            if (showLyricsAndQueue) {
+                BottomGlyph(
+                    icon = BitChordIcons.Queue,
+                    contentDescription = stringResource(Res.string.up_next),
+                    onClick = onToggleQueue,
+                    highlighted = queueOpen,
+                    haptic = if (queueOpen) Haptic.Tap else Haptic.Expand,
+                )
+            }
         }
     }
 }
@@ -646,8 +668,8 @@ internal fun PlayerActionRow(
  *
  * [active] brightens the disc rather than only the glyph: this sits on album
  * artwork of any colour, and a white icon on a white-ish sleeve has no tint
- * change left to make. The filled heart carries the state as a shape too —
- * see [BitChordIcons.HeartFilled].
+ * change left to make. The filled star carries the state as a shape too —
+ * see [BitChordIcons.StarFilled].
  */
 @Composable
 internal fun CircleGlyph(
@@ -667,6 +689,7 @@ internal fun CircleGlyph(
             .size(34.dp)
             .clip(CircleShape)
             .background(Color.White.copy(alpha = discAlpha))
+            .playerHoverDisc()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -900,13 +923,19 @@ private fun PillSegment(
 ) {
     val haptics = rememberHaptics()
     val lastTap = remember { mutableLongStateOf(-tapWindowMs) }
+    val interaction = remember { MutableInteractionSource() }
+    val hover by rememberPlayerHover(interaction)
+    // A hovered segment lightens a little under the cursor, as it does in Apple Music; a highlighted
+    // one lightens further still, so the two states stack rather than compete.
+    val segmentAlpha = (if (highlighted) 0.14f else 0f) + 0.08f * hover
     Box(
         modifier = Modifier
             .width(width)
             .height(BOTTOM_ACTION_SIZE)
-            .background(if (highlighted) Color.White.copy(alpha = 0.14f) else Color.Transparent)
+            .background(Color.White.copy(alpha = segmentAlpha))
+            .hoverable(interaction)
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interaction,
                 indication = null,
                 enabled = !loading,
             ) {
@@ -1559,6 +1588,7 @@ private fun LosslessOrStats(
             // confirmed. It is what makes the badge read as an achievement
             // rather than a label, which only one of these two is.
             animated = true,
+            icon = BitChordIcons.Lossless,
             modifier = modifier,
         )
         nerdStats?.isDolbyAtmos == true -> LosslessLabel(

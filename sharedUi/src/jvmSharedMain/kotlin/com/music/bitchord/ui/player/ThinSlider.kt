@@ -270,15 +270,22 @@ class MixPulse internal constructor(private val blend: () -> MixBlend?) {
     internal var phase = 0.0
     internal var locked = false
 
+    /**
+     * When true the pulse breathes gently — a shallow floor and a slow fixed period instead of a
+     * hard beat — which is the desktop's reading of a mix. Set by [rememberMixPulse]'s [slow].
+     */
+    internal var gentle = false
+
     /** 0..1: how far the blend has claimed the bar and the label, eased in and out. */
     val cover: Float get() = coverAnim.value
 
     /**
      * [fullAlpha] as the pulse modulates it: [fullAlpha] on the beat, [PULSE_REST] of it at the
-     * half-beat, and [fullAlpha] throughout whenever the pulse is faded out or switched off.
+     * half-beat, and [fullAlpha] throughout whenever the pulse is faded out or switched off. A
+     * [gentle] pulse lifts the floor so it never reads as flashing off.
      */
     fun alpha(fullAlpha: Float, restShare: Float = PULSE_REST): Float {
-        val rest = fullAlpha * restShare
+        val rest = fullAlpha * if (gentle) restShare.coerceAtLeast(GENTLE_REST) else restShare
         val pulsed = rest + (fullAlpha - rest) * level
         return fullAlpha + (pulsed - fullAlpha) * depthAnim.value
     }
@@ -291,12 +298,21 @@ class MixPulse internal constructor(private val blend: () -> MixBlend?) {
  * still fills and the label still shows — but holds them steady instead of pulsing.
  */
 @Composable
-fun rememberMixPulse(mixBlend: () -> MixBlend?, enabled: Boolean): MixPulse {
+fun rememberMixPulse(
+    mixBlend: () -> MixBlend?,
+    enabled: Boolean,
+    /**
+     * Ignore the blend's beat and breathe on a slow fixed period instead — the desktop's mix.
+     * Implies [enabled]; the pulse still fades in and out with the blend, just gently.
+     */
+    slow: Boolean = false,
+): MixPulse {
     val current by rememberUpdatedState(mixBlend)
     val pulse = remember { MixPulse { current() } }
+    pulse.gentle = slow
     val active = pulse.active
     val playing = pulse.playing
-    LaunchedEffect(active, playing, enabled) {
+    LaunchedEffect(active, playing, enabled, slow) {
         launch {
             pulse.coverAnim.animateTo(
                 if (active) 1f else 0f,
@@ -325,7 +341,9 @@ fun rememberMixPulse(mixBlend: () -> MixBlend?, enabled: Boolean): MixPulse {
                 val dt = (now - last).coerceIn(0L, MAX_FRAME_NANOS)
                 last = now
                 val blend = pulse.blendNow()
-                val beatNanos = blend?.beatMs?.takeIf { it > 0f }?.let { it * 1_000_000.0 }
+                // A slow pulse never reads the beat grid: it stays on the breath below.
+                val beatNanos = if (slow) null
+                    else blend?.beatMs?.takeIf { it > 0f }?.let { it * 1_000_000.0 }
                 var phase = pulse.phase
                 if (beatNanos != null && blend != null) {
                     phase += dt / beatNanos
@@ -359,6 +377,9 @@ private const val PULSE_FADE_MS = 900
 
 /** Opacity between beats, as a share of the fill's own: low enough to read, never gone. */
 private const val PULSE_REST = 0.1f
+
+/** The floor of a [gentle] slow pulse: high enough that it breathes rather than flashes off. */
+private const val GENTLE_REST = 0.5f
 
 /** Share of the remaining phase error corrected each frame; small enough to be invisible. */
 private const val PHASE_PULL = 0.06

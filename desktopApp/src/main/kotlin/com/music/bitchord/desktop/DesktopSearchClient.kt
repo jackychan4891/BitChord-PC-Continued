@@ -121,6 +121,18 @@ object DesktopSearchClient {
     suspend fun removeFromPlaylist(playlistId: String, entries: List<Pair<String, String>>): Result<Unit> =
         YtMusicRepository.removeFromPlaylist(playlistId, entries)
 
+    /**
+     * Every entry of a playlist, in order — the whole list a reorder has to name, not the page of it
+     * that happens to be on screen. Fails rather than returning a partial list, since moving rows
+     * against an incomplete one would push entries it never saw.
+     */
+    suspend fun playlistEntries(browseId: String): Result<List<Song>> =
+        YtMusicRepository.playlistEntries(browseId)
+
+    /** Rearranges a playlist from [current] to [target], both lists of its entries' set-video-ids. */
+    suspend fun reorderPlaylist(playlistId: String, current: List<String>, target: List<String>): Result<Unit> =
+        YtMusicRepository.reorderPlaylist(playlistId, current, target)
+
     suspend fun searchTypeahead(input: String): Result<List<SearchResult>> =
         YtMusicRepository.searchTypeahead(input).map { it.rows }
 

@@ -589,7 +589,7 @@ private fun PrimaryButton(
         onClick = onClick,
         enabled = enabled && !busy,
         shape = RoundedCornerShape(50),
-        colors = ButtonDefaults.buttonColors(containerColor = DesktopAccent, contentColor = Color.Black),
+        colors = ButtonDefaults.buttonColors(containerColor = DesktopAccent, contentColor = Color.White),
         modifier = modifier.height(46.dp),
     ) {
         if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.Black)

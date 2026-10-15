@@ -27,6 +27,9 @@ import org.jetbrains.compose.resources.stringResource
 // player lays out in its right-hand pane, so a line lights, a row drags and a
 // translation arrives exactly as they do in there.
 
+/** How far above the column's middle the sung line rests — near the top of the pane, per the drawn mark. */
+private const val SIDE_COLUMN_CENTRE_RAISE = 0.45f
+
 /**
  * The lyric sheet with its provider line and its romanization and translation
  * toggles — the landscape player's lyrics pane, without the player around it.
@@ -80,6 +83,10 @@ fun LyricsSidePanel(
                 },
                 status = lyricsTranslation.status,
                 onStatusClick = { showLyricsProviders = true },
+                // The provider now lives in the desktop player's song menu, so
+                // this column drops the "Lyrics by …" line but keeps its two
+                // toggles either side of the gap it leaves.
+                showStatus = false,
                 romanizationToggle = {
                     RomanizationToggleButton(
                         state = lyricsTranslation.romanizationState,
@@ -117,6 +124,9 @@ fun LyricsSidePanel(
                         onRevealControls = {},
                         onHideControls = {},
                         translationProgress = particleProgress,
+                        // The words read near the top of the column; the
+                        // full-screen player keeps its own centred anchor.
+                        centreRaise = SIDE_COLUMN_CENTRE_RAISE,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

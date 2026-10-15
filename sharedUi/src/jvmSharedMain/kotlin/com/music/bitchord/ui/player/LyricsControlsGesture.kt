@@ -100,7 +100,7 @@ internal fun Modifier.revealLyricsControlsOnTap(
  *
  * Unlike [revealLyricsControlsOnTap], this observes at the final pointer pass
  * and never consumes the gesture. The compact title/artist row remains on
- * screen while the rest of the player is hidden, so its heart, overflow menu,
+ * screen while the rest of the player is hidden, so its star, overflow menu,
  * album and artist targets must receive taps normally. Any empty video space
  * that no child claimed can show or hide the full control deck.
  */
