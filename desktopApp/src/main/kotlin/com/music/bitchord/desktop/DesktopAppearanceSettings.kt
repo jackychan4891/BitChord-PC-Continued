@@ -17,7 +17,7 @@ internal object DesktopAppearanceSettings {
     private val _reduceAnimation = flag(KEY_REDUCE_ANIMATION, false)
     private val _reduceDynamicBlur = flag(KEY_REDUCE_DYNAMIC_BLUR, false)
     private val _hideVolumeBar = flag(KEY_HIDE_VOLUME_BAR, false)
-    private val _ambientBackdrop = flag(KEY_AMBIENT_BACKDROP, false)
+    private val _ambientBackdrop = flag(KEY_AMBIENT_BACKDROP, true)
 
     /** Freezes the main player's gradient instead of drifting. */
     val reduceAnimation: StateFlow<Boolean> = _reduceAnimation

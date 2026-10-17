@@ -55,7 +55,16 @@ private val FallbackColors = listOf(
 
 /** The four mesh colours, wrapped so the backdrop can skip recomposition. */
 @Immutable
-data class MeshPalette(val colors: List<Color>)
+data class MeshPalette(
+    val colors: List<Color>,
+    /**
+     * False while these are the stock colours rather than a sleeve's own — the
+     * cover is still decoding. The backdrop treats those two cases differently:
+     * a real palette is what the screen should land on, a placeholder should
+     * never be seen morphing out of.
+     */
+    val resolved: Boolean = true,
+)
 
 /**
  * The Apple Music "Now Playing" backdrop: four luminous colour blobs sampled
@@ -106,13 +115,27 @@ fun MeshGradientBackground(
 ) {
     val reduceAnimation by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
 
-    val tuned = (palette.colors.ifEmpty { FallbackColors } + FallbackColors)
+    // The colours from the last sleeve that actually resolved, held under the one
+    // still decoding. The stock set is not a colour anyone chose, and painting it
+    // while a cover loads is what read as the backdrop starting orange; the sleeve
+    // that was on screen a second ago is the honest thing to sit under the new one.
+    var held by remember { mutableStateOf(palette.takeIf { it.resolved }) }
+    LaunchedEffect(palette) { if (palette.resolved) held = palette }
+    val shown = if (palette.resolved) palette else (held ?: palette)
+
+    // The first real palette lands rather than fades in: there is nothing of the
+    // sleeve's on screen to fade from. After that a skip crossfades.
+    var landed by remember { mutableStateOf(palette.resolved) }
+    LaunchedEffect(palette.resolved) { if (palette.resolved) landed = true }
+
+    val tuned = (shown.colors.ifEmpty { FallbackColors } + FallbackColors)
         .take(4)
         .map { it.tuned() }
 
     // Each colour slot crossfades independently when the track (palette) changes,
     // unless "reduce animation" is on, in which case colours snap straight to target.
-    val colorSpec: AnimationSpec<Color> = if (reduceAnimation || !animated) snap() else tween(1400)
+    val colorSpec: AnimationSpec<Color> =
+        if (reduceAnimation || !animated || !landed) snap() else tween(1400)
     val animatedColors = tuned.mapIndexed { index, color ->
         animateColorAsState(color, colorSpec, label = "meshColor$index").value
     }
@@ -166,31 +189,35 @@ fun MeshGradientBackground(
             .background(baseColor)
             .blur(blurRadius),
     ) {
-        val anchors = listOf(
-            Offset(0.20f, 0.25f),
-            Offset(0.80f, 0.20f),
-            Offset(0.75f, 0.80f),
-            Offset(0.25f, 0.75f),
-        )
-        val speeds = listOf(1f, -0.7f, 0.85f, -1.15f)
-        val drift = phase.value
+        // Nothing off a sleeve yet, so the screen is its own dim ground and the
+        // blobs join in when the colours do.
+        if (shown.resolved) {
+            val anchors = listOf(
+                Offset(0.20f, 0.25f),
+                Offset(0.80f, 0.20f),
+                Offset(0.75f, 0.80f),
+                Offset(0.25f, 0.75f),
+            )
+            val speeds = listOf(1f, -0.7f, 0.85f, -1.15f)
+            val drift = phase.value
 
-        animatedColors.forEachIndexed { index, color ->
-            val anchor = anchors[index]
-            val center = Offset(
-                x = (anchor.x + 0.16f * cos(drift * speeds[index] + index * 1.7f)) * size.width,
-                y = (anchor.y + 0.16f * sin(drift * speeds[index] * 0.9f + index * 2.3f)) * size.height,
-            )
-            val radius = size.maxDimension * 0.62f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(color.copy(alpha = 0.85f), color.copy(alpha = 0f)),
-                    center = center,
+            animatedColors.forEachIndexed { index, color ->
+                val anchor = anchors[index]
+                val center = Offset(
+                    x = (anchor.x + 0.16f * cos(drift * speeds[index] + index * 1.7f)) * size.width,
+                    y = (anchor.y + 0.16f * sin(drift * speeds[index] * 0.9f + index * 2.3f)) * size.height,
+                )
+                val radius = size.maxDimension * 0.62f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(color.copy(alpha = 0.85f), color.copy(alpha = 0f)),
+                        center = center,
+                        radius = radius,
+                    ),
                     radius = radius,
-                ),
-                radius = radius,
-                center = center,
-            )
+                    center = center,
+                )
+            }
         }
 
         // Gentle scrim so white text stays legible over bright art.
@@ -217,7 +244,11 @@ fun MeshGradientBackground(
 @Composable
 fun rememberArtworkColors(imageUrl: String?, canvasFrame: ImageBitmap? = null): MeshPalette {
     val context = LocalPlatformContext.current
-    var palette by remember(imageUrl) { mutableStateOf(MeshPalette(FallbackColors)) }
+    // Seeded from the cache, so a sleeve this session has already read is on its
+    // own colours in its first frame — nothing to crossfade in from.
+    var palette by remember(imageUrl) {
+        mutableStateOf(imageUrl?.let(paletteCache::get) ?: MeshPalette(FallbackColors, resolved = false))
+    }
 
     LaunchedEffect(imageUrl) {
         if (imageUrl == null) return@LaunchedEffect
@@ -228,7 +259,9 @@ fun rememberArtworkColors(imageUrl: String?, canvasFrame: ImageBitmap? = null): 
             .build()
         val result = SingletonImageLoader.get(context).execute(request)
         val bitmap = (result as? SuccessResult)?.image?.toImageBitmap() ?: return@LaunchedEffect
-        palette = MeshPalette(paletteOf(bitmap))
+        val found = MeshPalette(paletteOf(bitmap))
+        paletteCache[imageUrl] = found
+        palette = found
     }
 
     LaunchedEffect(canvasFrame) {
@@ -249,6 +282,21 @@ fun rememberArtworkColors(imageUrl: String?, canvasFrame: ImageBitmap? = null): 
  * that would land the blobs back where they started.
  */
 private const val DRIFT_RADIANS = (PI * 0.45f).toFloat()
+
+/**
+ * Palettes already read, keyed by artwork URL — a cover cannot change colour
+ * under its own address, so asking twice buys a second decode for the same
+ * answer. A hit here is also the backdrop being on colour in its first frame.
+ *
+ * Clip frames never land here: the next frame of the same clip is a different
+ * picture.
+ */
+private val paletteCache = object : LinkedHashMap<String, MeshPalette>(0, 0.75f, true) {
+    override fun removeEldestEntry(eldest: Map.Entry<String, MeshPalette>) = size > PALETTE_CACHE_ENTRIES
+}
+
+/** A session's worth of covers, four colours deep. */
+private const val PALETTE_CACHE_ENTRIES = 64
 
 /**
  * Four mesh colours drawn from the artwork.

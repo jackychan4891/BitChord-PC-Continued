@@ -19,8 +19,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.music.bitchord.ui.icons.BitChordIcons
 
 /** What the column beside the page is showing. */
 internal enum class DesktopSidePanel { LYRICS, QUEUE }
@@ -91,7 +90,7 @@ internal fun DesktopSidePanelColumn(
                             )
                             DesktopToolbarButton(onClick = onClose, size = 28.dp) {
                                 Icon(
-                                    Icons.Rounded.Close,
+                                    BitChordIcons.Close,
                                     DesktopStrings["close", "Close"],
                                     tint = DesktopSecondary,
                                     modifier = Modifier.size(16.dp),

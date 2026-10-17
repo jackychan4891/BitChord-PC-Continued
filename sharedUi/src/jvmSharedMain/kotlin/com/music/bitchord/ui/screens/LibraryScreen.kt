@@ -101,6 +101,8 @@ fun LibraryScreen(
     deviceItems: List<ShelfItem>,
     /** The big "Library" heading; the desktop's pages carry the smaller one. */
     showTitle: Boolean = true,
+    /** Drawn in front of that heading — the desktop puts its mark there. */
+    titleLeading: (@Composable () -> Unit)? = null,
 ) {
     val pinnedPlaylists by AppUi.host.pinnedPlaylists.collectAsStateWithLifecycle()
     val librarySort by AppUi.host.librarySort.collectAsStateWithLifecycle()
@@ -123,16 +125,23 @@ fun LibraryScreen(
                 contentPadding = contentPadding,
             ) {
             item(key = "header") {
-                Text(
-                    text = stringResource(Res.string.library),
-                    style = if (showTitle) {
-                        MaterialTheme.typography.displayLarge
-                    } else {
-                        MaterialTheme.typography.headlineSmall
-                    },
-                    color = MaterialTheme.colorScheme.onBackground,
+                Row(
                     modifier = Modifier.padding(start = PAGE_GUTTER, end = PAGE_GUTTER, bottom = 4.dp),
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    titleLeading?.let { leading ->
+                        Box(Modifier.padding(end = 12.dp)) { leading() }
+                    }
+                    Text(
+                        text = stringResource(Res.string.library),
+                        style = if (showTitle) {
+                            MaterialTheme.typography.displayLarge
+                        } else {
+                            MaterialTheme.typography.headlineSmall
+                        },
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
             }
             if (!signedIn) {
                 item {

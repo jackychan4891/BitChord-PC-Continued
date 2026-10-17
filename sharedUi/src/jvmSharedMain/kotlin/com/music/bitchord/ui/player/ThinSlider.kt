@@ -19,6 +19,9 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -40,6 +43,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
@@ -97,19 +101,38 @@ fun ThinSlider(
     idleHeight: Dp = 7.dp,
     activeHeight: Dp = 12.dp,
     activeColor: Color = Color.White.copy(alpha = 0.92f),
+    /**
+     * The fill's colour while the pointer is away from the bar, and a touch
+     * away from a finger. The desktop player's hairline is the web's
+     * two-thirds white at rest and near-white once something lights it; every
+     * other bar has one colour and leaves this at [activeColor].
+     */
+    restColor: Color = activeColor,
     inactiveColor: Color = Color.White.copy(alpha = 0.26f),
     /** Halfway between the two track colours: visible against unplayed, invisible under played. */
     markerColor: Color = Color.White.copy(alpha = 0.5f),
 ) {
     var dragging by remember { mutableStateOf(false) }
+    // On a desktop the pointer is a promise of a drag, and the bar answers it
+    // the same way: thickened, brighter fill. Touch has no hover, so a phone
+    // never sees this and the bar still moves only under a finger.
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val hovered by hoverInteraction.collectIsHoveredAsState()
+    val lit = dragging || hovered
     val height by animateDpAsState(
-        targetValue = if (dragging) activeHeight else idleHeight,
+        targetValue = if (lit) activeHeight else idleHeight,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessMediumLow,
         ),
         label = "sliderHeight",
     )
+    val tint by animateFloatAsState(
+        targetValue = if (lit) 1f else 0f,
+        animationSpec = tween(TRACK_TINT_MS),
+        label = "sliderTint",
+    )
+    val fillColor = lerp(restColor, activeColor, tint)
     // The sheen gets a minimum beat even when the switch resolves instantly —
     // a cached offset can land in a few hundred milliseconds — so its entry,
     // its sweep and its hand-over to the progress bar always play out as one
@@ -143,6 +166,7 @@ fun ThinSlider(
             .fillMaxWidth()
             // Generous invisible touch target — the visible bar is only ~7dp.
             .height(activeHeight + 22.dp)
+            .hoverable(hoverInteraction)
             // One gesture loop for both taps and drags. Two separate detectors
             // — a drag one plus a tap one — meant taps never landed: the drag
             // detector took the pointer and a tap has no drag to report.
@@ -209,9 +233,9 @@ fun ThinSlider(
             // dot under the sheen.
             val filled = size.width * fraction * fillFactor
             if (filled > 0f) {
-                val alpha = if (dragging) activeColor.alpha else mixPulse?.alpha(activeColor.alpha) ?: activeColor.alpha
+                val alpha = if (lit) fillColor.alpha else mixPulse?.alpha(fillColor.alpha) ?: fillColor.alpha
                 drawRoundRect(
-                    color = activeColor.copy(alpha = alpha),
+                    color = fillColor.copy(alpha = alpha),
                     size = Size(
                         filled.coerceAtLeast(size.height * fillFactor).coerceAtMost(size.width),
                         size.height,
@@ -237,7 +261,7 @@ fun ThinSlider(
                 ),
             exit = fadeOut(tween(durationMillis = MORPH_MS, easing = FastOutSlowInEasing)),
         ) {
-            MixSheen(height = height, color = activeColor)
+            MixSheen(height = height, color = fillColor)
         }
     }
 }
@@ -371,6 +395,9 @@ fun rememberMixPulse(
 
 /** How long the fill takes to glide out to full width, and back, around a blend. */
 private const val COVER_MS = 700
+
+/** The web player's `transition: height .12s`, which its fill's brightening rides. */
+private const val TRACK_TINT_MS = 120
 
 /** How long the beat pulse takes to swell in as a blend starts and settle as it ends. */
 private const val PULSE_FADE_MS = 900

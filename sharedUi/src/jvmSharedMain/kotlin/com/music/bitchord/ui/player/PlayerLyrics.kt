@@ -26,6 +26,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -132,8 +133,11 @@ import com.music.bitchord.ui.rememberIsForeground
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.random.Random
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -382,12 +386,26 @@ private const val SKELETON_PERIOD_MS = 1_400
 private const val BROWSING_ALPHA = 0.8f
 
 /**
+ * How long a hand-scrolled panel stays the reader's before the song gets it
+ * back. Long enough to run ahead to the end of a verse or look over what was
+ * just sung; the old half second ended a read before it started.
+ */
+private const val BROWSE_RESUME_IDLE_MS = 12_000L
+
+/**
  * Every line keeps its full size; only the line being sung is sharp and the rest
  * fall back through blur and brightness. The off-focus rows used to sit a touch
  * smaller (0.98), but scaled-down *and* blurred read as squished rather than
  * receding, so the depth of field is carried by blur alone.
  */
 private const val INACTIVE_SCALE = 1f
+
+/**
+ * The sung line is taken slightly *into* rather than the rest being pushed away:
+ * nothing shrinks on handover, so a line that has been said moves up and stays
+ * the size it reached instead of sinking back as its scale comes off.
+ */
+private const val ACTIVE_SCALE = 1.05f
 
 /** A line under a finger dips, the way a button does. */
 private const val PRESSED_SCALE = 0.96f
@@ -418,7 +436,6 @@ private const val SCROLL_LEAD_MAX_MS = 500L
  * start together.
  */
 private val LYRIC_EASING = CubicBezierEasing(0.41f, 0f, 0.12f, 0.99f)
-private const val LYRIC_SETTLE_MS = 400
 
 /**
  * How the rows fan out as the panel moves between lines.
@@ -434,13 +451,31 @@ private const val LYRIC_SETTLE_MS = 400
  * here the list has already moved underneath them, and the same delay reads as
  * the rows being dragged rather than following.
  */
-private const val STAGGER_STEPS = 3
-private const val STAGGER_FRACTION = 0.06f
+private const val STAGGER_STEPS = 4
+private const val STAGGER_STEP_MS = 50f
+private const val LINE_SPRING_MS = 1_200f
+private val LINE_SPRING_DAMPED = sqrt(19f)
 
-/** One handover: how far the panel is going, and how long it is taking. */
-private class ScrollRun(val id: Int, val delta: Float, val durationMs: Int) {
-    /** The last row to arrive does so this long after the panel sets off. */
-    val spanMs: Float get() = durationMs * (1f + STAGGER_FRACTION * STAGGER_STEPS)
+/** One handover: how far the list jumped, and the line it jumped to. */
+private class ScrollRun(val id: Int, val delta: Float, val anchor: Int) {
+    val durationMs: Int get() = (STAGGER_STEPS * STAGGER_STEP_MS).toInt()
+    val spanMs: Float get() = LINE_SPRING_MS + STAGGER_STEPS * STAGGER_STEP_MS
+
+    /** How far behind its new place row [index] is still drawn, [sinceMs] into the run. */
+    fun shift(index: Int, sinceMs: Float): Float {
+        if (id == 0 || delta == 0f) return 0f
+        val rows = if (delta > 0f) index - anchor else anchor - index
+        val t = sinceMs - rows.coerceIn(0, STAGGER_STEPS) * STAGGER_STEP_MS
+        return delta * lineSpringRemaining(t)
+    }
+}
+
+/** A unit displacement left on a damped spring (ω 10, damping 9) after [ms]. */
+private fun lineSpringRemaining(ms: Float): Float {
+    if (ms <= 0f) return 1f
+    if (ms >= LINE_SPRING_MS) return 0f
+    val t = ms / 1000f
+    return exp(-9f * t) * (cos(LINE_SPRING_DAMPED * t) + 9f / LINE_SPRING_DAMPED * sin(LINE_SPRING_DAMPED * t))
 }
 
 /**
@@ -1589,8 +1624,10 @@ internal fun rememberPlayerControlsOnScroll(
  * everything else falling out of focus the further it is from it. Blur needs
  * API 31+, so alpha carries the same hierarchy on older devices.
  *
- * Scrolling by hand clears the blur and suspends the auto-follow, so you can
- * read ahead; a couple of seconds after you stop it snaps back to the song.
+ * Scrolling by hand flattens the stack to one brightness and suspends the
+ * auto-follow, so the whole block can be read — back over what was sung or down
+ * to the last line; the song gets the panel back once the reader brings the sung
+ * line to the anchor again, or after a long enough pause.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1742,23 +1779,36 @@ internal fun LyricsPanel(
     )
 
     val currentLine by rememberUpdatedState(focusLine)
-    val activeOnScreen by remember(listState) {
+    // Whether the reader has brought the sung line back to where the panel keeps
+    // it themselves — the one sign that they are done looking about.
+    val sungLineAtAnchor by remember(listState, centreRaise) {
         derivedStateOf {
-            listState.layoutInfo.visibleItemsInfo.any { it.index == currentLine }
+            val info = listState.layoutInfo
+            val line = currentLine
+            if (line < 0 || info.viewportSize.height == 0) {
+                false
+            } else {
+                val visible = info.visibleItemsInfo.firstOrNull { it.index == line }
+                val centre = info.viewportSize.height / 2f - info.viewportSize.height * centreRaise
+                visible != null &&
+                    abs(visible.offset - info.viewportStartOffset - centre) < info.viewportSize.height * 0.05f
+            }
         }
     }
-    // Paused, there is no song to follow back to, so a hand scroll should sit
-    // wherever it was left rather than snapping back on these timers.
-    LaunchedEffect(browsingByDrag, activeOnScreen, listState.isScrollInProgress, panelPlaying) {
-        if (panelPlaying && browsingByDrag && activeOnScreen && !listState.isScrollInProgress) {
-            delay(600)
+    // Paused, there is no song to follow back to, so a hand scroll sits wherever
+    // it was left. Playing, the panel takes itself back once the reader comes
+    // home to the sung line, or after a long enough pause.
+    LaunchedEffect(
+        browsingByDrag,
+        sungLineAtAnchor,
+        listState.isScrollInProgress,
+        panelPlaying,
+    ) {
+        if (!panelPlaying || !browsingByDrag || listState.isScrollInProgress) return@LaunchedEffect
+        if (sungLineAtAnchor) {
             browsingByDrag = false
-        }
-    }
-
-    LaunchedEffect(browsingByDrag, listState.isScrollInProgress, panelPlaying) {
-        if (panelPlaying && browsingByDrag && !listState.isScrollInProgress) {
-            delay(5_000)
+        } else {
+            delay(BROWSE_RESUME_IDLE_MS)
             browsingByDrag = false
         }
     }
@@ -1767,7 +1817,7 @@ internal fun LyricsPanel(
     // behind it should be running. Held as a plain value plus a frame clock
     // rather than an animation per row: sixty rows each with their own
     // Animatable is sixty animations to start and stop on every handover.
-    var run by remember(lines) { mutableStateOf(ScrollRun(0, 0f, LYRIC_SETTLE_MS)) }
+    var run by remember(lines) { mutableStateOf(ScrollRun(0, 0f, -1)) }
     val since = remember(lines) { mutableFloatStateOf(0f) }
     LaunchedEffect(run.id) {
         if (run.id == 0) return@LaunchedEffect
@@ -1785,39 +1835,74 @@ internal fun LyricsPanel(
     // that tapping the controls back resumed following — but the controls now
     // also come back by scrolling up, and clearing the flag there handed the
     // panel straight back to the song mid-gesture, scrolling the reader away
-    // from the line they had gone looking for. The two timers below end a
-    // browse on their own terms.
+    // from the line they had gone looking for. The rules on [browsingByDrag]
+    // above end a browse on their own terms.
     // A newer line replaces an unfinished automatic scroll. Only a user's
     // browsing gesture should suspend following, not our own animation.
-    LaunchedEffect(focusLine, browsing, controlsOpen, active) {
-        if (active && isSynced && !browsing &&
-            focusLine >= 0 && focusLine in lines.indices
-        ) {
-            val viewport = snapshotFlow { listState.layoutInfo.viewportSize.height }.first { it > 0 }
-            // An item's real on-screen position is its offset measured from the viewport's start,
-            // and the start sits at a negative offset while the half-viewport leading inset is
-            // still above the content. So viewport-y = offset - viewportStartOffset. Centring the
-            // line means moving that on-screen position to half the viewport, which near the start
-            // is a *forward* scroll — never the negative delta a plain offset - viewport/2 produces
-            // and which then clamps against the top of the list and moves nothing.
-            val start = listState.layoutInfo.viewportStartOffset
-            val centre = viewport / 2f - viewport * centreRaise
-            val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusLine }
-            if (!placed) {
-                listState.scrollToItem(focusLine, scrollOffset = (centre + start).toInt())
-                placed = true
-            } else if (visible != null) {
-                // One fixed, clearly-ramped glide rather than a duration borrowed
-                // from the lead: the new line is seen rising into the anchor, which
-                // is the "move up" the reference animation reads as and a
-                // lead-timed scroll was too quick to show.
+    LaunchedEffect(trackKey, focusLine, browsing, controlsOpen, active) {
+        if (!active || !isSynced || browsing || lines.isEmpty()) return@LaunchedEffect
+        // Before the song reaches its first line nothing is being sung, but the
+        // panel still owes the reader its place: that first line, held at the
+        // anchor, rather than parked at the top of an empty panel.
+        val target = when {
+            focusLine in lines.indices -> focusLine
+            !placed -> 0
+            else -> return@LaunchedEffect
+        }
+        // An item's real on-screen position is its offset measured from the viewport's start,
+        // and the start sits at a negative offset while the half-viewport leading inset is
+        // still above the content. So viewport-y = offset - viewportStartOffset. Centring the
+        // line means moving that on-screen position to half the viewport, which near the start
+        // is a *forward* scroll — never the negative delta a plain offset - viewport/2 produces
+        // and which then clamps against the top of the list and moves nothing.
+        //
+        // The inset is itself derived from the viewport, so the first layout that
+        // has a height is still measured without it, and placing then lands the
+        // line at the top of the panel with nothing later correcting it — which
+        // is the pane opening uncentred on a new song. Waiting for the negative
+        // start offset is waiting for the inset, on the very number the
+        // placement is measured against.
+        val info = snapshotFlow { listState.layoutInfo }
+            .first { it.viewportSize.height > 0 && it.viewportStartOffset < 0 }
+        val start = info.viewportStartOffset
+        val viewport = info.viewportSize.height
+        val centre = viewport / 2f - viewport * centreRaise
+        val visible = info.visibleItemsInfo.firstOrNull { it.index == target }
+        if (!placed) {
+            listState.scrollToItem(target, scrollOffset = (centre + start).toInt())
+            placed = true
+        } else if (visible != null && !reduceAnimation) {
+            // The list jumps to its new place at once and every row then
+            // springs from where it was drawn, each a little behind the one
+            // before it, so the stack arrives one line after another.
+            //
+            // Except when the distance is more than the pane can show: that
+            // is a track landing or a seek, not the next line of a song, and
+            // a glide across a screenful of rows reads as the words arriving
+            // late. Those go straight to the anchor.
+            val delta = visible.offset - start - centre
+            if (abs(delta) > viewport) {
+                listState.scrollToItem(target, scrollOffset = (centre + start).toInt())
+            } else {
+                val moved = listState.scrollBy(delta)
+                if (moved != 0f) {
+                    since.floatValue = 0f
+                    run = ScrollRun(run.id + 1, moved, target)
+                }
+            }
+        } else if (visible != null) {
+            val delta = visible.offset - start - centre
+            if (abs(delta) > viewport) {
+                listState.scrollToItem(target, scrollOffset = (centre + start).toInt())
+            } else {
                 listState.animateScrollBy(
-                    value = visible.offset - start - centre,
+                    value = delta,
                     animationSpec = tween(SCROLL_GLIDE_MS, easing = FastOutSlowInEasing),
                 )
-            } else {
-                listState.animateScrollToItem(focusLine, scrollOffset = (centre + start).toInt())
             }
+        } else {
+            // Off-screen entirely, so a long way off: place it, don't travel.
+            listState.scrollToItem(target, scrollOffset = (centre + start).toInt())
         }
     }
 
@@ -1943,10 +2028,11 @@ internal fun LyricsPanel(
             }
             val alphaTarget: Float = when {
                 !isSynced -> 0.95f
-                isActive -> 1f
-                // Reading by hand is not following along: the stack flattens
-                // to one brightness so no row is being pointed at.
+                // Reading by hand is not following along: the whole stack — the
+                // line being sung included — flattens to one brightness, so no
+                // row is being pointed at while somebody is reading.
                 browsing -> BROWSING_ALPHA
+                isActive -> 1f
                 // A line already sung rises and lets go; one still ahead stays legible.
                 sung -> falloffAlpha(LINE_SUNG_ALPHA, distance)
                 else -> falloffAlpha(LINE_FALLOFF_ALPHA, distance)
@@ -2013,6 +2099,7 @@ internal fun LyricsPanel(
                             val grow = GAP_REST_SCALE + (1f - GAP_REST_SCALE) * swell
                             scaleX = grow
                             scaleY = grow
+                            translationY = run.shift(index, since.floatValue) * focusBlurFactor.value
                             transformOrigin = TransformOrigin(0f, 0.5f)
                             alpha = lineAlpha * swell
                         }
@@ -2078,7 +2165,10 @@ internal fun LyricsPanel(
                 val scale by animateFloatAsState(
                     targetValue = when {
                         pressed -> PRESSED_SCALE
-                        isActive -> 1f
+                        // Reading by hand points at no line, so the zoom is off
+                        // the whole stack and it sits as one even block.
+                        browsing -> INACTIVE_SCALE
+                        isActive -> ACTIVE_SCALE
                         else -> INACTIVE_SCALE
                     },
                     animationSpec = when {
@@ -2111,7 +2201,12 @@ internal fun LyricsPanel(
                     .graphicsLayer {
                         scaleX = scale
                         scaleY = scale
-                        transformOrigin = TransformOrigin(if (alignEnd) 1f else 0f, 0.5f)
+                        translationY = run.shift(index, since.floatValue) * focusBlurFactor.value
+                        // Pinned to the line's own top: the zoom opens downward,
+                        // and the size coming back off when a handover lands
+                        // takes nothing down with it — a line that has been said
+                        // keeps the height the panel scrolled it up to.
+                        transformOrigin = TransformOrigin(if (alignEnd) 1f else 0f, 0f)
                         alpha = lineAlpha
                     }
                     .blur(blur, BlurredEdgeTreatment.Unbounded)

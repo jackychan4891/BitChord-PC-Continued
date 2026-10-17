@@ -8,6 +8,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.io.ByteArrayInputStream
 import java.net.URI
 import java.net.URLEncoder
 import java.net.http.HttpClient
@@ -17,6 +18,7 @@ import java.nio.charset.StandardCharsets
 import java.text.Normalizer
 import java.time.Duration
 import java.util.Locale
+import java.util.zip.GZIPInputStream
 
 /**
  * Where motion artwork comes from.
@@ -78,15 +80,27 @@ private val canvasClient: HttpClient = HttpClient.newBuilder()
  * A plain GET returning the body, or null for anything that isn't a 2xx or that throws.
  *
  * Canvas is decoration: no provider failure is allowed to reach the player.
+ *
+ * `Accept-Encoding` is set by hand because the Java client neither sends it nor inflates the
+ * answer: Apple's New and Radio pages are around a megabyte of HTML plain, and waiting for all
+ * of it on every visit is what made those pages feel slow.
  */
 internal fun canvasGet(url: String, headers: Map<String, String> = emptyMap()): String? = runCatching {
     val builder = HttpRequest.newBuilder(URI.create(url))
         .timeout(Duration.ofSeconds(15))
         .header("User-Agent", CANVAS_UA)
+        .header("Accept-Encoding", "gzip")
     headers.forEach { (name, value) -> builder.header(name, value) }
-    val response = canvasClient.send(builder.GET().build(), HttpResponse.BodyHandlers.ofString())
-    if (response.statusCode() in 200..299) response.body() else null
-}.getOrNull()
+    val response = canvasClient.send(builder.GET().build(), HttpResponse.BodyHandlers.ofByteArray())
+    if (response.statusCode() !in 200..299) return@runCatching null
+    val body = response.body()
+    val encoded = response.headers().allValues("content-encoding").any { value ->
+        value.contains("gzip", ignoreCase = true)
+    }
+    if (encoded) body.fromGzip() else body
+}.getOrNull()?.let { source -> String(source, StandardCharsets.UTF_8) }
+
+private fun ByteArray.fromGzip(): ByteArray = GZIPInputStream(ByteArrayInputStream(this)).use { it.readBytes() }
 
 private fun query(base: String, params: List<Pair<String, String>>): String =
     params.joinToString("&", prefix = "$base?") { (name, value) ->
@@ -205,6 +219,34 @@ internal object DesktopAppleMusicCanvas {
             return DesktopCanvasArtwork(primary, alternate, name, attributes.text("artistName"), name)
         }
         return null
+    }
+
+    /**
+     * Motion artwork for a release whose Apple id is already known.
+     *
+     * The id is the last segment of the page's own URL, so this is one request and no guessing —
+     * and it is the only way an editorial playlist's clip is ever found, since a search of albums
+     * cannot return a playlist at all.
+     */
+    fun record(id: String): DesktopCanvasArtwork? {
+        val clean = id.substringBefore('?').substringBefore('-').removePrefix("id")
+        if (clean.isBlank()) return null
+        val kind = if (clean.startsWith("pl.") || clean.startsWith("PL.")) "playlists" else "albums"
+        val bearer = token() ?: return null
+        val url = query("$AMP/$storefront/$kind/$clean", listOf("extend" to "editorialVideo"))
+        val attributes = parse(get(url, bearer))?.get("data")?.jsonArray?.firstOrNull()
+            ?.jsonObject?.get("attributes")?.jsonObject ?: return null
+        val video = attributes["editorialVideo"]?.jsonObject ?: return null
+        val (primary, alternate) = motionUrls(video) ?: return null
+        val name = attributes.text("name")
+        return DesktopCanvasArtwork(
+            url = primary,
+            fallbackUrl = alternate,
+            title = name,
+            // A playlist is credited to its curator, and the field artistName is simply absent.
+            artist = attributes.text("artistName") ?: attributes.text("curatorName"),
+            album = name,
+        )
     }
 
     private fun fetchAlbum(

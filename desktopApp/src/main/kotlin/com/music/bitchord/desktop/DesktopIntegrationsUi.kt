@@ -43,6 +43,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.music.bitchord.ui.icons.BitChordIcons
 import kotlinx.coroutines.launch
 
 /**
@@ -327,7 +328,7 @@ private fun DialogField(
                 Modifier.size(26.dp).clip(CircleShape).clickable { onValueChange("") },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Close, DesktopStrings["clear", "Clear"], tint = DesktopSecondary, modifier = Modifier.size(16.dp))
+                Icon(BitChordIcons.Close, DesktopStrings["clear", "Clear"], tint = DesktopSecondary, modifier = Modifier.size(16.dp))
             }
         }
     }

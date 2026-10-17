@@ -141,18 +141,27 @@ object DesktopCanvasClient {
      *
      * A separate lookup rather than the first track's: the services hang motion artwork off the
      * album, so asking directly is both fewer requests and a better match.
+     *
+     * [appleId] is the release's own Apple id, when the page was opened from one. Searching by
+     * name is a guess, and for an editorial playlist a guess that cannot land at all — the album
+     * index has no playlists in it — so the record is fetched by id first and names are the
+     * fallback for sources that have no ids of ours.
      */
-    suspend fun lookupAlbum(album: String, artist: String): DesktopCanvasArtwork? {
+    suspend fun lookupAlbum(album: String, artist: String, appleId: String? = null): DesktopCanvasArtwork? {
         val name = album.cleanedForCanvas()
         val credit = artist.cleanedForCanvas()
-        if (name.isBlank() || credit.isBlank()) return null
-        return resolve("album|$name|$credit", withAlbum = true) {
+        val id = appleId?.takeIf { it.isNotBlank() }
+        if (name.isBlank() || (credit.isBlank() && id == null)) return null
+        return resolve(if (id != null) "album|id|$id" else "album|$name|$credit", withAlbum = true) {
             firstHit(
+                { if (id != null) DesktopAppleMusicCanvas.record(id) else null },
                 { DesktopAppleMusicCanvas.searchAlbum(name, credit) },
                 { DesktopTidalCanvas.searchAlbum(name, credit) },
                 { DesktopCommunityCanvas.searchAlbum(name, credit) },
                 { DesktopSpotifyCanvas.searchAlbum(name, credit) },
-            ) { it.matches(name, credit, name) }
+                // An id is the release itself, so there is nothing left to check; a name is a
+                // claim, and a curator credit that reads differently is not a reason to drop it.
+            ) { id != null || it.matches(name, credit, name) }
         }
     }
 

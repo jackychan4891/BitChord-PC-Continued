@@ -237,7 +237,7 @@ internal fun DesktopLibrarySortMenu() {
     var open by remember { mutableStateOf(false) }
     Box {
         DesktopToolbarButton(onClick = { open = true }) {
-            Icon(Icons.AutoMirrored.Rounded.Sort, DesktopStrings["sort_library", "Sort library"], tint = Color.White)
+            Icon(BitChordIcons.ChevronsUpDown, DesktopStrings["sort_library", "Sort library"], tint = Color.White)
         }
         DesktopDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             LibrarySort.entries.forEach { option ->
@@ -252,7 +252,7 @@ internal fun DesktopLibrarySortMenu() {
                         )
                     },
                     trailingIcon = if (option == sort) {
-                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                        { Icon(BitChordIcons.Check, contentDescription = null) }
                     } else {
                         null
                     },

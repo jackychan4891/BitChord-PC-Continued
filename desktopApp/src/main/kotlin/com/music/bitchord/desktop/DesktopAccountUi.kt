@@ -191,7 +191,7 @@ internal fun DesktopAccountSelector(
                         }
                     }
                 }
-                item { DesktopSelectorAction(Icons.Rounded.Settings, "Settings", onOpenSettings) }
+                item { DesktopSelectorAction(BitChordIcons.CogIcon, "Settings", onOpenSettings) }
                 item { Spacer(Modifier.height(10.dp)) }
             }
         }

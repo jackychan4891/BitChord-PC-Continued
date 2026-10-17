@@ -185,7 +185,7 @@ internal object DesktopPlayerSettings : PlayerSettingsSource {
     override val canvasOverCellular = MutableStateFlow(true)
     override val fullBleedArtwork = MutableStateFlow(false)
     override val hideSongStatus = MutableStateFlow(false)
-    override val hideVolumeBar = MutableStateFlow(false)
+    override val hideVolumeBar = DesktopAppearanceSettings.hideVolumeBar
     override val lastPlayerScreen = MutableStateFlow(
         runCatching { LastPlayerScreen.valueOf(persistence.string(KEY_LAST_SCREEN, "MAIN")) }
             .getOrDefault(LastPlayerScreen.MAIN),

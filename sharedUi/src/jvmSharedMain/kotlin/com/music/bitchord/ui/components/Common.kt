@@ -97,7 +97,7 @@ import androidx.compose.foundation.border
  * edge, which every other page now shares, so a track row, a card or a
  * heading starts at the same place whichever page it is on.
  */
-val PAGE_GUTTER = 16.dp
+val PAGE_GUTTER = 40.dp
 
 /**
  * The inset the floating chrome sits at: the mini player, the tab bar and the

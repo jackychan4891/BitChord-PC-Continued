@@ -57,10 +57,15 @@ internal fun DesktopPlayerSheet(
         val windowHeight = maxHeight
         val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
         val offset = remember { Animatable(heightPx) }
+        // The web overlay's own entrance: it arrives at 102% and settles to full
+        // size as it fades up. Rises once per opening, and is left alone on the
+        // way out, so a downward drag keeps the sheet the size it was.
+        val reveal = remember { Animatable(0f) }
         val scope = rememberCoroutineScope()
 
         LaunchedEffect(visible) {
             if (visible) {
+                launch { reveal.animateTo(1f, tween(SHEET_ENTER_MS)) }
                 offset.animateTo(0f, tween(SHEET_OPEN_MS, easing = FastOutSlowInEasing))
             } else {
                 offset.animateTo(heightPx, tween(SHEET_CLOSE_MS, easing = FastOutSlowInEasing))
@@ -74,7 +79,14 @@ internal fun DesktopPlayerSheet(
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { translationY = offset.value }
+                .graphicsLayer {
+                    translationY = offset.value
+                    val settled = reveal.value
+                    alpha = settled
+                    val scale = 1f + SHEET_ENTER_SCALE * (1f - settled)
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .draggable(
                     state = dragState,
                     orientation = Orientation.Vertical,
@@ -108,6 +120,10 @@ internal fun DesktopPlayerSheet(
 private const val SHEET_OPEN_MS = 360
 private const val SHEET_CLOSE_MS = 280
 private const val SHEET_SETTLE_MS = 220
+
+/** The web overlay's entrance: 300ms of fade, with the sheet settling from 102%. */
+private const val SHEET_ENTER_MS = 300
+private const val SHEET_ENTER_SCALE = 0.02f
 private const val DISMISS_FRACTION = 0.25f
 private const val DISMISS_VELOCITY = 1_600f
 private const val HANDLE_HIT_WIDTH_FRACTION = 0.2f

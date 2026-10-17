@@ -764,6 +764,19 @@ fun NowPlayingScreen(
      */
     playerTranslateToggle: MutableState<Boolean>? = null,
     playerShowingTranslation: MutableState<Boolean>? = null,
+    /**
+     * The landscape player's corner button, which a window host supplies and a
+     * phone leaves alone: out of the player. Full screen is F11's, and the lyrics
+     * and queue panes live in the "…" menu.
+     */
+    onDismissPlayer: (() -> Unit)? = null,
+    /**
+     * Where the player's "…" sits, in the window's own coordinates, mirrored back
+     * out for a desktop host that draws the song menu outside this screen. The
+     * sleeve's width and the words' column both ride on the window's size, so the
+     * glyph moves and the menu has to follow it.
+     */
+    playerMenuBounds: MutableState<Rect?>? = null,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -1846,13 +1859,17 @@ fun NowPlayingScreen(
     if (landscape) {
         // Paused always wins outright over a scrub in progress — see
         // [ARTWORK_PAUSE_SHRINK_SCALE].
+        // The web player's own settle: paused, the sleeve breathes down to 92%
+        // over 450ms on a curve that overshoots very slightly on the way back.
+        // Nothing happens for a scrub in progress — the bar and the times carry
+        // that, and the cover staying full size is what lets you see where you
+        // have landed.
         val landscapeArtScale by animateFloatAsState(
-            targetValue = when {
-                !isPlaying -> ARTWORK_PAUSE_SHRINK_SCALE
-                scrub.scrubbing -> ARTWORK_DRAG_SHRINK_SCALE
-                else -> ARTWORK_EXPANDED_SCALE
-            },
-            animationSpec = tween(durationMillis = ARTWORK_SCALE_DURATION_MS, easing = ArtworkScaleEasing),
+            targetValue = if (isPlaying) ARTWORK_EXPANDED_SCALE else LANDSCAPE_ARTWORK_PAUSE_SCALE,
+            animationSpec = tween(
+                durationMillis = LANDSCAPE_ARTWORK_SCALE_MS,
+                easing = LandscapeArtworkEasing,
+            ),
             label = "landscapeArtworkScale",
         )
         val versionAligning by PlayerSettings.versionAlignmentInProgress.collectAsStateWithLifecycle()
@@ -1914,7 +1931,23 @@ fun NowPlayingScreen(
                 background = { backgroundModifier ->
                     // The whole screen is the sheets' frost source: there is
                     // no full-bleed banner here to be it instead.
-                    fullArtworkBlurContent(backgroundModifier.hazeSource(playerHaze))
+                    if (legacyMesh) {
+                        // Apple Music's backdrop: four blobs of the sleeve's own
+                        // colours, drifting behind the player for as long as it is
+                        // up. One or the other shows, never both, and the frost
+                        // source stays mounted either way so the sheets go on
+                        // blurring what is behind them. "Reduce animation" still
+                        // parks the blobs, as it does everywhere else.
+                        Box(backgroundModifier.hazeSource(playerHaze)) {
+                            MeshGradientBackground(
+                                palette = rememberArtworkColors(remoteArt, canvasFrame),
+                                trackKey = song.videoId,
+                                continuous = true,
+                            )
+                        }
+                    } else {
+                        fullArtworkBlurContent(backgroundModifier.hazeSource(playerHaze))
+                    }
                 },
                 artwork = { artworkModifier, glowRounded ->
                     LandscapeArtwork(
@@ -2000,13 +2033,17 @@ fun NowPlayingScreen(
                     }
                 },
                 actions = playerActions,
-                controls = { compact ->
+                controls = { compact, paneWidth ->
                     LandscapeMainPane(
                         compact = compact,
                         // The "Playing from …" caption is gone, matching the portrait player:
                         // the credits name the track, and the queue says where it came from.
                         caption = null,
                         onOpenCaption = openPlaybackOrigin,
+                        // The desktop block is exactly as wide as the sleeve over
+                        // it, which is what the credits and the scrubber want; a
+                        // phone's pane keeps its own cap.
+                        paneWidth = paneWidth,
                         credits = {
                             LandscapeCredits(
                                 song = song,
@@ -2017,6 +2054,8 @@ fun NowPlayingScreen(
                                 onOpenMenu = onOpenMenu,
                                 onOpenAlbum = onOpenAlbum,
                                 onOpenArtist = onOpenArtist,
+                                discSize = if (compact) 34.dp else 32.dp,
+                                onMenuBounds = { playerMenuBounds?.value = it },
                             )
                         },
                         // On a phone-height window the transport is the right
@@ -2053,6 +2092,7 @@ fun NowPlayingScreen(
                                 transitionWindow = transitionWindow
                                     ?.takeIf { !scrub.scrubbing && it.end > it.start }
                                     ?.let { it.start..it.end },
+                                hairlineBar = !compact,
                                 onScrub = onScrub,
                                 onScrubFinished = onScrubFinished,
                             ) {
@@ -2066,19 +2106,39 @@ fun NowPlayingScreen(
                             }
                         },
                         transport = {
-                            TransportRow(
-                                isPlaying = isPlaying,
-                                isLoading = isLoading || audioVersionSwitching,
-                                previousEnabled = !controlsLocked &&
-                                    (hasPrevious || pastRestartPoint),
-                                nextEnabled = !controlsLocked && hasNext,
-                                onPrevious = onPrevious,
-                                onPlayPause = onPlayPause,
-                                onNext = onNext,
-                                compact = compact,
-                            )
+                            if (compact) {
+                                TransportRow(
+                                    isPlaying = isPlaying,
+                                    isLoading = isLoading || audioVersionSwitching,
+                                    previousEnabled = !controlsLocked &&
+                                        (hasPrevious || pastRestartPoint),
+                                    nextEnabled = !controlsLocked && hasNext,
+                                    onPrevious = onPrevious,
+                                    onPlayPause = onPlayPause,
+                                    onNext = onNext,
+                                    compact = compact,
+                                )
+                            } else {
+                                // Shuffle, back, play, forward, repeat — the web
+                                // transport, with the two modes it puts at the
+                                // ends of the row rather than in a drawer.
+                                LandscapeTransportRow(
+                                    isPlaying = isPlaying,
+                                    isLoading = isLoading || audioVersionSwitching,
+                                    previousEnabled = !controlsLocked &&
+                                        (hasPrevious || pastRestartPoint),
+                                    nextEnabled = !controlsLocked && hasNext,
+                                    shuffleEnabled = shuffleEnabled,
+                                    repeatMode = repeatMode,
+                                    onToggleShuffle = onToggleShuffle,
+                                    onCycleRepeat = onCycleRepeat,
+                                    onPrevious = onPrevious,
+                                    onPlayPause = onPlayPause,
+                                    onNext = onNext,
+                                )
+                            }
                         },
-                        volume = if (hideVolumeBar || !compact) {
+                        volume = if (hideVolumeBar) {
                             null
                         } else {
                             {
@@ -2181,6 +2241,9 @@ fun NowPlayingScreen(
                         modifier = Modifier.fillMaxSize(),
                     )
                 },
+                onDismiss = onDismissPlayer,
+                // Full screen, lyrics and queue have no corner buttons: F11 does
+                // the first and the "…" menu holds the other two.
             )
             playerOverlays()
         }

@@ -1173,16 +1173,17 @@ class DesktopPlaybackEngine(
             if (plan != null) DesktopTransitionRide.gains(plan, styleProgress, transitionGains)
             val out = if (plan != null) transitionGains[0] else kotlin.math.sqrt(1f - styleProgress)
             val into = if (plan != null) transitionGains[1] else kotlin.math.sqrt(styleProgress)
-            // Equal-power gains sum past 1 — up to 1.41 at the midpoint — and two loud masters
-            // peaking together would be clipped hard by the sink. A smooth trim of
-            // 1 / sqrt(out + into) holds that to 1.19 for at most 1.5 dB, and reshapes nothing:
-            // the same trim Android's two players take.
+            // Equal-power gains sum past 1 — up to 1.41 at the midpoint. The blend used to be
+            // trimmed by 1/sqrt(out + into) against two loud masters peaking together, which is
+            // a loudness dip through the middle of every mix: heard as Automix turning the music
+            // quiet. Held at unity now, and pulled back only past the level the sink can take.
             val outgoingLevel = if (plan != null && plan.echoSeconds > 0.0) {
                 DesktopTransitionRide.echoLevel(plan, progress)
             } else {
                 out
             }
-            val trim = 1f / kotlin.math.sqrt((outgoingLevel + into).coerceAtLeast(1f))
+            val summed = outgoingLevel + into
+            val trim = if (summed <= CLIP_GUARD_SUM) 1f else kotlin.math.sqrt(CLIP_GUARD_SUM / summed)
             val stop = minOf(count, index + subBlock)
             val span = stop - index
             while (index < stop) {
@@ -2319,6 +2320,12 @@ class DesktopPlaybackEngine(
         /** Extra blend time so the roll and the reverb ring out after the outgoing dry is gone. */
         private const val ROLL_TAIL_SECONDS = 0.9
         private const val REVERB_TAIL_SECONDS = 1.4
+        /**
+         * How far the two faders may sum before the blend is pulled back. An equal-power
+         * crossfade peaks at 1.41, so ordinary mixes ride at full level and only an echo ride
+         * carrying a whole deck past the handover — where the sum really would clip — is trimmed.
+         */
+        private const val CLIP_GUARD_SUM = 1.42f
         /** The reverb opens over the last part of the fade and holds through the tail. */
         private const val REVERB_START = 0.5f
         private const val REVERB_SEND = 0.55f

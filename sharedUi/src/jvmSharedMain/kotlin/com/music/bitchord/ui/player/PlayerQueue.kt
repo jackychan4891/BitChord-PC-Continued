@@ -63,11 +63,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
@@ -121,28 +124,40 @@ internal fun keepScrollInList(listState: LazyListState) = object : NestedScrollC
  */
 private val QUEUE_ROW_MOTION = tween<IntOffset>(durationMillis = 200, easing = FastOutSlowInEasing)
 
-/** Softens the list where it meets the header and the scrubber. */
-internal fun Modifier.fadingEdges(): Modifier = this
+/**
+ * Softens the list where it meets the header and the scrubber.
+ *
+ * The inset is per edge, because the lyric column parks its sung line a few
+ * percent below the top of the panel: with a fade up there the line being sung
+ * is drawn half out of existence, which is the clipping that used to read as the
+ * panel being cut off.
+ */
+internal fun Modifier.fadingEdges(top: Dp = 28.dp, bottom: Dp = 28.dp): Modifier = this
     .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
     .drawWithContent {
         drawContent()
-        val fade = 28.dp.toPx()
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color.Transparent, Color.Black),
-                startY = 0f,
-                endY = fade,
-            ),
-            blendMode = BlendMode.DstIn,
-        )
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color.Black, Color.Transparent),
-                startY = size.height - fade,
-                endY = size.height,
-            ),
-            blendMode = BlendMode.DstIn,
-        )
+        val topPx = top.toPx()
+        if (topPx > 0f) {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(Color.Transparent, Color.Black),
+                    startY = 0f,
+                    endY = topPx,
+                ),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+        val bottomPx = bottom.toPx()
+        if (bottomPx > 0f) {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(Color.Black, Color.Transparent),
+                    startY = size.height - bottomPx,
+                    endY = size.height,
+                ),
+                blendMode = BlendMode.DstIn,
+            )
+        }
     }
 
 /** One track in [InlineQueue], and where it sits in the player's timeline. */
@@ -151,9 +166,15 @@ private data class QueueTrack(val timelineIndex: Int, val song: Song, val key: S
 /** The groups a queue row can be dragged within; a drag never leaves its own. */
 private enum class QueueSection { USER, CONTEXT, AUTOPLAY }
 
-/** The queue as [InlineQueue] lists it: what's playing, then each section in running order. */
+/** The queue as [InlineQueue] lists it: what has already gone by, then what's playing, then each section in running order. */
 private class QueueTracks(
     val nowPlaying: QueueTrack?,
+    /**
+     * Everything the timeline has already played, oldest first, so the last
+     * thing heard sits right above the thing being heard. Scroll up and they are
+     * there; a tap plays from one again.
+     */
+    val played: List<QueueTrack>,
     val user: List<QueueTrack>,
     val context: List<QueueTrack>,
     val autoplay: List<QueueTrack>,
@@ -165,7 +186,7 @@ private class QueueTracks(
     }
 
     companion object {
-        val EMPTY = QueueTracks(null, emptyList(), emptyList(), emptyList())
+        val EMPTY = QueueTracks(null, emptyList(), emptyList(), emptyList(), emptyList())
     }
 }
 
@@ -184,9 +205,11 @@ private fun splitQueue(queue: List<Song>, currentIndex: Int): QueueTracks {
         val song = queue[index]
         return QueueTrack(index, song, prefix + "_" + (song.queueEntryId ?: "${song.videoId}#${occurrence[index]}"))
     }
+    val played = ArrayList<QueueTrack>()
     val user = ArrayList<QueueTrack>()
     val context = ArrayList<QueueTrack>()
     val autoplay = ArrayList<QueueTrack>()
+    for (index in 0 until currentIndex) played += track(index, "played")
     for (index in currentIndex + 1 until queue.size) {
         when (queue[index].queueTier) {
             QueueTier.USER_QUEUE -> user += track(index, "user")
@@ -194,7 +217,7 @@ private fun splitQueue(queue: List<Song>, currentIndex: Int): QueueTracks {
             QueueTier.AUTOPLAY -> autoplay += track(index, "autoplay")
         }
     }
-    return QueueTracks(track(currentIndex, "np"), user, context, autoplay)
+    return QueueTracks(track(currentIndex, "np"), played, user, context, autoplay)
 }
 
 /** Placement-only item motion; see [QUEUE_ROW_MOTION]. */
@@ -237,22 +260,60 @@ internal fun InlineQueue(
     val tracks = remember(queue, currentIndex) { splitQueue(queue, currentIndex) }
     val drag = rememberQueueDrag(listState, tracks, onMove, onDragActiveChange)
     val nowPlaying = tracks.nowPlaying
+
+    // What has already been heard is folded away: the queue opens on the running
+    // order, and the played rows come out only when the listener pulls up for
+    // them. A new track refolds them — that pull is a deliberate look back, not
+    // something to leave parked on screen while the music moves on.
+    val playedRevealed = remember { mutableStateOf(false) }
+    val playedShown = tracks.played.isNotEmpty() && playedRevealed.value
+
+    // The pull is read off the pointer, not off the list's leftover scroll: the
+    // panel's own snap to a new track reaches the top by itself, and leftover
+    // scroll there would open the played rows nobody asked for. Only a wheel
+    // notch or a drag under a finger counts, and nothing here consumes the
+    // gesture, so the list scrolls exactly as it did.
+    val revealPlayed = Modifier.pointerInput(listState) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val pulled = when (event.type) {
+                    PointerEventType.Scroll -> event.changes.fold(0f) { total, change ->
+                        total + change.scrollDelta.y
+                    }
+                    PointerEventType.Move -> event.changes.fold(0f) { total, change ->
+                        if (change.pressed) total + (change.position.y - change.previousPosition.y) else total
+                    }
+                    else -> 0f
+                }
+                // A finger travelling down is the list going back toward its start.
+                if (pulled > 1f && !playedRevealed.value && !listState.canScrollBackward) {
+                    playedRevealed.value = true
+                }
+            }
+        }
+    }
     val contextSong = tracks.context.firstOrNull()?.song
     val contextTitle = contextSong?.playbackSource?.takeIf { it.isNotBlank() }
         ?: contextSong?.albumName?.takeIf { it.isNotBlank() }
         ?: nowPlaying?.song?.playbackSource?.takeIf { it.isNotBlank() }
         ?: nowPlaying?.song?.albumName?.takeIf { it.isNotBlank() }
 
-    // Back to the top on a track change — snapped the first time, animated
-    // after — but never mid-drag, which would pull the list from under the finger.
+    // Back to what's playing on a track change — snapped the first time,
+    // animated after — but never mid-drag, which would pull the list from under
+    // the finger. The played rows sit above the anchor only while they are
+    // revealed, so the anchor moves with them.
     var hasScrolledOnce by remember { mutableStateOf(false) }
+    val nowPlayingAnchor = if (playedShown) tracks.played.size + 1 else 0
     LaunchedEffect(currentIndex) {
-        val scrolledAway = listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0
+        playedRevealed.value = false
+        val scrolledAway = listState.firstVisibleItemIndex != nowPlayingAnchor ||
+            listState.firstVisibleItemScrollOffset != 0
         if (drag.held == null && nowPlaying != null && scrolledAway) {
             if (hasScrolledOnce) {
-                listState.animateScrollToItem(0)
+                listState.animateScrollToItem(nowPlayingAnchor)
             } else {
-                listState.scrollToItem(0)
+                listState.scrollToItem(nowPlayingAnchor)
                 hasScrolledOnce = true
             }
         }
@@ -277,6 +338,7 @@ internal fun InlineQueue(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(revealPlayed)
                 .bleedHorizontally(PLAYER_GUTTER)
                 .fadingEdges(),
         ) {
@@ -290,6 +352,25 @@ internal fun InlineQueue(
                     .then(if (collapsePlayerOnScroll) Modifier.nestedScroll(controlsOnScroll) else Modifier),
                 contentPadding = PaddingValues(horizontal = PLAYER_GUTTER),
             ) {
+                if (playedShown) {
+                    item(key = "header-played") {
+                        QueueHeading(
+                            title = stringResource(Res.string.previously_played),
+                            modifier = Modifier.padding(top = 12.dp, bottom = 6.dp),
+                        )
+                    }
+                    items(tracks.played, key = { it.key }) { track ->
+                        InlineQueueRow(
+                            song = track.song,
+                            isCurrent = false,
+                            onClick = { onJumpTo(track.timelineIndex) },
+                            // Already heard: there is nothing here to take out of
+                            // the running order, so the row carries no remove.
+                            onRemove = null,
+                            locked = controlsLocked,
+                        )
+                    }
+                }
                 if (nowPlaying != null) {
                     item(key = "header-now-playing") {
                         QueueHeading(
@@ -691,7 +772,8 @@ private fun InlineQueueRow(
     song: Song,
     isCurrent: Boolean,
     onClick: () -> Unit,
-    onRemove: () -> Unit,
+    /** Null for a row that has nothing to remove — the played ones above. */
+    onRemove: (() -> Unit)?,
     modifier: Modifier = Modifier,
     /** @see InlineQueue */
     locked: Boolean = false,
@@ -771,7 +853,7 @@ private fun InlineQueueRow(
             )
             Spacer(Modifier.width(10.dp))
         }
-        if (!locked) {
+        if (!locked && onRemove != null) {
             Box(
                 modifier = Modifier
                     .size(32.dp)

@@ -191,7 +191,7 @@ private fun NewPlaylistForm(
     ) {
         onBack?.let {
             IconButton(onClick = it) {
-                Icon(Icons.Rounded.ArrowBack, DesktopStrings["back", "Back"], tint = Color.White)
+                Icon(BitChordIcons.ChevronLeft, DesktopStrings["back", "Back"], tint = Color.White)
             }
         }
         Column(Modifier.weight(1f)) {
@@ -239,7 +239,7 @@ private fun NewPlaylistForm(
                 Modifier.size(28.dp).clip(CircleShape).clickable { name = "" },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Close, DesktopStrings["clear_name", "Clear name"], tint = DesktopSecondary, modifier = Modifier.size(18.dp))
+                Icon(BitChordIcons.Close, DesktopStrings["clear_name", "Clear name"], tint = DesktopSecondary, modifier = Modifier.size(18.dp))
             }
         }
     }

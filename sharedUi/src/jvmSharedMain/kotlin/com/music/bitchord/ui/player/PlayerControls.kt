@@ -55,8 +55,6 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.VolumeDown
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.CircularProgressIndicator
@@ -83,6 +81,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import org.jetbrains.compose.resources.painterResource
@@ -201,6 +201,13 @@ internal fun PlayerScrubber(
     slowMixPulse: Boolean = false,
     onScrub: (Float) -> Unit,
     onScrubFinished: () -> Unit,
+    /**
+     * The desktop player's bar, measured off the web's: a 4dp hairline that
+     * thickens to 8dp under the pointer, its fill lifting from two-thirds white
+     * to near-white with it, and two small tabular figures underneath. A phone
+     * keeps the thicker bar its finger has to land on.
+     */
+    hairlineBar: Boolean = false,
     centerLabel: @Composable BoxScope.() -> Unit = {},
 ) {
     val shown = shown()
@@ -217,6 +224,17 @@ internal fun PlayerScrubber(
         enabled = !reduceAnimation,
         slow = slowMixPulse,
     )
+    val timeStyle = if (hairlineBar) {
+        MaterialTheme.typography.labelMedium.copy(
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+            fontWeight = FontWeight.W500,
+            fontFeatureSettings = "tnum",
+        )
+    } else {
+        MaterialTheme.typography.labelMedium
+    }
+    val timeColor = Color.White.copy(alpha = if (hairlineBar) 0.4f else 0.55f)
     Column(Modifier.fillMaxWidth()) {
         ThinSlider(
             value = shown,
@@ -226,13 +244,19 @@ internal fun PlayerScrubber(
             mixing = mixing,
             mixPulse = mixPulse,
             transitionWindow = transitionWindow,
+            idleHeight = if (hairlineBar) 4.dp else 7.dp,
+            activeHeight = if (hairlineBar) 8.dp else 12.dp,
+            activeColor = Color.White.copy(alpha = 0.92f),
+            restColor = if (hairlineBar) Color.White.copy(alpha = 0.64f) else Color.White.copy(alpha = 0.92f),
+            inactiveColor = Color.White.copy(alpha = if (hairlineBar) 0.18f else 0.26f),
         )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 // The slider's touch target extends well past the drawn bar,
-                // so pull the labels back up under it.
-                .offset(y = (-9).dp),
+                // so pull the labels back up under it. A hairline bar sits in a
+                // shorter box, so it needs pulling back less.
+                .offset(y = if (hairlineBar) (-5).dp else (-9).dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -240,13 +264,13 @@ internal fun PlayerScrubber(
             ) {
                 Text(
                     text = formatTime((shown * durationMs).toLong()),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.55f),
+                    style = timeStyle,
+                    color = timeColor,
                 )
                 Text(
                     text = "-" + formatTime(durationMs - (shown * durationMs).toLong()),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.55f),
+                    style = timeStyle,
+                    color = timeColor,
                 )
             }
             // Pinned to the box's own centre rather than squeezed into the gap
@@ -322,6 +346,7 @@ internal fun PlaybackQualityLabel(
         losslessRequested = effectiveQuality == AudioQuality.LOSSLESS,
         effectiveQuality = effectiveQuality,
         nerdStats = nerdStats,
+        artworkUrl = song.thumbnailUrl,
         modifier = modifier,
     )
 }
@@ -487,7 +512,7 @@ internal fun TransportRow(
 /** ThinSlider's fixed touch target at the volume bar's size: 10dp + 22dp. */
 internal val VOLUME_ROW_HEIGHT = 32.dp
 
-/** The volume bar between its two speaker glyphs. */
+/** The volume bar, with the speaker's own level in its glyph. */
 @Composable
 internal fun VolumeRow(
     /**
@@ -498,31 +523,32 @@ internal fun VolumeRow(
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
 ) {
+    val level = value()
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // One speaker rather than the pair of loud and quiet: its arcs are the
+        // scale, so the glyph says where the bar is while the bar itself is the
+        // only thing you can move. The web player has exactly this, and Apple
+        // Music's own desktop does too.
         Icon(
-            Icons.AutoMirrored.Rounded.VolumeDown,
+            BitChordIcons.TransportVolume(level),
             contentDescription = null,
             tint = Color.White.copy(alpha = 0.5f),
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.width(10.dp))
         ThinSlider(
-            value = value(),
+            value = level,
             onValueChange = onValueChange,
             onValueChangeFinished = onValueChangeFinished,
-            idleHeight = 6.dp,
-            activeHeight = 10.dp,
+            idleHeight = 4.dp,
+            activeHeight = 8.dp,
+            activeColor = Color.White.copy(alpha = 0.92f),
+            restColor = Color.White.copy(alpha = 0.64f),
+            inactiveColor = Color.White.copy(alpha = 0.18f),
             modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(10.dp))
-        Icon(
-            Icons.AutoMirrored.Rounded.VolumeUp,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.5f),
-            modifier = Modifier.size(20.dp),
         )
     }
 }
@@ -677,6 +703,8 @@ internal fun CircleGlyph(
     contentDescription: String,
     onClick: () -> Unit,
     active: Boolean = false,
+    /** The desktop player's discs are the web's 32dp; everything else keeps 34. */
+    diameter: Dp = 34.dp,
     haptic: Haptic = Haptic.Tap,
 ) {
     val haptics = rememberHaptics()
@@ -686,7 +714,7 @@ internal fun CircleGlyph(
     )
     Box(
         modifier = Modifier
-            .size(34.dp)
+            .size(diameter)
             .clip(CircleShape)
             .background(Color.White.copy(alpha = discAlpha))
             .playerHoverDisc()
@@ -708,11 +736,14 @@ internal fun CircleGlyph(
                 imageVector = glyph,
                 contentDescription = contentDescription,
                 tint = Color.White,
-                modifier = Modifier.size(19.dp),
+                modifier = Modifier.size(diameter * CIRCLE_GLYPH_SHARE),
             )
         }
     }
 }
+
+/** The glyph inside one of these discs: a little over half of it, as the web's are. */
+private const val CIRCLE_GLYPH_SHARE = 0.56f
 
 /**
  * Transport / bottom glyphs. The circular clip belongs on the touch target,
@@ -1530,6 +1561,7 @@ private fun LosslessOrStats(
     losslessRequested: Boolean,
     effectiveQuality: AudioQuality,
     nerdStats: NerdStats.Snapshot?,
+    artworkUrl: String?,
     modifier: Modifier = Modifier,
 ) {
     when {
@@ -1588,7 +1620,10 @@ private fun LosslessOrStats(
             // confirmed. It is what makes the badge read as an achievement
             // rather than a label, which only one of these two is.
             animated = true,
-            icon = BitChordIcons.Lossless,
+            iconPainter = painterResource(Res.drawable.ic_lossless_badge),
+            iconWidth = 17.dp,
+            iconHeight = 12.dp,
+            artworkUrl = artworkUrl,
             modifier = modifier,
         )
         nerdStats?.isDolbyAtmos == true -> LosslessLabel(
@@ -1627,43 +1662,62 @@ private fun LosslessLabel(
     modifier: Modifier = Modifier,
     icon: ImageVector = Icons.Rounded.Headphones,
     iconPainter: Painter? = null,
+    iconWidth: Dp = 13.dp,
+    iconHeight: Dp = 10.dp,
+    artworkUrl: String? = null,
 ) {
+    // The lossless badge wears the sleeve's colour: a mark that reads as part
+    // of the artwork rather than a sticker laid over it. Lifted toward white so
+    // a deep red or navy still reads on the player's dark backdrop, and falling
+    // back to plain white until the palette has arrived.
+    val palette = artworkUrl?.let { rememberArtworkColors(it) }
+    val badge = palette?.colors?.let(::artworkBadgeColor)
+    val tint = (badge ?: Color.White).copy(alpha = if (animated) 0.85f else 0.55f)
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val tint = Color.White.copy(alpha = if (animated) 0.7f else 0.45f)
         if (iconPainter != null) {
             Icon(
                 painter = iconPainter,
                 contentDescription = null,
                 tint = tint,
-                modifier = Modifier.size(width = 13.dp, height = 10.dp),
+                modifier = Modifier.size(width = iconWidth, height = iconHeight),
             )
         } else {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
                 tint = tint,
-                modifier = Modifier.size(13.dp),
+                modifier = Modifier.size(width = iconWidth, height = iconHeight),
             )
         }
         Spacer(Modifier.width(4.dp))
         if (animated) {
-            ShimmerText(text = text)
+            ShimmerText(text = text, color = badge ?: Color.White)
         } else {
             Text(
                 text = text,
                 style = MaterialTheme.typography.labelMedium.copy(
                     fontSize = (MaterialTheme.typography.labelMedium.fontSize.value + 1).sp,
                 ),
-                color = Color.White.copy(alpha = 0.45f),
+                color = tint,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
     }
+}
+
+/**
+ * The brightest of a sleeve's palette colours, pulled most of the way to white.
+ * Brightest because the badge sits on a darkened backdrop, and near-white
+ * because a saturated artwork colour at full strength fights the text around it.
+ */
+private fun artworkBadgeColor(colors: List<Color>): Color? {
+    val brightest = colors.maxByOrNull { it.luminance() } ?: return null
+    return lerp(brightest, Color.White, 0.65f)
 }
 
 /**
@@ -1687,6 +1741,7 @@ private fun ShimmerText(
         fontSize = (MaterialTheme.typography.labelMedium.fontSize.value + 1).sp,
     ),
     baseAlpha: Float = 0.55f,
+    color: Color = Color.White,
 ) {
     val transition = rememberInfiniteTransition(label = "lossless-shimmer")
     val progress = transition.animateFloat(
@@ -1698,7 +1753,7 @@ private fun ShimmerText(
         ),
         label = "lossless-shimmer-progress",
     )
-    val baseColor = Color.White.copy(alpha = baseAlpha)
+    val baseColor = color.copy(alpha = baseAlpha)
     // The glyphs are laid out and drawn once, in plain white, and the moving
     // band is painted over them in the draw phase with SrcIn — which keeps the
     // glyphs' coverage and takes the gradient's colour, the same pixels a
@@ -1708,7 +1763,7 @@ private fun ShimmerText(
     Text(
         text = text,
         style = style,
-        color = Color.White,
+        color = color,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
@@ -1720,7 +1775,7 @@ private fun ShimmerText(
                 val center = -band + progress.value * (width + 2 * band)
                 drawRect(
                     brush = Brush.linearGradient(
-                        colorStops = arrayOf(0f to baseColor, 0.5f to Color.White, 1f to baseColor),
+                        colorStops = arrayOf(0f to baseColor, 0.5f to color, 1f to baseColor),
                         start = Offset(center - band, 0f),
                         end = Offset(center + band, 0f),
                     ),

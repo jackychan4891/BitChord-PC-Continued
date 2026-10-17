@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material.icons.rounded.ThumbDownOffAlt
 import androidx.compose.material.icons.rounded.Translate
@@ -343,20 +344,20 @@ internal fun DesktopSongMenu(
             DesktopMenuDivider()
             DesktopSleepTimer.presets.forEach { minutes ->
                 DesktopMenuRow(
-                    icon = Icons.Rounded.Bedtime,
+                    icon = BitChordIcons.Clock,
                     label = "$minutes minutes",
                     selected = sleepTimerMinutes == minutes && !sleepAfterTrack,
                 ) { onSleepTimer(minutes) }
             }
             DesktopMenuRow(
-                icon = Icons.Rounded.Bedtime,
+                icon = BitChordIcons.Clock,
                 label = DesktopStrings["d_end_of_this_track", "End of this track"],
                 selected = sleepAfterTrack,
                 onClick = onSleepAfterTrack,
             )
             if (sleepTimerMinutes != null || sleepAfterTrack) {
                 DesktopMenuDivider()
-                DesktopMenuRow(Icons.Rounded.Bedtime, DesktopStrings["d_turn_off", "Turn off"]) { onSleepTimer(null) }
+                DesktopMenuRow(BitChordIcons.Clock, DesktopStrings["d_turn_off", "Turn off"]) { onSleepTimer(null) }
             }
             return@DesktopMenuSurface
         }
@@ -386,7 +387,7 @@ internal fun DesktopSongMenu(
             )
         }
         if (!isOffline) {
-            DesktopMenuRow(Icons.AutoMirrored.Rounded.PlaylistAdd, DesktopStrings["add_to_playlist", "Add to playlist"], onClick = onAddToPlaylist)
+            DesktopMenuRow(BitChordIcons.ListPlus, DesktopStrings["add_to_playlist", "Add to playlist"], onClick = onAddToPlaylist)
         }
         if (signedIn || !isOffline) DesktopMenuDivider()
 
@@ -401,7 +402,7 @@ internal fun DesktopSongMenu(
                 onClick = onDownload,
             )
             downloaded -> DesktopMenuRow(
-                icon = Icons.Rounded.DownloadDone,
+                icon = BitChordIcons.Check,
                 label = DesktopStrings["saved_to_downloads", "Saved to Downloads"],
                 tint = DesktopAccent,
                 value = DesktopStrings["delete", "Delete"],
@@ -414,8 +415,8 @@ internal fun DesktopSongMenu(
             )
         }
         DesktopMenuRow(Icons.Rounded.Radio, DesktopStrings["start_radio", "Start radio"], onClick = onStartRadio)
-        DesktopMenuRow(Icons.AutoMirrored.Rounded.PlaylistPlay, DesktopStrings["play_next", "Play next"], onClick = onPlayNext)
-        DesktopMenuRow(Icons.AutoMirrored.Rounded.QueueMusic, DesktopStrings["add_to_queue", "Add to queue"], onClick = onAddToQueue)
+        DesktopMenuRow(BitChordIcons.ListStart, DesktopStrings["play_next", "Play next"], onClick = onPlayNext)
+        DesktopMenuRow(BitChordIcons.ListEnd, DesktopStrings["add_to_queue", "Add to queue"], onClick = onAddToQueue)
         // The queue the player's content column shows, brought up into this
         // transport block rather than left down in the lyrics group. Only the
         // player's menu passes it.
@@ -451,7 +452,7 @@ internal fun DesktopSongMenu(
             }
             if (onSetLyricsOffset != null) {
                 DesktopMenuRow(
-                    icon = Icons.Rounded.Tune,
+                    icon = BitChordIcons.Sliders,
                     label = DesktopStrings["d_lyrics_offset", "Lyrics offset"],
                     value = if (lyricsOffsetMs != 0) formatLyricsOffset(lyricsOffsetMs) else "",
                 ) { pickingLyricsOffset = true }
@@ -472,16 +473,16 @@ internal fun DesktopSongMenu(
 
         DesktopMenuDivider()
         DesktopMenuRow(
-            icon = Icons.Rounded.Bedtime,
+            icon = BitChordIcons.Clock,
             label = DesktopStrings["sleep_timer", "Sleep timer"],
             value = sleepTimerLabel(sleepTimerMinutes, sleepAfterTrack),
         ) { pickingSleepTimer = true }
         if (!isOffline) {
-            DesktopMenuRow(Icons.Rounded.Share, DesktopStrings["share", "Share"], onClick = onShare)
+            DesktopMenuRow(BitChordIcons.ArrowUpRight, DesktopStrings["share", "Share"], onClick = onShare)
         }
         onMore?.let {
             DesktopMenuDivider()
-            DesktopMenuRow(Icons.Rounded.Tune, DesktopStrings["d_more", "More…"], onClick = it)
+            DesktopMenuRow(BitChordIcons.Ellipsis, DesktopStrings["d_more", "More…"], onClick = it)
         }
     }
 }
@@ -606,6 +607,24 @@ private const val LYRICS_OFFSET_STEP_MS = 100
 private const val MIN_LYRICS_OFFSET_MS = -5_000
 private const val MAX_LYRICS_OFFSET_MS = 5_000
 
+@Composable
+internal fun DesktopAppleCollectionMenu(
+    playlist: Boolean,
+    onPlay: () -> Unit,
+    onShuffle: () -> Unit,
+    onOpen: () -> Unit,
+    onFind: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    DesktopMenuSurface(onDismiss) {
+        DesktopMenuRow(BitChordIcons.Play, "Play") { onDismiss(); onPlay() }
+        DesktopMenuRow(BitChordIcons.Shuffle, "Shuffle") { onDismiss(); onShuffle() }
+        DesktopMenuDivider()
+        DesktopMenuRow(Icons.Rounded.Album, if (playlist) "Go to Playlist" else "Go to Album") { onDismiss(); onFind() }
+        DesktopMenuRow(BitChordIcons.ListMusic, "Open") { onDismiss(); onOpen() }
+    }
+}
+
 /** The panel a menu is drawn in: a floating card in the app's own glass. */
 @Composable
 private fun DesktopMenuSurface(onDismiss: () -> Unit, content: @Composable () -> Unit) {
@@ -678,7 +697,7 @@ private fun DesktopMenuHeader(title: String, onBack: () -> Unit) {
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Rounded.ArrowBack, DesktopStrings["back", "Back"], tint = DesktopSecondary, modifier = Modifier.size(15.dp))
+        Icon(BitChordIcons.ChevronLeft, DesktopStrings["back", "Back"], tint = DesktopSecondary, modifier = Modifier.size(15.dp))
         Spacer(Modifier.width(10.dp))
         Text(
             title,
