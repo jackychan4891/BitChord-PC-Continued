@@ -165,10 +165,10 @@ internal fun DesktopAppleArtistHeader(
                     Icon(BitChordIcons.Ellipsis, null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
                 DesktopDropdownMenu(menu, { menu = false }) {
-                    DropdownMenuItem(text = { Text("Play") }, onClick = { menu = false; onPlay() })
-                    DropdownMenuItem(text = { Text("Shuffle") }, onClick = { menu = false; onShuffle() })
+                    DropdownMenuItem(text = { Text(DesktopStrings["play", "Play"]) }, onClick = { menu = false; onPlay() })
+                    DropdownMenuItem(text = { Text(DesktopStrings["shuffle", "Shuffle"]) }, onClick = { menu = false; onShuffle() })
                     if (onToggleFavourite != null) {
-                        DropdownMenuItem(text = { Text(if (favourite == true) "Remove from Favourites" else "Favourite") }, onClick = { menu = false; onToggleFavourite() })
+                        DropdownMenuItem(text = { Text(if (favourite == true) DesktopStrings["d_remove_from_favourites", "Remove from Favourites"] else DesktopStrings["d_favourite", "Favourite"]) }, onClick = { menu = false; onToggleFavourite() })
                     }
                 }
             }
@@ -360,30 +360,58 @@ private fun AppleSongGridLine(
     }
 }
 
-/** An artist's top songs: Apple's three-to-a-column track shelf. */
+/**
+ * An artist's top songs, as Apple lays them out: three rows down, the columns measured to the
+ * space they are given rather than to a fixed width that runs off the edge of the page.
+ *
+ * Apple puts this beside Latest Release, so it is a block rather than a shelf that scrolls
+ * sideways — nine songs, which is what fits without clipping the last column.
+ */
 @Composable
-internal fun DesktopAppleSongShelf(
-    title: String,
+internal fun DesktopAppleTopSongs(
     songs: List<Song>,
     onPlay: (Int) -> Unit,
     onOpenMenu: (Song) -> Unit,
+    modifier: Modifier = Modifier,
+    rowsPerColumn: Int = 3,
+    maxSongs: Int = 9,
 ) {
-    DesktopAppleSongGrid(
-        title,
-        songs.map { AppleSongLine(it.title, it.albumName ?: it.artist, it.thumbnailUrl) },
-        onPlay = onPlay,
-        onOpenMenu = { onOpenMenu(songs[it]) },
-        columnWidth = 335.dp,
-        rowHeight = 50.dp,
-    )
+    if (songs.isEmpty()) return
+    val shown = songs.take(maxSongs)
+    val columns = shown.indices.chunked(rowsPerColumn)
+    Column(modifier) {
+        DesktopAppleHeading("Top Songs", Modifier.padding(bottom = 15.dp), chevron = true)
+        BoxWithConstraints {
+            val spacing = 20.dp
+            val columnWidth = ((maxWidth - spacing * (columns.size - 1)) / columns.size)
+                .coerceAtLeast(120.dp)
+            Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+                columns.forEach { column ->
+                    Column(Modifier.width(columnWidth)) {
+                        column.forEach { index ->
+                            val song = shown[index]
+                            AppleSongGridLine(
+                                title = song.title,
+                                subtitle = song.albumName ?: song.artist,
+                                artworkUrl = song.thumbnailUrl,
+                                height = 50.dp,
+                                onClick = { onPlay(index) },
+                                onOpenMenu = { onOpenMenu(song) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
 internal fun DesktopAppleLatestRelease(item: ShelfItem, onClick: () -> Unit) {
     Column {
         DesktopAppleHeading("Latest Release")
-        Row(Modifier.padding(top = 15.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
-            DesktopArtwork(item.thumbnailUrl, Modifier.size(160.dp).clip(RoundedCornerShape(8.dp)))
+        Row(Modifier.padding(top = 15.dp).desktopQuietClick(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+            DesktopArtwork(item.thumbnailUrl, Modifier.size(160.dp).clip(RoundedCornerShape(8.dp)).desktopHoverFill(corner = 8.dp))
             Column(Modifier.padding(start = 20.dp, end = 12.dp)) {
                 val year = Regex("\\b(?:19|20)\\d{2}\\b").find(item.subtitle)?.value
                 if (year != null) Text(year, fontSize = 11.sp, color = DesktopAppleSecondary)
@@ -395,7 +423,14 @@ internal fun DesktopAppleLatestRelease(item: ShelfItem, onClick: () -> Unit) {
 }
 
 @Composable
-internal fun DesktopAppleShelf(shelf: HomeShelf, onItemClick: (ShelfItem, String?) -> Unit, onItemMenu: ((ShelfItem) -> Unit)? = null) {
+internal fun DesktopAppleShelf(
+    shelf: HomeShelf,
+    onItemClick: (ShelfItem, String?) -> Unit,
+    onItemMenu: ((ShelfItem) -> Unit)? = null,
+    /** The station on air in the radio player, so its tile can be marked. */
+    playingRadioKey: String? = null,
+    onRadioSchedule: ((ShelfItem) -> Unit)? = null,
+) {
     val circles = shelf.items.isNotEmpty() && shelf.items.all { it.browseId?.startsWith("UC") == true }
     val videos = shelf.title.contains("video", ignoreCase = true)
     val more = shelf.moreBrowseId?.takeIf { it.startsWith(DesktopAppleBrowseClient.PAGE_PREFIX) }
@@ -421,33 +456,35 @@ internal fun DesktopAppleShelf(shelf: HomeShelf, onItemClick: (ShelfItem, String
         )
         return
     }
-    // A station is Apple's other lockup: a small square with the words beside it,
-    // two of them stacked to a column.
-    if (shelf.items.isNotEmpty() && shelf.items.all { it.isAppleRadio() }) {
-        Column(Modifier.padding(top = 25.dp, bottom = 5.dp)) {
-            heading()
-            DesktopScrollableRow(gutter = DesktopPageGutter, spacing = 20.dp) {
-                items(shelf.items.chunked(2)) { column ->
-                    Column(Modifier.width(298.dp)) {
-                        column.forEach { item ->
-                            Row(
-                                Modifier.fillMaxWidth().height(97.dp).desktopHoverFill()
-                                    .clickable { onItemClick(item, shelf.title) }
-                                    .then(if (onItemMenu == null) Modifier else Modifier.contextClick { onItemMenu(item) }),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                DesktopArtwork(item.thumbnailUrl, Modifier.size(97.dp).clip(RoundedCornerShape(8.dp)), px = 300)
-                                Column(Modifier.weight(1f).padding(start = 14.dp, end = 8.dp)) {
-                                    Text(item.title, fontSize = 13.sp, color = DesktopAppleText, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text(item.subtitle, fontSize = 12.sp, color = DesktopAppleSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(top = 4.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // Apple's radio page is a grid of squares with what each one is carrying underneath. That shape
+    // is drawn for the source's stations and the BBC's alike: the BBC's own feed is what puts a
+    // record under a tile, and its day is what the clock on a tile opens.
+    if (shelf.items.isNotEmpty() && shelf.items.all { DesktopRadioClient.isStation(it) }) {
+        val onAir by DesktopBbcRadio.tracks.collectAsState()
+        val offAir by DesktopRadioNowPlaying.lines.collectAsState()
+        val itemOf = { tile: DesktopRadioTile -> shelf.items.firstOrNull { DesktopRadioClient.keyOf(it) == tile.key } }
+        DesktopRadioTileGrid(
+            shelf.title,
+            shelf.items.map { item ->
+                val station = DesktopBbcRadio.byBrowseId(item.browseId)
+                val key = DesktopRadioClient.keyOf(item)
+                DesktopRadioTile(
+                    key = key,
+                    title = item.title,
+                    subtitle = station?.let { onAir[it.service]?.line } ?: offAir[key] ?: item.subtitle,
+                    // The BBC serves the record's sleeve beside its now-playing line, so its tiles
+                    // show that rather than only the monogram. The monogram stays as the fallback
+                    // for a station that has not answered yet.
+                    artworkUrl = station?.let { onAir[it.service]?.artworkUrl } ?: item.thumbnailUrl,
+                    monogram = station?.monogram,
+                    playing = key == playingRadioKey,
+                    hasSchedule = station != null && onRadioSchedule != null,
+                )
+            },
+            onOpen = { tile -> itemOf(tile)?.let { onItemClick(it, shelf.title) } },
+            onInfo = { tile -> itemOf(tile)?.let { onRadioSchedule?.invoke(it) } },
+            onHide = { tile -> DesktopRadioVisibility.hide(tile.key, tile.title) },
+        )
         return
     }
     // Apple's own tile measures: 171 to the square, 219 to a 16:9 video, 97 to a
@@ -476,26 +513,56 @@ internal fun DesktopAppleShelf(shelf: HomeShelf, onItemClick: (ShelfItem, String
     }
 }
 
+/**
+ * The artist's own hand at the foot of their page.
+ *
+ * The signature is drawn as ink rather than as a picture: the source art carries a paper
+ * background, so the image is tinted through its own alpha and laid on the wash at low opacity,
+ * the way a page signs itself off. Nothing is drawn when the artist has no signature on file.
+ */
+@Composable
+internal fun DesktopArtistSignature(name: String) {
+    val signature by produceState<ImageBitmap?>(null, name) {
+        value = DesktopArtistSignatures.signatureFor(name)
+    }
+    val ink = signature ?: return
+    if (ink.width <= 0 || ink.height <= 0) return
+    val aspect = ink.width.toFloat() / ink.height
+    val width = minOf(300.dp, 96.dp * aspect)
+    Box(
+        Modifier.fillMaxWidth().padding(start = DesktopPageGutter, end = DesktopPageGutter, top = 40.dp, bottom = 28.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            ink,
+            null,
+            Modifier.width(width).height(width / aspect),
+            contentScale = ContentScale.Fit,
+            colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.55f), BlendMode.SrcIn),
+        )
+    }
+}
+
 @Composable
 internal fun DesktopAppleAboutCard(name: String, bio: String?, subscribers: String?, listeners: String?) {
     var expanded by remember(name) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter, vertical = 36.dp)) {
-        DesktopAppleHeading("About $name")
+        DesktopAppleHeading(DesktopStrings.format("d_about_named", name, fallback = "About %1\$s"))
         Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
             Column(Modifier.weight(1f)) {
                 if (!bio.isNullOrBlank()) {
                     Text(bio, color = DesktopAppleSecondary, fontSize = 14.sp, lineHeight = 21.sp, maxLines = if (expanded) Int.MAX_VALUE else 6, overflow = TextOverflow.Ellipsis)
-                    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Less" else "More", color = DesktopAppleText, fontSize = 13.sp) }
+                    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) DesktopStrings["less", "Less"] else DesktopStrings["more", "More"], color = DesktopAppleText, fontSize = 13.sp) }
                 }
             }
             if (subscribers != null || listeners != null) {
                 Column(Modifier.width(170.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     subscribers?.let {
-                        Text("SUBSCRIBERS", fontSize = 10.sp, color = DesktopAppleSecondary)
+                        Text(DesktopStrings["d_subscribers", "SUBSCRIBERS"], fontSize = 10.sp, color = DesktopAppleSecondary)
                         Text(it.substringBefore(' '), fontSize = 17.sp, color = DesktopAppleText)
                     }
                     listeners?.let {
-                        Text("MONTHLY LISTENERS", fontSize = 10.sp, color = DesktopAppleSecondary)
+                        Text(DesktopStrings["d_monthly_listeners", "MONTHLY LISTENERS"], fontSize = 10.sp, color = DesktopAppleSecondary)
                         Text(it.substringBefore(' '), fontSize = 17.sp, color = DesktopAppleText)
                     }
                 }

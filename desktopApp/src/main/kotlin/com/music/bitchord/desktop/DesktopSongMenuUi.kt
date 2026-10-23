@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.HighQuality
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Share
@@ -145,12 +146,11 @@ internal fun DesktopSongMenuFor(
     onUpgradeQuality: (() -> Unit)?,
     onDismiss: () -> Unit,
     /**
-     * Opens the player's own overflow — the volume bar, the lyrics/output/queue
-     * row and the lyric-sheet footer, which a desktop player hides behind this
-     * menu rather than showing on the sleeve column. Only the player's menu
-     * passes it; a song menu raised from a list has no player to overflow into.
+     * The player's own menu, rather than one raised from a list. It is the one
+     * that offers the lyric sheet, its translation and its romanisation, and it
+     * does not offer to queue the track that is already playing.
      */
-    onMore: (() -> Unit)? = null,
+    fromPlayer: Boolean = false,
     /**
      * Show the lyric sheet, or the queue, in the player's content column. The
      * desktop player keeps these two as rows on this menu rather than glyphs in
@@ -169,6 +169,14 @@ internal fun DesktopSongMenuFor(
     showingTranslation: Boolean = false,
     /** Whether the playing track has lyrics to translate; false greys the row out. */
     translateEnabled: Boolean = true,
+    /**
+     * Asks the shared player to switch the lyric sheet between the originals and
+     * their romanisation — the same pair of letters the sheet's own footer holds,
+     * but on this menu the row sits under [onTranslate].
+     */
+    onRomanize: (() -> Unit)? = null,
+    showingRomanization: Boolean = false,
+    romanizeEnabled: Boolean = true,
     /**
      * The lyrics providers to offer, each with its search state and whether it
      * is the one the sheet shows now. Passing a non-empty list with an
@@ -223,12 +231,15 @@ internal fun DesktopSongMenuFor(
         onSleepTimer = { actions.onSleepTimer(it); close() },
         onSleepAfterTrack = { actions.onSleepAfterTrack(); close() },
         onShare = { actions.onShare(song); close() },
-        onMore = onMore,
+        fromPlayer = fromPlayer,
         onShowLyrics = onShowLyrics?.let { { it(); close() } },
         onShowQueue = onShowQueue?.let { { it(); close() } },
         onTranslate = onTranslate?.let { { it(); close() } },
         showingTranslation = showingTranslation,
         translateEnabled = translateEnabled,
+        onRomanize = onRomanize?.let { { it(); close() } },
+        showingRomanization = showingRomanization,
+        romanizeEnabled = romanizeEnabled,
         // Neither closes the menu: the provider submenu shows the search running
         // and the state landing on each row, which closing would hide.
         lyricsProviders = lyricsProviders,
@@ -267,8 +278,8 @@ internal fun DesktopSongMenu(
     onSleepTimer: (Int?) -> Unit,
     onSleepAfterTrack: () -> Unit,
     onShare: () -> Unit,
-    /** Opens the player's own overflow; null on a menu raised from a list. */
-    onMore: (() -> Unit)? = null,
+    /** The player's menu for the track it is playing, rather than one raised from a list. */
+    fromPlayer: Boolean = false,
     /** Show the lyric sheet / the queue; null when there is no player to switch. */
     onShowLyrics: (() -> Unit)? = null,
     onShowQueue: (() -> Unit)? = null,
@@ -276,6 +287,10 @@ internal fun DesktopSongMenu(
     onTranslate: (() -> Unit)? = null,
     showingTranslation: Boolean = false,
     translateEnabled: Boolean = true,
+    /** Show the romanisation of the lyric sheet; null when there is no player to switch. */
+    onRomanize: (() -> Unit)? = null,
+    showingRomanization: Boolean = false,
+    romanizeEnabled: Boolean = true,
     /** Providers to offer with their search state; empty hides the "Lyrics provider" row. */
     lyricsProviders: List<DesktopLyricsProviderRow> = emptyList(),
     onSelectLyricsProvider: ((String) -> Unit)? = null,
@@ -340,12 +355,12 @@ internal fun DesktopSongMenu(
             return@DesktopMenuSurface
         }
         if (pickingSleepTimer) {
-            DesktopMenuHeader("Sleep timer") { pickingSleepTimer = false }
+            DesktopMenuHeader(DesktopStrings["sleep_timer", "Sleep timer"]) { pickingSleepTimer = false }
             DesktopMenuDivider()
             DesktopSleepTimer.presets.forEach { minutes ->
                 DesktopMenuRow(
                     icon = BitChordIcons.Clock,
-                    label = "$minutes minutes",
+                    label = DesktopStrings.format("d_count_minutes", minutes, fallback = "$minutes minutes"),
                     selected = sleepTimerMinutes == minutes && !sleepAfterTrack,
                 ) { onSleepTimer(minutes) }
             }
@@ -415,8 +430,13 @@ internal fun DesktopSongMenu(
             )
         }
         DesktopMenuRow(Icons.Rounded.Radio, DesktopStrings["start_radio", "Start radio"], onClick = onStartRadio)
-        DesktopMenuRow(BitChordIcons.ListStart, DesktopStrings["play_next", "Play next"], onClick = onPlayNext)
-        DesktopMenuRow(BitChordIcons.ListEnd, DesktopStrings["add_to_queue", "Add to queue"], onClick = onAddToQueue)
+        // The player's menu is raised over the track already playing, so it has
+        // nothing to put it next to: the queue it would join is the one the
+        // player is showing. A list row keeps both.
+        if (!fromPlayer) {
+            DesktopMenuRow(BitChordIcons.ListStart, DesktopStrings["play_next", "Play next"], onClick = onPlayNext)
+            DesktopMenuRow(BitChordIcons.ListEnd, DesktopStrings["add_to_queue", "Add to queue"], onClick = onAddToQueue)
+        }
         // The queue the player's content column shows, brought up into this
         // transport block rather than left down in the lyrics group. Only the
         // player's menu passes it.
@@ -429,7 +449,9 @@ internal fun DesktopSongMenu(
         // and "Lyrics provider" opens the search box and the list of providers
         // with what each turned up, the sheet's old footer folded into this menu.
         // Only the player's menu passes any of them.
-        if (onShowLyrics != null || onTranslate != null || onSelectLyricsProvider != null || onSetLyricsOffset != null) {
+        if (onShowLyrics != null || onTranslate != null || onRomanize != null ||
+            onSelectLyricsProvider != null || onSetLyricsOffset != null
+        ) {
             DesktopMenuDivider()
             onShowLyrics?.let {
                 DesktopMenuRow(BitChordIcons.LyricsQuote, DesktopStrings["d_view_lyrics", "View lyrics"], onClick = it)
@@ -440,6 +462,15 @@ internal fun DesktopSongMenu(
                     label = DesktopStrings["d_translate", "Translate"],
                     enabled = translateEnabled,
                     selected = showingTranslation,
+                    onClick = it,
+                )
+            }
+            onRomanize?.let {
+                DesktopMenuRow(
+                    icon = Icons.Rounded.Language,
+                    label = DesktopStrings["d_romanize", "Romanize"],
+                    enabled = romanizeEnabled,
+                    selected = showingRomanization,
                     onClick = it,
                 )
             }
@@ -479,10 +510,6 @@ internal fun DesktopSongMenu(
         ) { pickingSleepTimer = true }
         if (!isOffline) {
             DesktopMenuRow(BitChordIcons.ArrowUpRight, DesktopStrings["share", "Share"], onClick = onShare)
-        }
-        onMore?.let {
-            DesktopMenuDivider()
-            DesktopMenuRow(BitChordIcons.Ellipsis, DesktopStrings["d_more", "More…"], onClick = it)
         }
     }
 }

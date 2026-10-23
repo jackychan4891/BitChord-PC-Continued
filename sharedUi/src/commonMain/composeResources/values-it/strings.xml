@@ -200,4 +200,9 @@
     <string name="search_library_empty">Cerca i brani nella cartella Musica locale.</string>
     <string name="search_library_hint">Brani, artisti e album</string>
     <string name="search_library_no_results">Nulla in Musica locale corrisponde a «%1$s».</string>
+    <string name="close_player">Chiudi il player</string>
+    <string name="exit_full_screen">Esci da schermo intero</string>
+    <string name="full_screen">Schermo intero</string>
+    <string name="previously_played">Riprodotte in precedenza</string>
+    <string name="top_result">Risultato migliore</string>
 </resources>

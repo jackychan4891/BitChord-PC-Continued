@@ -7,7 +7,6 @@ import com.music.bitchord.data.lyrics.LyricsSource
 import com.music.bitchord.data.lyrics.withBackgroundVocals
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.durationMillis
-import java.util.concurrent.ConcurrentHashMap
 
 /** A track's lyrics and which provider they came from, by its label. */
 data class DesktopLyrics(val source: String, val lines: List<LyricLine>) {
@@ -51,7 +50,18 @@ object DesktopLyricsClient {
 
     private class Cached(val createdAt: Long, val result: Result<DesktopLyrics>)
 
-    private val cache = ConcurrentHashMap<String, Cached>()
+    /**
+     * The last few hundred lookups.
+     *
+     * A full set of words is tens of kilobytes of strings and a long session touches thousands of
+     * tracks, so an unbounded map here quietly holds a chunk of the heap; the tracks worth a second
+     * lookup are the ones near the front, which is exactly what an access-ordered map keeps.
+     */
+    private const val CACHE_ENTRIES = 300
+
+    private val cache = object : LinkedHashMap<String, Cached>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Cached>) = size > CACHE_ENTRIES
+    }
 
     /**
      * The track's lyrics from the configured providers — or, with [only], from that one provider,
@@ -86,7 +96,9 @@ object DesktopLyricsClient {
         // query, and a cache keyed only on the id would hand back the earlier
         // automatic answer and look as though the search had done nothing.
         val cacheKey = "${song.videoId}|$durationMs|${song.title}|${song.artist}|${only.orEmpty()}"
-        cache[cacheKey]?.takeIf { System.currentTimeMillis() - it.createdAt < CACHE_TTL_MS }?.let { return it.result }
+        // Reads reorder the map, so the access is guarded rather than the map being concurrent.
+        synchronized(cache) { cache[cacheKey] }
+            ?.takeIf { System.currentTimeMillis() - it.createdAt < CACHE_TTL_MS }?.let { return it.result }
 
         // A downloaded or local file carries its own words; asking servers for a string already
         // on disk is a round trip, and it is why a download showed nothing offline.
@@ -112,7 +124,7 @@ object DesktopLyricsClient {
                 Result.success(DesktopLyrics(found.source.label, found.lines))
             }
         }
-        cache[cacheKey] = Cached(System.currentTimeMillis(), result)
+        synchronized(cache) { cache[cacheKey] = Cached(System.currentTimeMillis(), result) }
         return result
     }
 

@@ -200,4 +200,9 @@
     <string name="search_library_empty">Tìm các bài hát trong thư mục Nhạc cục bộ của bạn.</string>
     <string name="search_library_hint">Bài hát, nghệ sĩ và album</string>
     <string name="search_library_no_results">Không có gì trong Nhạc cục bộ khớp với “%1$s”.</string>
+    <string name="close_player">Đóng trình phát</string>
+    <string name="exit_full_screen">Thoát toàn màn hình</string>
+    <string name="full_screen">Toàn màn hình</string>
+    <string name="previously_played">Đã phát trước đó</string>
+    <string name="top_result">Kết quả hàng đầu</string>
 </resources>

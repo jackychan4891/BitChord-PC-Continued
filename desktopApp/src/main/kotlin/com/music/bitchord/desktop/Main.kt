@@ -19,6 +19,10 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import bitchord.desktopapp.generated.resources.Res
 import bitchord.desktopapp.generated.resources.logo
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.SingletonImageLoader
+import coil3.memory.MemoryCache
 import java.awt.Dimension
 import java.awt.Rectangle
 import java.awt.Toolkit
@@ -26,6 +30,15 @@ import kotlin.math.roundToInt
 import org.jetbrains.compose.resources.painterResource
 
 fun main() {
+    // Covers are asked for at fixed sizes and the app already keeps its own decoded-artwork cache,
+    // so Coil's quarter-of-the-heap default is a second, larger copy of the same bitmaps. Capped
+    // low, because everything that needs to survive a scroll is on disk instead.
+    SingletonImageLoader.setSafe(object : SingletonImageLoader.Factory {
+        override fun newImageLoader(context: PlatformContext): ImageLoader =
+            ImageLoader.Builder(context)
+                .memoryCache(MemoryCache.Builder().maxSizeBytes(COIL_MEMORY_CACHE_BYTES).build())
+                .build()
+    })
     DesktopWindowVisibility.install()
     // The player is the phone's, from the shared UI module; this is what it reads underneath.
     PlayerPlatform.install(DesktopPlayerHost)
@@ -178,3 +191,6 @@ private fun desktopMain() = application {
 
 private const val MIN_WINDOW_WIDTH_DP = 900.0
 private const val MIN_WINDOW_HEIGHT_DP = 600.0
+
+/** A few screens of covers; the rest is on disk in [DesktopArtworkCache]. */
+private const val COIL_MEMORY_CACHE_BYTES = 32L * 1024 * 1024

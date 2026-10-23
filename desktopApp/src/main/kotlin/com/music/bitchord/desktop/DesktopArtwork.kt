@@ -41,14 +41,20 @@ import java.security.MessageDigest
 internal object DesktopArtworkCache {
 
     /**
-     * A sixth of the heap, within reason.
+     * A twelfth of the heap, within reason. Capped at 24 MB: decoded covers are also uploaded as
+     * GPU textures by the window, so the bitmaps kept here are paid for twice over.
+     *
      *
      * Derived rather than fixed so the budget still makes sense against whatever `-Xmx` the
      * launcher was given, and clamped at both ends so a small heap still caches something and a
      * large one does not decide it may hold half a gigabyte of thumbnails.
+     *
+     * The ceiling is deliberately well below what the launcher's heap can hold: a decoded cover is
+     * ~0.6 MB, so this is a few screens of artwork rather than a whole browsing history, and the
+     * history is what the disk copy below is for. Only the decode repeats.
      */
     internal val budgetBytes: Long =
-        (Runtime.getRuntime().maxMemory() / 6).coerceIn(32L * 1024 * 1024, 128L * 1024 * 1024)
+        (Runtime.getRuntime().maxMemory() / 12).coerceIn(12L * 1024 * 1024, 24L * 1024 * 1024)
 
     /** Four bytes a pixel, which is what every format here decodes to. */
     private val images = DesktopByteBudgetLru<ImageBitmap>(budgetBytes) {
@@ -185,7 +191,9 @@ fun DesktopArtwork(
         }
     }
     if (bitmap == null) {
-        Box(modifier.background(Color(0xFF2B2B35)))
+        // Translucent rather than an opaque dark plate: with the ambient artwork glow on, a filled
+        // square waiting for its bytes reads as a black border around nothing.
+        Box(modifier.background(Color.White.copy(alpha = 0.06f)))
     } else {
         Image(
             painter = BitmapPainter(bitmap!!),

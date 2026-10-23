@@ -75,6 +75,9 @@ internal fun DesktopAppleSidebar(
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
     val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled
     val hidden by DesktopSidebarVisibility.hidden.collectAsState()
+    // The copy below comes from DesktopStrings rather than Compose resources, so nothing in this
+    // scope would otherwise notice the language changing.
+    DesktopStrings.language.collectAsState()
     Column(
         Modifier.width(260.dp).fillMaxHeight().background(Color(0x99262628))
             .border(0.5.dp, Color.White.copy(alpha = 0.05f)),
@@ -83,33 +86,35 @@ internal fun DesktopAppleSidebar(
             Box(Modifier.fillMaxSize().padding(start = 10.dp), contentAlignment = Alignment.CenterStart) { DesktopWindowButtons() }
         }
         Column(Modifier.fillMaxWidth().weight(1f).padding(start = 16.dp, top = 8.dp, end = 16.dp)) {
-            DesktopSidebarItem(BitChordIcons.Search, "Search", destination == DesktopDestination.SEARCH) { onDestinationSelected(DesktopDestination.SEARCH) }
-            DesktopSidebarItem(BitChordIcons.Home, "Home", destination == DesktopDestination.LISTEN_NOW) { onDestinationSelected(DesktopDestination.LISTEN_NOW) }
-            DesktopSidebarItem(BitChordIcons.Explore, "New", destination == DesktopDestination.EXPLORE) { onDestinationSelected(DesktopDestination.EXPLORE) }
-            DesktopSidebarItem(Icons.Rounded.Radio, "Radio", destination == DesktopDestination.RADIO) { onDestinationSelected(DesktopDestination.RADIO) }
+            DesktopSidebarItem(BitChordIcons.Search, DesktopDestination.SEARCH.label, destination == DesktopDestination.SEARCH) { onDestinationSelected(DesktopDestination.SEARCH) }
+            DesktopSidebarItem(BitChordIcons.Home, DesktopDestination.LISTEN_NOW.label, destination == DesktopDestination.LISTEN_NOW) { onDestinationSelected(DesktopDestination.LISTEN_NOW) }
+            DesktopSidebarItem(BitChordIcons.Explore, DesktopDestination.EXPLORE.label, destination == DesktopDestination.EXPLORE) { onDestinationSelected(DesktopDestination.EXPLORE) }
+            DesktopSidebarItem(Icons.Rounded.Radio, DesktopDestination.RADIO.label, destination == DesktopDestination.RADIO) { onDestinationSelected(DesktopDestination.RADIO) }
             Spacer(Modifier.height(24.dp))
-            DesktopSidebarSection("Library")
-            DesktopSidebarItem(BitChordIcons.Library, "Library", destination == DesktopDestination.LIBRARY && libraryShelf == null) {
+            DesktopSidebarSection(DesktopStrings["library", "Library"])
+            DesktopSidebarItem(BitChordIcons.Library, DesktopDestination.LIBRARY.label, destination == DesktopDestination.LIBRARY && libraryShelf == null) {
                 onDestinationSelected(DesktopDestination.LIBRARY)
             }
-            if ("dest:HISTORY" !in hidden) DesktopSidebarItem(BitChordIcons.Clock, "Recently Played", destination == DesktopDestination.HISTORY,
-                onHide = { DesktopSidebarVisibility.hide("dest:HISTORY", "Recently Played") }) { onDestinationSelected(DesktopDestination.HISTORY) }
+            if ("dest:HISTORY" !in hidden) DesktopSidebarItem(BitChordIcons.Clock, DesktopDestination.HISTORY.label, destination == DesktopDestination.HISTORY,
+                onHide = { DesktopSidebarVisibility.hide("dest:HISTORY", DesktopDestination.HISTORY.label) }) { onDestinationSelected(DesktopDestination.HISTORY) }
             // The four shortcuts are the page's own shelf list, so they hide like destinations do.
-            if ("shelf:Artists" !in hidden) DesktopSidebarItem(Icons.Outlined.Mic, "Artists", destination == DesktopDestination.LIBRARY && libraryShelf == "Artists",
-                onHide = { DesktopSidebarVisibility.hide("shelf:Artists", "Artists") }) { onOpenLibraryShelf("Artists") }
-            if ("shelf:Albums" !in hidden) DesktopSidebarItem(Icons.Outlined.Album, "Albums", destination == DesktopDestination.LIBRARY && libraryShelf == "Albums",
-                onHide = { DesktopSidebarVisibility.hide("shelf:Albums", "Albums") }) { onOpenLibraryShelf("Albums") }
-            if ("shelf:Songs" !in hidden) DesktopSidebarItem(BitChordIcons.MusicNote, "Songs", destination == DesktopDestination.LIBRARY && libraryShelf == "Songs",
-                onHide = { DesktopSidebarVisibility.hide("shelf:Songs", "Songs") }) { onOpenLibraryShelf("Songs") }
-            if ("shelf:Made for You" !in hidden) DesktopSidebarItem(Icons.Outlined.Person, "Made for You", destination == DesktopDestination.LIBRARY && libraryShelf == "Made for You",
-                onHide = { DesktopSidebarVisibility.hide("shelf:Made for You", "Made for You") }) { onOpenLibraryShelf("Made for You") }
+            // The shelf itself is named in English — only the copy shown to the user is translated.
+            if ("shelf:Artists" !in hidden) DesktopSidebarItem(Icons.Outlined.Mic, DesktopStrings["artists", "Artists"], destination == DesktopDestination.LIBRARY && libraryShelf == "Artists",
+                onHide = { DesktopSidebarVisibility.hide("shelf:Artists", DesktopStrings["artists", "Artists"]) }) { onOpenLibraryShelf("Artists") }
+            if ("shelf:Albums" !in hidden) DesktopSidebarItem(Icons.Outlined.Album, DesktopStrings["albums", "Albums"], destination == DesktopDestination.LIBRARY && libraryShelf == "Albums",
+                onHide = { DesktopSidebarVisibility.hide("shelf:Albums", DesktopStrings["albums", "Albums"]) }) { onOpenLibraryShelf("Albums") }
+            if ("shelf:Songs" !in hidden) DesktopSidebarItem(BitChordIcons.MusicNote, DesktopStrings["songs", "Songs"], destination == DesktopDestination.LIBRARY && libraryShelf == "Songs",
+                onHide = { DesktopSidebarVisibility.hide("shelf:Songs", DesktopStrings["songs", "Songs"]) }) { onOpenLibraryShelf("Songs") }
+            if ("shelf:Made for You" !in hidden) DesktopSidebarItem(Icons.Outlined.Person, DesktopStrings["d_made_for_you", "Made for You"], destination == DesktopDestination.LIBRARY && libraryShelf == "Made for You",
+                onHide = { DesktopSidebarVisibility.hide("shelf:Made for You", DesktopStrings["d_made_for_you", "Made for You"]) }) { onOpenLibraryShelf("Made for You") }
             val downloads by DesktopDownloadQueue.active.collectAsState()
-            if ("dest:DOWNLOADS" !in hidden) DesktopSidebarItem(BitChordIcons.Download, if (downloads.isEmpty()) "Downloads" else "Downloads · ${downloads.size}", destination == DesktopDestination.DOWNLOADS,
-                onHide = { DesktopSidebarVisibility.hide("dest:DOWNLOADS", "Downloads") }) { onDestinationSelected(DesktopDestination.DOWNLOADS) }
-            if ("dest:LOCAL_MUSIC" !in hidden) DesktopSidebarItem(BitChordIcons.Library, "Local Music", destination == DesktopDestination.LOCAL_MUSIC,
-                onHide = { DesktopSidebarVisibility.hide("dest:LOCAL_MUSIC", "Local Music") }) { onDestinationSelected(DesktopDestination.LOCAL_MUSIC) }
+            val downloadsLabel = DesktopStrings["downloads", "Downloads"]
+            if ("dest:DOWNLOADS" !in hidden) DesktopSidebarItem(BitChordIcons.Download, if (downloads.isEmpty()) downloadsLabel else "$downloadsLabel · ${downloads.size}", destination == DesktopDestination.DOWNLOADS,
+                onHide = { DesktopSidebarVisibility.hide("dest:DOWNLOADS", downloadsLabel) }) { onDestinationSelected(DesktopDestination.DOWNLOADS) }
+            if ("dest:LOCAL_MUSIC" !in hidden) DesktopSidebarItem(BitChordIcons.Library, DesktopDestination.LOCAL_MUSIC.label, destination == DesktopDestination.LOCAL_MUSIC,
+                onHide = { DesktopSidebarVisibility.hide("dest:LOCAL_MUSIC", DesktopDestination.LOCAL_MUSIC.label) }) { onDestinationSelected(DesktopDestination.LOCAL_MUSIC) }
             Spacer(Modifier.height(24.dp))
-            DesktopSidebarSection("Playlists")
+            DesktopSidebarSection(DesktopStrings["playlists", "Playlists"])
             LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 12.dp)) {
                 items(accountPlaylists.filterNot { "account:${it.browseId}" in hidden }, key = { "account:${it.browseId}" }) { playlist ->
                     DesktopSidebarItem(Icons.AutoMirrored.Rounded.PlaylistPlay, playlist.title, openedCollectionId == playlist.browseId,
@@ -120,7 +125,11 @@ internal fun DesktopAppleSidebar(
                         onHide = { DesktopSidebarVisibility.hide("local:${playlist.id}", playlist.title) }) { onOpenLocalPlaylist(playlist) }
                 }
             }
-            if (hidden.isNotEmpty()) DesktopSidebarRestoreRow(hidden)
+            if (hidden.isNotEmpty()) DesktopHiddenRestoreRow(
+                hidden = hidden,
+                onShow = DesktopSidebarVisibility::show,
+                onShowAll = DesktopSidebarVisibility::showAll,
+            )
         }
         HorizontalDivider(Modifier.padding(top = 8.dp), thickness = 0.5.dp, color = Color.White.copy(alpha = 0.08f))
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, top = 12.dp, end = 12.dp, bottom = 20.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -134,12 +143,12 @@ internal fun DesktopAppleSidebar(
                         if (accountAvatar != null) DesktopArtwork(accountAvatar, Modifier.fillMaxSize())
                         else Icon(Icons.Rounded.AccountCircle, null, tint = DesktopAppleSecondary)
                     }
-                    Text("Account", Modifier.weight(1f).padding(start = 8.dp), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = DesktopAppleText, maxLines = 1)
+                    Text(DesktopStrings["d_account", "Account"], Modifier.weight(1f).padding(start = 8.dp), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = DesktopAppleText, maxLines = 1)
                     Icon(BitChordIcons.ChevronRight, null, tint = DesktopAppleSecondary, modifier = Modifier.size(16.dp))
                 }
             } else {
                 Box(Modifier.clip(RoundedCornerShape(16.dp)).background(DesktopAccent).clickable(onClick = onOpenAccounts).padding(horizontal = 14.dp, vertical = 5.dp)) {
-                    Text("Sign In", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                    Text(DesktopStrings["sign_in", "Sign in"], fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                 }
                 Spacer(Modifier.weight(1f))
             }
@@ -152,7 +161,7 @@ internal fun DesktopAppleSidebar(
                     .hoverable(settingsHover).clickable(onClick = onOpenSettings),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(BitChordIcons.CogIcon, "Settings", tint = if (settingsOpen) DesktopAccent else if (overSettings) DesktopAppleText else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
+                Icon(BitChordIcons.CogIcon, DesktopDestination.SETTINGS.label, tint = if (settingsOpen) DesktopAccent else if (overSettings) DesktopAppleText else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -190,6 +199,8 @@ internal fun DesktopAppleFloatingPlayer(
     val mixPulse = rememberMixPulse({ mixBlend.value }, enabled = true, slow = true)
     val currentProgress by rememberUpdatedState(progress)
     var volumeMenu by remember { mutableStateOf(false) }
+    // Recompose when the app language changes; see the note in DesktopAppleSidebar.
+    DesktopStrings.language.collectAsState()
     BoxWithConstraints(Modifier.widthIn(max = 668.dp).fillMaxWidth().padding(horizontal = 6.dp)) {
         val narrow = maxWidth < 550.dp
         // Frosted from the page scrolling under it, the way the other floating
@@ -206,21 +217,32 @@ internal fun DesktopAppleFloatingPlayer(
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (!narrow) MiniPlayerButton({ onShuffleChange(!shuffle) }, enabled = !liveRadio, width = 24.dp) {
-                        Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(16.dp))
+                        Icon(BitChordIcons.Shuffle, DesktopStrings["shuffle", "Shuffle"], tint = if (shuffle) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(16.dp))
                     }
                     MiniPlayerButton(onPrevious, enabled = previousEnabled && song != null) {
-                        Icon(BitChordIcons.TransportPrevious, "Previous", tint = DesktopAppleText, modifier = Modifier.size(24.dp))
+                        Icon(BitChordIcons.TransportPrevious, DesktopStrings["widget_previous", "Previous"], tint = DesktopAppleText, modifier = Modifier.size(24.dp))
                     }
                     MiniPlayerButton(onPlayPause, enabled = song != null) {
                         if (isLoading) CircularProgressIndicator(Modifier.size(19.dp), color = DesktopAppleText, strokeWidth = 2.dp)
-                        else Icon(if (isPlaying) BitChordIcons.TransportPause else BitChordIcons.TransportPlay, if (isPlaying) "Pause" else "Play", tint = DesktopAppleText, modifier = Modifier.size(26.dp))
+                        else Icon(if (isPlaying) BitChordIcons.TransportPause else BitChordIcons.TransportPlay,
+                            if (isPlaying) DesktopStrings["pause", "Pause"] else DesktopStrings["play", "Play"],
+                            tint = DesktopAppleText, modifier = Modifier.size(26.dp))
                     }
                     MiniPlayerButton(if (liveRadio) onStopRadio else onNext, enabled = song != null) {
-                        Icon(if (liveRadio) Icons.Rounded.Stop else BitChordIcons.TransportNext, if (liveRadio) "Stop radio" else "Next", tint = DesktopAppleText, modifier = Modifier.size(24.dp))
+                        Icon(if (liveRadio) Icons.Rounded.Stop else BitChordIcons.TransportNext,
+                            if (liveRadio) DesktopStrings["d_stop_radio", "Stop radio"] else DesktopStrings["widget_next", "Next"],
+                            tint = DesktopAppleText, modifier = Modifier.size(24.dp))
                     }
+                    // The same filled loop glyph the main player draws. The outlined
+                    // one plus a separate "1" caption used to sit as two objects, and
+                    // the caption overlapped the loop.
                     if (!narrow) MiniPlayerButton({ onRepeatModeChange(repeatMode.next()) }, enabled = !liveRadio, width = 24.dp) {
-                        if (repeatMode == DesktopRepeatMode.ONE) Text("1", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = DesktopAccent)
-                        else Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopAppleSecondary else DesktopAccent, modifier = Modifier.size(16.dp))
+                        Icon(
+                            imageVector = if (repeatMode == DesktopRepeatMode.ONE) BitChordIcons.TransportRepeatOne else BitChordIcons.TransportRepeat,
+                            contentDescription = repeatMode.menuLabel(),
+                            tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopAppleSecondary else DesktopAccent,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                 }
                 MiniPlayerLcd(
@@ -250,28 +272,29 @@ internal fun DesktopAppleFloatingPlayer(
                     ) {
                         val others = Modifier.graphicsLayer { alpha = 1f - reveal }
                         MiniPlayerButton({ onToggleLike?.invoke() }, enabled = onToggleLike != null && song != null && !liveRadio, width = 24.dp, modifier = others) {
-                            Icon(if (liked) BitChordIcons.StarFilled else BitChordIcons.Star, if (liked) "Remove from Favourites" else "Favourite",
+                            Icon(if (liked) BitChordIcons.StarFilled else BitChordIcons.Star,
+                                if (liked) DesktopStrings["d_remove_from_favourites", "Remove from Favourites"] else DesktopStrings["d_favourite", "Favourite"],
                                 tint = if (liked) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
                         }
                         MiniPlayerButton(onOpenLyrics, enabled = !liveRadio, width = 24.dp, modifier = others) {
-                            Icon(BitChordIcons.LyricsQuote, "Lyrics", tint = if (sidePanel == DesktopSidePanel.LYRICS) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(17.dp))
+                            Icon(BitChordIcons.LyricsQuote, DesktopStrings["open_lyrics", "Lyrics"], tint = if (sidePanel == DesktopSidePanel.LYRICS) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(17.dp))
                         }
                         MiniPlayerButton(onOpenQueue, enabled = !liveRadio, width = 24.dp, modifier = others) {
-                            Icon(BitChordIcons.Queue, "Up Next", tint = if (sidePanel == DesktopSidePanel.QUEUE) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(17.dp))
+                            Icon(BitChordIcons.Queue, DesktopStrings["up_next", "Up next"], tint = if (sidePanel == DesktopSidePanel.QUEUE) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(17.dp))
                         }
                         Box {
                             MiniPlayerButton({ volumeMenu = true }, width = 24.dp, modifier = Modifier.hoverable(volumeHover)) {
-                                Icon(BitChordIcons.TransportVolume(volume), "Volume and audio output", tint = if (sliderOpen) DesktopAppleText else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
+                                Icon(BitChordIcons.TransportVolume(volume), DesktopStrings["d_volume_and_audio_output", "Volume and audio output"], tint = if (sliderOpen) DesktopAppleText else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
                             }
                             DesktopDropdownMenu(volumeMenu, { volumeMenu = false }) {
                                 if (narrow && !liveRadio) {
-                                    DropdownMenuItem(text = { Text(if (shuffle) "Shuffle On" else "Shuffle Off") }, onClick = { onShuffleChange(!shuffle) })
-                                    DropdownMenuItem(text = { Text("Repeat ${repeatMode.label()}") }, onClick = { onRepeatModeChange(repeatMode.next()) })
+                                    DropdownMenuItem(text = { Text(if (shuffle) DesktopStrings["shuffle_on", "Shuffle on"] else DesktopStrings["shuffle_off", "Shuffle off"]) }, onClick = { onShuffleChange(!shuffle) })
+                                    DropdownMenuItem(text = { Text(repeatMode.menuLabel()) }, onClick = { onRepeatModeChange(repeatMode.next()) })
                                 }
                                 Box(Modifier.width(180.dp).padding(horizontal = 16.dp)) {
                                     DesktopThinSlider(volume, onVolumeChange, idleHeight = 4.dp, activeHeight = 8.dp)
                                 }
-                                DropdownMenuItem(text = { Text(if (liveRadio) "Radio uses system default output" else "Audio Output") }, enabled = !liveRadio,
+                                DropdownMenuItem(text = { Text(if (liveRadio) DesktopStrings["d_radio_system_output", "Radio uses system default output"] else DesktopStrings["audio_output", "Audio output"]) }, enabled = !liveRadio,
                                     leadingIcon = { Icon(Icons.Rounded.Headphones, null) }, onClick = { volumeMenu = false; onOpenAudioOutput() })
                             }
                         }
@@ -320,6 +343,7 @@ private fun MiniPlayerLcd(
     val stripHover = remember { MutableInteractionSource() }
     val overStrip by stripHover.collectIsHoveredAsState()
     var scrub by remember { mutableStateOf<Float?>(null) }
+    DesktopStrings.language.collectAsState()
     val scrubbing = seekable && (overStrip || scrub != null)
     val focus by animateFloatAsState(if (scrubbing) 1f else 0f, tween(100), label = "lcdScrub")
     Box(modifier.height(44.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpenNowPlaying)) {
@@ -328,7 +352,7 @@ private fun MiniPlayerLcd(
             else Image(painterResource(Res.drawable.logo_mark), "BitChord", Modifier.padding(5.dp).size(24.dp))
             Column(Modifier.weight(1f).padding(start = 8.dp)) {
                 Text(song?.title ?: "BitChord", color = DesktopAppleText, fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(song?.artist ?: "Not Playing", color = DesktopAppleSecondary, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(song?.artist ?: DesktopStrings["d_not_playing", "Not Playing"], color = DesktopAppleSecondary, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         // The bar rides the bottom of the pill rather than the middle of the

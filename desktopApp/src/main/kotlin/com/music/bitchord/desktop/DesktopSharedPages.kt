@@ -186,6 +186,47 @@ internal object DesktopSidebarVisibility {
 }
 
 /**
+ * Which radio stations the listener has tucked away, and what each was called.
+ *
+ * The same courtesy the sidebar pays its rows: a station that is never opened can be hidden from the
+ * radio page and brought back from the "N hidden" row at its foot. The key is the station's own id —
+ * `bbc_radio_one`, `ra.1345165422` — which is stable across a page reload, and the label is kept
+ * beside it so a station Apple stops listing can still be named rather than shown as a bare id.
+ */
+internal object DesktopRadioVisibility {
+
+    private val persistence = DesktopPersistence()
+    private val json = Json { ignoreUnknownKeys = true }
+    private val serializer = MapSerializer(String.serializer(), String.serializer())
+
+    private val _hidden = MutableStateFlow(load())
+
+    /** Hidden station id to the name it was hidden under. */
+    val hidden: StateFlow<Map<String, String>> = _hidden
+
+    fun isHidden(key: String) = key in _hidden.value
+
+    fun hide(key: String, label: String) {
+        if (key.isBlank()) return
+        save(_hidden.value + (key to label))
+    }
+
+    fun show(key: String) = save(_hidden.value - key)
+
+    fun showAll() = save(emptyMap())
+
+    private fun save(value: Map<String, String>) {
+        _hidden.value = value
+        persistence.saveString(KEY, json.encodeToString(serializer, value))
+    }
+
+    private fun load(): Map<String, String> =
+        runCatching { json.decodeFromString(serializer, persistence.string(KEY, "{}")) }.getOrDefault(emptyMap())
+
+    private const val KEY = "radio_hidden"
+}
+
+/**
  * Opens a page's menus where the pointer is.
  *
  * The shared pages say "this row was held" — a long press on the phone, a

@@ -204,4 +204,5 @@
     <string name="member_since">Member since</string>
     <string name="import_spotify">Import Spotify</string>
     <string name="import_spotify_subtitle">From a playlist link</string>
+    <string name="top_result">Top result</string>
 </resources>

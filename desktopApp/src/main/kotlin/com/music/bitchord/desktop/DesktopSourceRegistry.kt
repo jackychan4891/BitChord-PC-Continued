@@ -166,6 +166,21 @@ internal object DesktopSourceRegistry {
     }
 
     /**
+     * The one source the listener named, when they named one that could answer at all.
+     *
+     * Naming a source that is switched off, or that the quality ceiling will not let through, is
+     * left as the whole list: the panel only offers sources that can serve, so a list arriving here
+     * without the named one means the track moved between settings, and the ordinary ranking is
+     * the answer to that rather than a failure to find.
+     */
+    private fun List<SourceAdapter>.askedOf(sourceId: String?, song: Song): List<SourceAdapter> {
+        if (sourceId == null) return this
+        val only = firstOrNull { it.config.id == sourceId } ?: return this
+        DesktopTrackLog.log("  '${song.title}' is set to play from ${only.descriptor.name}")
+        return listOf(only)
+    }
+
+    /**
      * For a download, minus any addon whose manifest says `allowDownloads: 0`, so the next source
      * in line serves the file.
      */
@@ -201,8 +216,28 @@ internal object DesktopSourceRegistry {
         excludedSourceId: String? = null,
         /** A download: addons that said `allowDownloads: 0` are left out, see [adapters]. */
         forDownload: Boolean = false,
+    ): Result<DesktopStream> {
+        // A source named in the player's track-information panel is asked alone, and the walk it
+        // would otherwise have been part of is what plays the track when that source turns out to
+        // have no copy of it. Refusing to play is not a reasonable answer to a preference.
+        val chosen = DesktopSourcePins.of(song.videoId)
+        val asked = runResolve(song, quality, excludedSourceId, forDownload, chosen)
+        if (chosen == null || asked.isSuccess) return asked
+        DesktopTrackLog.log(
+            "  ${configs().firstOrNull { it.id == chosen }?.displayName ?: chosen} has no copy of " +
+                "'${song.title}', playing it from the usual order",
+        )
+        return runResolve(song, quality, excludedSourceId, forDownload, null)
+    }
+
+    private suspend fun runResolve(
+        song: Song,
+        quality: String?,
+        excludedSourceId: String?,
+        forDownload: Boolean,
+        chosenSourceId: String?,
     ): Result<DesktopStream> = runCatching {
-        val available = playbackAdapters(quality, forDownload)
+        val available = playbackAdapters(quality, forDownload).askedOf(chosenSourceId, song)
         val moduleReference = DesktopModuleSource.parseTrack(song.videoId)
         val addonReference = DesktopAddonSource.parseTrack(song.videoId)
         val owned = when {
@@ -296,7 +331,7 @@ internal object DesktopSourceRegistry {
         quality: String?,
         excludedSourceId: String? = null,
     ): Result<DesktopLiveResolution> = runCatching {
-        val available = playbackAdapters(quality)
+        val available = playbackAdapters(quality).askedOf(DesktopSourcePins.of(song.videoId), song)
         val owned = available.any { it.owns(song) } ||
             DesktopModuleSource.parseTrack(song.videoId) != null ||
             song.videoId.startsWith("jiosaavn:")
@@ -439,8 +474,12 @@ internal object DesktopSourceRegistry {
         DesktopAddonSource.clearCompletedTrackCalls()
         val playingRank = configs().firstOrNull { it.id == playing?.sourceId }?.kind?.rank
             ?: DesktopSourceKind.YOUTUBE.rank
+        // A named source is asked for the better copy, and nothing else is: an upgrade that arrives
+        // from a source the listener just turned down is not an upgrade they asked for.
+        val chosen = DesktopSourcePins.of(song.videoId)
         val better = playbackAdapters(quality).filter {
-            it.config.kind != DesktopSourceKind.YOUTUBE && it.config.kind.rank < playingRank
+            it.config.kind != DesktopSourceKind.YOUTUBE && it.config.kind.rank < playingRank &&
+                (chosen == null || it.config.id == chosen)
         }
         if (better.isEmpty()) return null
         DesktopTrackLog.log(

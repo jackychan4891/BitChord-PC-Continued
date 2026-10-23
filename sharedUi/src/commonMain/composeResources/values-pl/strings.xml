@@ -200,4 +200,9 @@
     <string name="search_library_empty">Szukaj utworów w folderze muzyki lokalnej.</string>
     <string name="search_library_hint">Utwory, wykonawcy i albumy</string>
     <string name="search_library_no_results">NIC w muzyce lokalnej nie pasuje do „%1$s”.</string>
+    <string name="close_player">Zamknij odtwarzacz</string>
+    <string name="exit_full_screen">Opuść pełny ekran</string>
+    <string name="full_screen">Pełny ekran</string>
+    <string name="previously_played">Wcześniejsze utwory</string>
+    <string name="top_result">Najlepszy wynik</string>
 </resources>

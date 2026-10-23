@@ -200,4 +200,9 @@
     <string name="search_library_empty">आपके लोकल म्यूज़िक फ़ोल्डर के गाने खोजें.</string>
     <string name="search_library_hint">गाने, कलाकार और एल्बम</string>
     <string name="search_library_no_results">लोकल म्यूज़िक में “%1$s” से मेल खाता कुछ नहीं.</string>
+    <string name="close_player">प्लेयर बंद करें</string>
+    <string name="exit_full_screen">फ़ुलस्क्रीन से बाहर निकलें</string>
+    <string name="full_screen">फ़ुलस्क्रीन</string>
+    <string name="previously_played">पहले चले</string>
+    <string name="top_result">टॉप रिज़ल्ट</string>
 </resources>

@@ -86,6 +86,7 @@ import com.music.bitchord.ui.components.landscapeCardWidth
 import com.music.bitchord.ui.components.madeForYouCardWidth
 import com.music.bitchord.ui.components.recentlyPlayedSkeleton
 import com.music.bitchord.ui.components.thumbnailBorder
+import com.music.bitchord.ui.components.thumbnailPlaceholder
 import com.music.bitchord.ui.player.MeshGradientBackground
 import com.music.bitchord.ui.player.MeshPalette
 
@@ -373,7 +374,7 @@ fun CompactTrackRow(
                     .size(48.dp)
                     .clip(RoundedCornerShape(7.dp))
                     .thumbnailBorder(RoundedCornerShape(7.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .thumbnailPlaceholder(RoundedCornerShape(7.dp)),
             )
             if (isCurrent && isPlaying) SearchPlayingBars(Modifier.align(Alignment.Center))
         }
@@ -698,7 +699,7 @@ private fun LandscapeCard(
                 .aspectRatio(LANDSCAPE_CARD_RATIO)
                 .clip(RoundedCornerShape(12.dp))
                 .thumbnailBorder(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .thumbnailPlaceholder(RoundedCornerShape(12.dp)),
         ) {
             AsyncImage(
                 model = item.thumbnailUrl.artworkAt(HEADER_ART_PX),
@@ -764,7 +765,7 @@ private fun MadeForYouCard(
                 .aspectRatio(MADE_FOR_YOU_RATIO)
                 .clip(RoundedCornerShape(12.dp))
                 .thumbnailBorder(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .thumbnailPlaceholder(RoundedCornerShape(12.dp)),
         ) {
             AsyncImage(
                 model = item.thumbnailUrl.artworkAt(HEADER_ART_PX),
@@ -1006,7 +1007,7 @@ internal fun ShelfCard(
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .thumbnailBorder(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                        .thumbnailPlaceholder(RoundedCornerShape(12.dp)),
                 ) {
                     AsyncImage(
                         model = item.thumbnailUrl.artworkAt(CARD_ART_PX),

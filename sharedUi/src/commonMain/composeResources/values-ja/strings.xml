@@ -200,4 +200,9 @@
     <string name="search_library_empty">ローカル音楽フォルダ内の曲を検索します。</string>
     <string name="search_library_hint">曲・アーティスト・アルバム</string>
     <string name="search_library_no_results">ローカル音楽に「%1$s」に一致するものはありません。</string>
+    <string name="close_player">プレイヤーを閉じる</string>
+    <string name="exit_full_screen">フルスクリーンを終了</string>
+    <string name="full_screen">フルスクリーン</string>
+    <string name="previously_played">前に再生した曲</string>
+    <string name="top_result">トップ結果</string>
 </resources>

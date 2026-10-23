@@ -7,6 +7,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class DesktopRadioClientTest {
     private fun item(id: String, prefix: String = DesktopAppleBrowseClient.RADIO_PREFIX) =
@@ -44,6 +45,21 @@ class DesktopRadioClientTest {
         ))
         assertEquals(1, shelves.size)
         assertEquals(1, shelves.single().items.size)
+    }
+
+    @Test
+    fun bbcStationsCarryTheirOwnWorldwidePool() {
+        DesktopBbcRadio.stations.forEach { station ->
+            // The `ww` pools are the ones the BBC publishes for listeners outside the United
+            // Kingdom; a station that ever pointed anywhere else would be reaching for the UK-only
+            // ones, which this app has no business asking for.
+            assertTrue(station.streamUrl.contains("/live/ww/"), station.streamUrl)
+            assertTrue(DesktopRadioClient.isStation(DesktopBbcRadio.shelfItem(station)))
+            val live = assertNotNull(DesktopRadioClient.station(DesktopBbcRadio.shelfItem(station)))
+            assertEquals(station.service, live.id)
+            assertEquals("hls", live.transport)
+            assertEquals(station.streamUrl, DesktopRadioClient.resolveStream(live).getOrThrow().url)
+        }
     }
 
     @Test

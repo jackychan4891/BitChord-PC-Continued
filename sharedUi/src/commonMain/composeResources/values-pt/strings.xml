@@ -200,4 +200,9 @@
     <string name="search_library_empty">Pesquise as músicas da sua pasta de Música local.</string>
     <string name="search_library_hint">Músicas, artistas e álbuns</string>
     <string name="search_library_no_results">Nada na Música local corresponde a “%1$s”.</string>
+    <string name="close_player">Fechar o player</string>
+    <string name="exit_full_screen">Sair da tela cheia</string>
+    <string name="full_screen">Tela cheia</string>
+    <string name="previously_played">Tocados anteriormente</string>
+    <string name="top_result">Melhor resultado</string>
 </resources>

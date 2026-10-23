@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.data.lyrics.LyricLine
@@ -27,8 +28,13 @@ import org.jetbrains.compose.resources.stringResource
 // player lays out in its right-hand pane, so a line lights, a row drags and a
 // translation arrives exactly as they do in there.
 
-/** How far above the column's middle the sung line rests — near the top of the pane, per the drawn mark. */
-private const val SIDE_COLUMN_CENTRE_RAISE = 0.45f
+/**
+ * How far above the column's middle the sung line rests. Half the viewport is
+ * the top of the pane: the sheet has to arrive already there, rather than being
+ * placed at a middle and glided up once the viewport measures itself. The main
+ * player keeps its own, smaller raise and is not touched by this.
+ */
+private const val SIDE_COLUMN_CENTRE_RAISE = 0.5f
 
 /**
  * The lyric sheet with its provider line and its romanization and translation
@@ -87,6 +93,10 @@ fun LyricsSidePanel(
                 // this column drops the "Lyrics by …" line but keeps its two
                 // toggles either side of the gap it leaves.
                 showStatus = false,
+                // The sheet this column reads from is placed at its top, so the line standing in
+                // for it must wait there too: centred, it is a caption that starts in the middle
+                // of the column and moves up when the lookup returns.
+                placeholderAlign = Alignment.TopCenter,
                 romanizationToggle = {
                     RomanizationToggleButton(
                         state = lyricsTranslation.romanizationState,

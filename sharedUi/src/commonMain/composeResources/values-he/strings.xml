@@ -200,4 +200,9 @@
     <string name="search_library_empty">מחפש את השירים בתיקיית המוזיקה המקומית שלכם.</string>
     <string name="search_library_hint">שירים, אמנים ואלבומים</string>
     <string name="search_library_no_results">אין דבר במוזיקה המקומית שתואם ל-„%1$s”.</string>
+    <string name="close_player">סגירת הנגן</string>
+    <string name="exit_full_screen">יציאה ממסך מלא</string>
+    <string name="full_screen">מסך מלא</string>
+    <string name="previously_played">התנגנו קודם</string>
+    <string name="top_result">התוצאה המובילה</string>
 </resources>

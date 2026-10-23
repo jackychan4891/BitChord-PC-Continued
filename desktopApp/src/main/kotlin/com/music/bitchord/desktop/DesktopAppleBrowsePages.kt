@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -232,15 +233,27 @@ internal fun DesktopAppleRadioPage(
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
     onRetry: () -> Unit,
+    playingRadioKey: String?,
+    onSchedule: (ShelfItem) -> Unit,
 ) {
+    // A station hidden from its tile is left off the page, and the row at the foot names everything
+    // hidden so nothing is stranded. The page is what watches the store: hiding happens on a tile, and
+    // only a read here recomposes the shelves that follow it.
+    val hiddenStations by DesktopRadioVisibility.hidden.collectAsState()
+    val rows = remember(shelves, hiddenStations) {
+        (shelves as? UiState.Success)?.let { DesktopRadioClient.visible(it.data) }.orEmpty()
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(DesktopPageGround()),
         contentPadding = contentPadding,
     ) {
-        item { AppleBrowsePageTitle("Radio") }
+        item { AppleBrowsePageTitle(DesktopStrings["d_radio", "Radio"]) }
         item {
             Text(
-                "Free live stations, streamed in-app on your system default audio output.",
+                DesktopStrings[
+                    "d_radio_page_note",
+                    "Free live stations, streamed in-app on your system default audio output.",
+                ],
                 color = DesktopAppleSecondary,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = DesktopPageGutter, vertical = 16.dp),
@@ -250,8 +263,22 @@ internal fun DesktopAppleRadioPage(
             UiState.Loading -> item { AppleBrowseShelfSkeleton() }
             is UiState.Error -> item { AppleBrowseError(shelves.message, onRetry) }
             is UiState.Success -> {
-                items(shelves.data) { shelf -> DesktopAppleShelf(shelf, onItemClick, onItemMenu) }
-                if (shelves.data.isEmpty()) item { AppleBrowseEmpty("No radio content to show yet.") }
+                items(rows) { shelf -> DesktopAppleShelf(shelf, onItemClick, onItemMenu, playingRadioKey, onSchedule) }
+                if (rows.isEmpty()) item {
+                    AppleBrowseEmpty(
+                        if (hiddenStations.isEmpty()) "No radio content to show yet."
+                        else DesktopStrings["d_radio_all_hidden", "Every station on this page is hidden."],
+                    )
+                }
+                if (hiddenStations.isNotEmpty()) item {
+                    Box(Modifier.padding(horizontal = DesktopPageGutter + 8.dp, vertical = 18.dp)) {
+                        DesktopHiddenRestoreRow(
+                            hidden = hiddenStations,
+                            onShow = DesktopRadioVisibility::show,
+                            onShowAll = DesktopRadioVisibility::showAll,
+                        )
+                    }
+                }
             }
         }
     }
@@ -304,7 +331,11 @@ private fun AppleBrowseHeroShelf(
                 val menu = { onItemMenu(item) }
                 Column(
                     Modifier.width(457.dp).hoverable(interaction)
-                        .longPressMenuClickable(onClick = { onItemClick(item, shelf.title) }, onLongClick = menu)
+                        .longPressMenuClickable(
+                            onClick = { onItemClick(item, shelf.title) },
+                            onLongClick = menu,
+                            highlight = false,
+                        )
                         .contextClick(menu),
                 ) {
                     Text(
@@ -356,13 +387,19 @@ private fun AppleBrowseRecentShelf(
         DesktopScrollableRow(spacing = 20.dp) {
             items(shelf.items) { item ->
                 Column(
-                    Modifier.width(172.dp).clip(RoundedCornerShape(8.dp)).desktopHoverFill()
+                    Modifier.width(172.dp)
                         .longPressMenuClickable(
                             onClick = { onItemClick(item, shelf.title) },
                             onLongClick = { onItemMenu(item) },
+                            highlight = false,
                         ).contextClick { onItemMenu(item) },
                 ) {
-                    DesktopArtwork(item.thumbnailUrl, Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)), px = 400)
+                    // Only the cover lights up, not the caption under it.
+                    DesktopArtwork(
+                        item.thumbnailUrl,
+                        Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)).desktopHoverFill(corner = 8.dp),
+                        px = 400,
+                    )
                     AppleBrowseCaptions(item.title, item.subtitle)
                 }
             }
@@ -391,6 +428,10 @@ internal fun DesktopAppleCollectionPage(
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
     onRetry: () -> Unit,
+    /** The artist name in a track row, which opens their page — as Apple's table does. */
+    onArtistClick: ((String) -> Unit)? = null,
+    /** The track whose Album cell was picked; the caller resolves the release page. */
+    onAlbumClick: ((ShelfItem) -> Unit)? = null,
 ) {
     val shelves = (state as? UiState.Success)?.data.orEmpty()
     val tracks = shelves.flatMap { it.items }.filter { it.isAppleSong() }
@@ -468,7 +509,7 @@ internal fun DesktopAppleCollectionPage(
             is UiState.Success -> {
                 item(key = "table-head") { AppleTrackTableHead() }
                 items(tracks, key = { it.browseId.orEmpty() + "|" + it.title }) { track ->
-                    AppleTrackTableRow(track, title, onItemClick, onItemMenu)
+                    AppleTrackTableRow(track, title, onItemClick, onItemMenu, onArtistClick, onAlbumClick)
                 }
                 if (tracks.isEmpty()) item { AppleBrowseEmpty("No music to show yet.") }
                 extras.forEachIndexed { index, shelf ->
@@ -583,6 +624,8 @@ private fun AppleTrackTableRow(
     shelfTitle: String,
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
+    onArtistClick: ((String) -> Unit)? = null,
+    onAlbumClick: ((ShelfItem) -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -593,6 +636,8 @@ private fun AppleTrackTableRow(
     )
     val detail = DesktopAppleBrowseClient.trackDetail(track)
     val menu = { onItemMenu(track) }
+    val artistName = track.subtitle
+    val albumName = detail?.album.orEmpty()
     Column(Modifier.padding(horizontal = DesktopPageGutter)) {
         // The hairline above a row, which goes when the pointer is on it, so a hovered row reads as
         // one block rather than two halves.
@@ -637,23 +682,35 @@ private fun AppleTrackTableRow(
                     modifier = Modifier.weight(1f).padding(end = 8.dp),
                 )
             }
+            // The Artist and Album cells are links, as they are on Apple's own table: the inner
+            // clickable takes the press, so the row's own play action is left alone.
             Text(
-                track.subtitle,
+                artistName,
                 color = DesktopAppleSecondary,
                 fontSize = 12.sp,
                 lineHeight = 15.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(25.25f).padding(end = 10.dp),
+                modifier = Modifier.weight(25.25f).padding(end = 10.dp)
+                    .then(
+                        if (onArtistClick != null && artistName.isNotBlank()) {
+                            Modifier.clickable { onArtistClick(artistName) }
+                        } else Modifier,
+                    ),
             )
             Text(
-                detail?.album.orEmpty(),
+                albumName,
                 color = DesktopAppleSecondary,
                 fontSize = 12.sp,
                 lineHeight = 15.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(25.25f).padding(end = 16.dp),
+                modifier = Modifier.weight(25.25f).padding(end = 16.dp)
+                    .then(
+                        if (onAlbumClick != null && albumName.isNotBlank()) {
+                            Modifier.clickable { onAlbumClick(track) }
+                        } else Modifier,
+                    ),
             )
             Box(Modifier.weight(13f).fillMaxHeight()) {
                 Text(
@@ -724,10 +781,13 @@ private fun AppleBrowseStations(seeds: List<Song>, onStartStation: (Song) -> Uni
         DesktopScrollableRow(spacing = 20.dp) {
             items(seeds, key = { it.videoId }) { song ->
                 Column(
-                    Modifier.width(172.dp).clip(RoundedCornerShape(8.dp)).desktopHoverFill()
-                        .clickable { onStartStation(song) },
+                    Modifier.width(172.dp).desktopQuietClick { onStartStation(song) },
                 ) {
-                    DesktopArtwork(song.thumbnailUrl, Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)), px = 400)
+                    DesktopArtwork(
+                        song.thumbnailUrl,
+                        Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)).desktopHoverFill(corner = 8.dp),
+                        px = 400,
+                    )
                     AppleBrowseCaptions("${song.artist} Station", song.title)
                 }
             }
@@ -741,10 +801,11 @@ private fun AppleBrowseWideShelf(shelf: HomeShelf, onItemClick: (ShelfItem, Stri
         DesktopAppleHeading(shelf.title, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp))
         DesktopScrollableRow(spacing = 20.dp) {
             items(shelf.items) { item ->
-                Column(Modifier.width(220.dp).desktopHoverFill().clickable { onItemClick(item, shelf.title) }) {
+                Column(Modifier.width(220.dp).desktopQuietClick { onItemClick(item, shelf.title) }) {
                     DesktopArtwork(
                         item.thumbnailUrl,
-                        Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp)),
+                        Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
+                            .desktopHoverFill(corner = 8.dp),
                         px = 800,
                     )
                     AppleBrowseCaptions(item.title, item.subtitle)
@@ -851,7 +912,7 @@ private fun AppleBrowseError(message: String, onRetry: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter, vertical = 28.dp)) {
         Text(message, color = DesktopAppleSecondary, fontSize = 13.sp)
         TextButton(onClick = onRetry, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Retry", color = DesktopAppleText, fontSize = 13.sp)
+            Text(DesktopStrings["retry", "Retry"], color = DesktopAppleText, fontSize = 13.sp)
         }
     }
 }

@@ -1,5 +1,8 @@
 package com.music.bitchord.desktop
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.Locale
@@ -38,8 +41,16 @@ object DesktopStrings {
 
     private val english: Map<String, String> by lazy { catalogue("en") }
 
-    @Volatile
-    private var current: Map<String, String> = emptyMap()
+    /**
+     * The catalogue in force.
+     *
+     * Snapshot state rather than a plain volatile field, because the whole app reads it through
+     * [get] at composition time: a `var` no composable can subscribe to means switching language
+     * re-labels only whatever happened to recompose for another reason, and the sidebar, the
+     * player menus and the settings rows keep their old wording indefinitely — which is what
+     * "some menus remain untranslated" looked like from the outside.
+     */
+    private var current: Map<String, String> by mutableStateOf(emptyMap())
 
     private val _language = MutableStateFlow(DesktopPersistence().string(KEY_LANGUAGE))
 

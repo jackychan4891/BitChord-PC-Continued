@@ -43,7 +43,7 @@ class DesktopAppleBrowseClientTest {
             "items":[{"titleLinks":[{"title":"Top 100: UK"}],"subtitleLinks":[{"title":"Apple Music"}],
             "artwork":{"dictionary":{"url":"$image"}},"contentDescriptor":{"kind":"playlist","url":"$room"}}]}""").single()
         assertEquals("Top 100: UK", shelf.items.single().title)
-        assertEquals(image.replace("{w}", "600").replace("{h}", "600").replace("{c}", "bb").replace("{f}", "jpg"), shelf.items.single().thumbnailUrl)
+        assertEquals(image.replace("{w}", "400").replace("{h}", "400").replace("{c}", "bb").replace("{f}", "jpg"), shelf.items.single().thumbnailUrl)
         assertEquals("Charts", DesktopAppleBrowseClient.categories(listOf(shelf)).single().title)
     }
 

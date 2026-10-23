@@ -37,6 +37,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.ui.haptics.Haptic
@@ -559,11 +560,15 @@ private fun SongRowContent(
                 AsyncImage(
                     model = com.music.bitchord.ui.player.rememberRemoteArtworkUrl(song)?.artworkAt(ROW_ART_PX),
                     contentDescription = null,
+                    // A video's thumbnail is wider than tall and letterboxed in black of its own
+                    // accord; fitted into the square, that letterboxing is the border people see
+                    // once the page goes transparent for the ambient glow. Cropped, it is gone.
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .matchParentSize()
                         .clip(RoundedCornerShape(8.dp))
                         .thumbnailBorder(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                        .thumbnailPlaceholder(RoundedCornerShape(8.dp)),
                 )
                 if (searchPlayingStyle && isCurrent && isPlaying) {
                     SearchPlayingBars(Modifier.align(Alignment.Center))

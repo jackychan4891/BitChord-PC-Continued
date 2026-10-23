@@ -2,6 +2,7 @@ package com.music.bitchord.desktop
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -122,3 +123,21 @@ internal fun Modifier.desktopHoverFill(
 
 private val ROW_HOVER_CORNER = 7.dp
 private const val ROW_HOVER_ALPHA = 0.07f
+
+/**
+ * A click that reaches the whole tile but lights none of it.
+ *
+ * The words under a cover start the same thing the cover does, so they take the click. Left to the
+ * plain [clickable], though, the pointer crossing them painted a wash over the whole box — a
+ * rectangle of text answering as though it were the picture. The tiles put their highlight on the
+ * artwork with [desktopHoverFill]; this keeps the click without a second one.
+ */
+@Composable
+internal fun Modifier.desktopQuietClick(enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
+    clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        enabled = enabled,
+        onClick = onClick,
+    )
+}

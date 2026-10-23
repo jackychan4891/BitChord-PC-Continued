@@ -59,7 +59,7 @@ internal object DesktopAppleBrowseClient {
      * page's track lockup rather than from anything the player needs, so they are kept beside the
      * shelf item instead of being pressed into it.
      */
-    data class TrackDetail(val album: String?, val durationMs: Long?)
+    data class TrackDetail(val album: String?, val albumUrl: String?, val durationMs: Long?)
 
     private val details = object : LinkedHashMap<String, TrackDetail>(256, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TrackDetail>) = size > 1024
@@ -67,10 +67,14 @@ internal object DesktopAppleBrowseClient {
 
     fun trackDetail(item: ShelfItem): TrackDetail? = synchronized(details) { details[item.browseId.orEmpty()] }
 
-    private fun rememberDetail(browseId: String, album: String?, durationMs: Long?) {
-        if (album == null && durationMs == null) return
-        synchronized(details) { details[browseId] = TrackDetail(album, durationMs) }
+    private fun rememberDetail(browseId: String, album: String?, albumUrl: String?, durationMs: Long?) {
+        if (album == null && albumUrl == null && durationMs == null) return
+        synchronized(details) { details[browseId] = TrackDetail(album, albumUrl, durationMs) }
     }
+
+    /** Apple writes link URLs both absolute and relative to the storefront. */
+    private fun absolutePageUrl(url: String): String? =
+        (if (url.startsWith("/")) "https://music.apple.com$url" else url).takeIf(::validPageUrl)
 
     /** Revalidating a kept page happens behind the page the user is already reading. */
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -149,6 +153,7 @@ internal object DesktopAppleBrowseClient {
                 rememberDetail(
                     browseId,
                     entry.text("album"),
+                    entry.text("albumUrl"),
                     (entry["durationMs"] as? JsonPrimitive)?.longOrNull,
                 )
                 ShelfItem(
@@ -190,6 +195,7 @@ internal object DesktopAppleBrowseClient {
                                         item.browseId?.let { put("browseId", it) }
                                         val detail = trackDetail(item)
                                         detail?.album?.let { put("album", it) }
+                                        detail?.albumUrl?.let { put("albumUrl", it) }
                                         detail?.durationMs?.let { put("durationMs", it) }
                                     }
                                 }
@@ -284,7 +290,18 @@ internal object DesktopAppleBrowseClient {
         val caption = if (prefix == RADIO_PREFIX) "Live Radio · Free" else artist
         val artwork = item.obj("artwork")?.obj("dictionary")?.text("url")
             ?.replace("{w}", "$ARTWORK_PX")?.replace("{h}", "$ARTWORK_PX")?.replace("{c}", "bb")?.replace("{f}", "jpg")
-        rememberDetail(browseId, item.names("tertiaryLinks").joinToString(", ").ifBlank { null }, (item["duration"] as? JsonPrimitive)?.longOrNull)
+        // The album the cell names is also a link on most pages, which is what makes the Album
+        // column openable rather than only readable.
+        val albumUrl = item.array("tertiaryLinks")
+            .mapNotNull { (it as? JsonObject)?.text("url") }
+            .mapNotNull(::absolutePageUrl)
+            .firstOrNull()
+        rememberDetail(
+            browseId,
+            item.names("tertiaryLinks").joinToString(", ").ifBlank { null },
+            albumUrl,
+            (item["duration"] as? JsonPrimitive)?.longOrNull,
+        )
         return ShelfItem(title, caption, artwork, null, browseId)
     }
 
@@ -309,9 +326,6 @@ internal object DesktopAppleBrowseClient {
 }
 
 internal fun ShelfItem.isAppleSong(): Boolean = browseId?.startsWith(DesktopAppleBrowseClient.SONG_PREFIX) == true
-
-/** A live station, which Apple lays out as a square with its words beside it. */
-internal fun ShelfItem.isAppleRadio(): Boolean = browseId?.startsWith(DesktopAppleBrowseClient.RADIO_PREFIX) == true
 
 /** A song either way it arrives: Apple's own chart track, or the music source's. */
 internal fun ShelfItem.isSongLine(): Boolean = isAppleSong() || (!videoId.isNullOrBlank() && browseId.isNullOrBlank())

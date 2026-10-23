@@ -200,4 +200,9 @@
     <string name="search_library_empty">Busca las canciones de tu carpeta de Música local.</string>
     <string name="search_library_hint">Canciones, artistas y álbumes</string>
     <string name="search_library_no_results">Nada en Música local coincide con “%1$s”.</string>
+    <string name="close_player">Cerrar el reproductor</string>
+    <string name="exit_full_screen">Salir de pantalla completa</string>
+    <string name="full_screen">Pantalla completa</string>
+    <string name="previously_played">Reproducidos antes</string>
+    <string name="top_result">Mejor resultado</string>
 </resources>

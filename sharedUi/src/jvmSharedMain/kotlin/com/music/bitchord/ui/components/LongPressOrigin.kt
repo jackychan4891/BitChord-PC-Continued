@@ -1,7 +1,9 @@
 package com.music.bitchord.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -86,10 +88,19 @@ fun Modifier.longPressMenuClickable(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
     enabled: Boolean = true,
+    /**
+     * Whether the press and hover wash is drawn over this node.
+     *
+     * A tile whose caption answers the same click as its cover — the desktop shelves — says false,
+     * and paints the wash on the artwork alone. Left true, a pointer crossing the words lights the
+     * whole card, which is a box rather than the picture inside it.
+     */
+    highlight: Boolean = true,
 ): Modifier {
     val capture = remember { HoldCapture() }
     val graphicsContext = LocalGraphicsContext.current
     val scope = rememberCoroutineScope()
+    val source = remember { MutableInteractionSource() }
     val longClick = onLongClick?.let { held ->
         {
             capture.coordinates?.takeIf { it.isAttached }?.let { coordinates ->
@@ -103,7 +114,13 @@ fun Modifier.longPressMenuClickable(
     }
     return this
         .onPlaced { capture.coordinates = it }
-        .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = longClick)
+        .combinedClickable(
+            interactionSource = source,
+            indication = if (highlight) LocalIndication.current else null,
+            enabled = enabled,
+            onLongClick = longClick,
+            onClick = onClick,
+        )
         .drawWithContent {
             drawContent()
             // Reading the counter is what subscribes this draw to a hold;

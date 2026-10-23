@@ -393,6 +393,12 @@ class DesktopPlaybackEngine(
     private fun watchForUpgrade(song: Song, pending: Deferred<DesktopStream?>) {
         upgradeJob = scope.launch {
             try {
+                // Nothing lossless is opened while the seam is under way. Opening the second
+                // decoder is a network read, a demuxer and a flush of the sink all at once, and
+                // landing that on top of an Automix blend is the stutter it was blamed for. The
+                // trade is that the better copy arrives a few seconds after the blend rather than
+                // being installed mid-fade — which the audio thread defers anyway.
+                awaitMixEnd()
                 if (take(song, runCatching { pending.await() }.getOrNull())) return@launch
                 // The live race takes the first copy that beats YouTube, so a slower lossless
                 // source can still be searching when a lossy one wins — and a source that failed
@@ -403,6 +409,8 @@ class DesktopPlaybackEngine(
                     if (current.streamFormat?.isLossless == true) return@launch
                     if (current.streamFormat?.isDolbyAtmos == true) return@launch
                     if (DesktopMusicSources.ceiling(null) != DesktopAudioQuality.LOSSLESS) return@launch
+                    awaitMixEnd()
+                    if (_state.value.song?.videoId != song.videoId) return@launch
                     val playing = DesktopStream(url = "", format = current.streamFormat ?: DesktopStreamFormat(), sourceId = current.streamSourceId)
                     if (take(song, DesktopMusicSources.upgradeFor(song, playing))) return@launch
                 }
@@ -979,7 +987,8 @@ class DesktopPlaybackEngine(
 
     /** The playing track's heard position, on the sink's played-frame count; see [play]. */
     private val playhead = DesktopPlayhead()
-    private var fadeRemaining = 0
+    /** Volatile so the quality search can ask whether a seam is running; see [blending]. */
+    @Volatile private var fadeRemaining = 0
     private var fadeTotal = 0
     /** Fade plus any echo/roll/reverb tail. [fadeTotal] remains the nominal fader span. */
     private var transitionTotal = 0
@@ -1040,6 +1049,48 @@ class DesktopPlaybackEngine(
     private var deferredNext: Song? = null
     private var hasDeferredNext = false
 
+    /**
+     * A better rendition that came in mid-mix, kept open for [replayDeferredUpgrade] to install
+     * once the seam is behind it. Audio-thread only, like [deferredNext].
+     */
+    private var deferredUpgrade: Track? = null
+
+    /**
+     * An incoming deck re-opened mid-mix, held for [replayDeferredUpcoming] to install once the
+     * seam is behind it. The deck a live blend is reading is the one this command replaces, so
+     * installing it inside the window is the gap heard just before the next song starts.
+     *
+     * Audio-thread only, like [deferredUpgrade].
+     */
+    private var deferredUpcoming: Track? = null
+
+    /**
+     * Whether the seam is under way: a crossfade blending, the display already moved onto the
+     * incoming song, or a beat-matched skip waiting for the beat it opens on.
+     *
+     * Installing a better rendition inside this window flushes the sink and reopens the playing
+     * deck with the two songs half-mixed — the stutter heard just before the next track starts.
+     * Quality waits for [endBlend] instead, and is replayed by [replayDeferredUpgrade].
+     *
+     * The incoming deck on its own is not a reason to wait. It is armed up to [ADDON_ARM_LEAD_MS]
+     * ahead of its transition, and an upgrade held for all of that belongs to a song the listener
+     * has been blended past by the time the seam arrives.
+     *
+     * Every field it reads is volatile, so the quality search — which is what waits on this —
+     * may ask from its own thread.
+     */
+    private fun blending(): Boolean =
+        blendActive || fadeRemaining > 0 || displaySwitched || pendingSkipPlan != null
+
+    /** Holds a quality search until the seam is behind it; the caller re-checks its song after. */
+    private suspend fun awaitMixEnd() {
+        var polls = 0
+        while (blending() && polls < BLEND_WAIT_POLLS) {
+            delay(BLEND_WAIT_POLL_MS)
+            polls++
+        }
+    }
+
     /** One filter over each side of a mix. */
     private val outgoingFilter = TransitionFilter()
     private val incomingFilter = TransitionFilter()
@@ -1053,7 +1104,7 @@ class DesktopPlaybackEngine(
      * [maybeStartCrossfade] arms it off the same tick that would start a natural transition, so the
      * two grids meet in phase instead of flamming into each other.
      */
-    private var pendingSkipPlan: TransitionPlan? = null
+    @Volatile private var pendingSkipPlan: TransitionPlan? = null
 
     private fun pump() {
         while (running.get()) {
@@ -1444,9 +1495,12 @@ class DesktopPlaybackEngine(
         publishTrack(incoming, isPlaying = !paused, positionUs = handoverUs)
         incomingSourceFrames = 0.0
         val announced = displaySwitched
+        // Retired before the blend is wound up: [endBlend] replays whatever upgrade the mix held
+        // back, and installing a deck is not something to do while the engine still thinks it is
+        // blending.
+        blendActive = false
         endBlend()
         nextDeckOpenId = null
-        blendActive = false
         if (!announced) onCrossfaded(incoming.song)
     }
 
@@ -1479,6 +1533,73 @@ class DesktopPlaybackEngine(
             deferredNext = null
         }
         if (had) prepareNext(next)
+        replayDeferredUpgrade()
+        replayDeferredUpcoming()
+    }
+
+    /**
+     * Places the incoming deck a transition held back — as the next deck still queued, as an
+     * upgrade of the song the blend has just moved into, or not at all.
+     *
+     * Past the guard on purpose: [blending] is what held the deck, and the state it reads is only
+     * retired around this call.
+     */
+    private fun replayDeferredUpcoming() {
+        val track = deferredUpcoming ?: return
+        deferredUpcoming = null
+        val latest = _state.value
+        when {
+            // The blend went into this very song, so the deck is now an upgrade of what is
+            // playing. [replaceCurrent] applies its own guard and its own re-cue.
+            latest.song?.videoId == track.song.videoId -> {
+                DesktopTrackLog.log("the mix is behind us: '${track.song.title}' upgrades instead")
+                replaceCurrent(track, playWhenReady = !paused)
+            }
+            // Still the song waiting its turn, and nothing has armed a deck for it since.
+            upcoming == null && nextSong?.videoId == track.song.videoId -> {
+                upcoming = track
+                nextDeckOpenId = track.song.videoId
+            }
+            // The queue moved on while the seam ran.
+            else -> {
+                DesktopTrackLog.log("dropping the held deck of '${track.song.title}': nobody is next for it")
+                track.decoder.close()
+                settleIncomingSearch(track.song)
+            }
+        }
+    }
+
+    /**
+     * Installs the better rendition [replaceCurrent] held back for the length of a transition, now
+     * that the seam is behind it — or drops it, when the blend went past the song it was for.
+     *
+     * Past the guard on purpose: [blending] is what held the deck, and the state it reads is only
+     * retired around this call.
+     */
+    private fun replayDeferredUpgrade() {
+        val track = deferredUpgrade ?: return
+        deferredUpgrade = null
+        val latest = _state.value
+        val stillPlaying = latest.song?.videoId == track.song.videoId
+        if (!stillPlaying || !DesktopMusicSources.worthSwapping(track.stream.format, latest.streamFormat)) {
+            DesktopTrackLog.log(
+                "dropping the upgrade of '${track.song.title}': " +
+                    (if (stillPlaying) "what is playing now is already the better copy" else "the mix went past it"),
+            )
+            track.decoder.close()
+            return
+        }
+        // The deck was opened against the playhead of the song as it stood when the upgrade was
+        // offered; the blend has moved on since, so cue it to where the track really is, as
+        // [swapStream] does for one that took its time resolving.
+        if (kotlin.math.abs(latest.positionMs - track.startUs / 1_000) >= UPGRADE_RESEEK_THRESHOLD_MS) {
+            track.decoder.seek(latest.positionMs * 1_000)
+            track.startUs = latest.positionMs * 1_000
+        }
+        DesktopTrackLog.log(
+            "installing the upgrade of '${track.song.title}' after the mix — ${track.stream.format.summary}",
+        )
+        installUpgrade(track, playWhenReady = latest.isPlaying)
     }
 
     /** Source time of audio written to the sink but not yet heard. */
@@ -1544,13 +1665,24 @@ class DesktopPlaybackEngine(
                 is Command.Start -> startTrack(command.track, command.playWhenReady)
                 is Command.ReplaceCurrent -> replaceCurrent(command.track, command.playWhenReady)
                 is Command.Upcoming -> {
-                    upcoming?.decoder?.close()
-                    upcoming = command.track
-                    nextDeckOpenId = command.track.song.videoId
+                    // The mix comes first. This deck is the one the blend is reading, and closing
+                    // it part-way through the seam is the stutter heard just before the next song
+                    // starts; the re-opened deck is held and installed by [replayDeferredUpcoming].
+                    if (blending()) {
+                        if (deferredUpcoming !== command.track) deferredUpcoming?.decoder?.close()
+                        deferredUpcoming = command.track
+                        DesktopTrackLog.log(
+                            "holding the re-opened deck of '${command.track.song.title}' until the mix ends",
+                        )
+                    } else {
+                        upcoming?.decoder?.close()
+                        upcoming = command.track
+                        nextDeckOpenId = command.track.song.videoId
+                    }
                 }
                 is Command.ReplaceUpcoming -> {
                     val track = command.track
-                    if (upcoming?.song?.videoId == track.song.videoId && fadeRemaining <= 0 && !displaySwitched) {
+                    if (upcoming?.song?.videoId == track.song.videoId && !blending()) {
                         DesktopTrackLog.log(
                             "incoming '${track.song.title}' upgraded to " +
                                 "${track.stream.format.summary.ifBlank { "another rendition" }} before its transition",
@@ -1572,10 +1704,14 @@ class DesktopPlaybackEngine(
                     upcoming = null
                     nextDeckOpenId = null
                     pendingSkipPlan = null
+                    // Nothing is coming, so a deck held for the seam has nowhere to go.
+                    deferredUpcoming?.decoder?.close()
+                    deferredUpcoming = null
                     val wasBlending = fadeRemaining > 0
                     fadeRemaining = 0
                     blendActive = false
-                    if (wasBlending) endBlend()
+                    // Nothing to wind up, but a skip's plan may still have been holding an upgrade.
+                    if (wasBlending) endBlend() else replayDeferredUpgrade()
                 }
                 Command.Flush -> {
                     current?.decoder?.close()
@@ -1694,12 +1830,21 @@ class DesktopPlaybackEngine(
      * vanished; with no incoming deck there could be neither a seekbar marker nor an Automix.
      */
     private fun replaceCurrent(track: Track, playWhenReady: Boolean) {
-        // An upgrade that arrives after the handoff has begun is no longer worth interrupting the
-        // audible transition. Keep the running pair intact and retire the unused decoder.
-        if (fadeRemaining > 0 || displaySwitched) {
-            track.decoder.close()
+        // An upgrade that arrives mid-mix is no longer worth interrupting the audible transition —
+        // and it must not be thrown away either: the deck is held here and installed by
+        // [replayDeferredUpgrade] once the crossfade is over, so the better rendition arrives after
+        // the seam instead of stuttering through it.
+        if (blending()) {
+            if (deferredUpgrade !== track) deferredUpgrade?.decoder?.close()
+            deferredUpgrade = track
+            DesktopTrackLog.log("holding the upgrade of '${track.song.title}' until the mix ends")
             return
         }
+        installUpgrade(track, playWhenReady)
+    }
+
+    /** The handover [replaceCurrent] defers: the playing deck is restarted on the better stream. */
+    private fun installUpgrade(track: Track, playWhenReady: Boolean) {
         sink.flush()
         framesWritten = sink.framesPlayed()
         activePlan = null
@@ -2168,8 +2313,10 @@ class DesktopPlaybackEngine(
     private fun closeEverything() {
         current?.decoder?.close()
         upcoming?.decoder?.close()
+        deferredUpgrade?.decoder?.close()
         current = null
         upcoming = null
+        deferredUpgrade = null
         sink.close()
     }
 

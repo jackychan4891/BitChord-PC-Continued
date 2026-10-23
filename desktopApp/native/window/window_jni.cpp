@@ -38,8 +38,17 @@ RECT g_fullscreen_target{};
 
 // Posted from Java to start a caption drag on the thread that owns the window; see frame_proc.
 constexpr UINT WM_BITCHORD_DRAG = WM_APP + 0x42;
-// SC_MOVE through the caption: the same move loop a real title bar starts.
-constexpr WPARAM SC_DRAGMOVE = SC_MOVE | HTCAPTION;
+
+/**
+ * lParam of a non-client mouse message: the cursor position, sixteen signed bits per axis, packed
+ * the way the system packs it. The move loop reads its starting point from here, so an inaccurate
+ * value makes the window jump under the pointer on the first move.
+ */
+LPARAM pack_cursor(POINT point) {
+    const auto x = static_cast<uint32_t>(static_cast<uint16_t>(point.x));
+    const auto y = static_cast<uint32_t>(static_cast<uint16_t>(point.y));
+    return static_cast<LPARAM>((y << 16) | x);
+}
 
 struct FindContext {
     const wchar_t* title;
@@ -83,13 +92,18 @@ LRESULT CALLBACK frame_proc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         // owns the outer frame, shadow and transitions; only the standard caption is removed.
         if (IsZoomed(window)) {
             // A frameless client normally expands to the maximized window rectangle, which can
-            // extend a few pixels into a taskbar docked at the top of the monitor. Use the monitor
-            // work area for the client portion so the first row is never hidden behind the taskbar.
+            // extend a few pixels into a taskbar docked at the top of the monitor. Take the work
+            // area away from the proposed client rather than replacing it: a window snapped to half
+            // a monitor reads as zoomed too, and handing its narrow client the full work width is
+            // what would make a snapped BitChord draw past its own edge.
             MONITORINFO monitor{sizeof(MONITORINFO)};
             const HMONITOR handle = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
             if (handle != nullptr && GetMonitorInfoW(handle, &monitor) != FALSE) {
                 auto* sizes = reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam);
-                sizes->rgrc[0] = monitor.rcWork;
+                RECT clamped{};
+                if (IntersectRect(&clamped, &sizes->rgrc[0], &monitor.rcWork) != FALSE) {
+                    sizes->rgrc[0] = clamped;
+                }
             }
         }
         return 0;
@@ -132,14 +146,21 @@ LRESULT CALLBACK frame_proc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     if (message == WM_BITCHORD_DRAG) {
         // Windows moves the window itself from here, as it does for a system caption: DWM slides
         // the composed surface, so nothing is exposed to be filled with the class brush (the white
-        // band an AWT setLocation per mouse event left along the edges), and Aero Snap and
-        // drag-to-restore come with it. The press that asked for this may already be over; a move
-        // loop started without the button down would follow the cursor until the next click.
+        // band an AWT setLocation per mouse event left along the edges). The press that asked for
+        // this may already be over; a move loop started without the button down would follow the
+        // cursor until the next click.
         const int primary = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
         if ((GetAsyncKeyState(primary) & 0x8000) == 0) return 0;
+        POINT start{};
+        if (GetCursorPos(&start) == FALSE) return 0;
         // AWT captured the mouse on the press; the move loop needs it back.
         ReleaseCapture();
-        DefWindowProcW(window, WM_SYSCOMMAND, SC_DRAGMOVE, 0);
+        // WM_NCLBUTTONDOWN, not SC_MOVE | HTCAPTION. The system command slides the window along
+        // with the pointer but never tells the shell that a caption was grabbed, so the snap logic
+        // stays asleep: an edge, a quarter, or the top of the monitor did nothing, and the snap
+        // layouts never opened. This is the message an actual title-bar press produces, and it
+        // arms all of that — and still restores a maximized window the way dragging one always did.
+        DefWindowProcW(window, WM_NCLBUTTONDOWN, HTCAPTION, pack_cursor(start));
         // The loop ate the release. AWT, and Compose behind it, still hold the press that started
         // the drag and would take the next one for part of it: a double click on the caption
         // never became one, and the first click anywhere after a drag went missing. Hand the

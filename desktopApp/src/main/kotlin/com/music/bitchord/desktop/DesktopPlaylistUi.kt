@@ -150,13 +150,17 @@ internal fun DesktopPlaylistDialog(
                     }
                 }
                 if (localPlaylists.isNotEmpty()) {
-                    item(key = "heading:local") { DialogSectionHeading("On this computer") }
+                    item(key = "heading:local") { DialogSectionHeading(DesktopStrings["d_on_this_computer", "On this computer"]) }
                     items(localPlaylists.size, key = { localPlaylists[it].id }) { index ->
                         val playlist = localPlaylists[index]
                         DialogAction(
                             BitChordIcons.Queue,
                             playlist.title,
-                            subtitle = "${playlist.songs.size} songs",
+                            subtitle = DesktopStrings.format(
+                                "d_count_songs",
+                                playlist.songs.size,
+                                fallback = "${playlist.songs.size} songs",
+                            ),
                             enabled = !busy,
                         ) { onPickLocal(playlist) }
                     }

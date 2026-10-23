@@ -70,9 +70,9 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -278,11 +278,18 @@ internal fun LandscapePlayerLayout(
     lyricsPane: @Composable (compact: Boolean) -> Unit,
     queuePane: @Composable () -> Unit,
     /**
-     * The corner button, as the web player has it: out of the player. Full screen
-     * is F11's and the two panels are the "…" menu's, so they have no glyphs here.
+     * The corner button, as the web player has it: out of the player.
      * A host with no window to close hands in nothing and draws nothing.
      */
     onDismiss: (() -> Unit)? = null,
+    /**
+     * The top-right glyph, which the desktop window supplies and a phone leaves
+     * null: full screen. It is the corner treatment the dismiss button already
+     * uses, so it reads as part of the window rather than as another row of
+     * controls.
+     */
+    onToggleFullScreen: (() -> Unit)? = null,
+    fullScreen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -448,6 +455,28 @@ internal fun LandscapePlayerLayout(
                         .align(Alignment.TopStart)
                         .offset(x = LANDSCAPE_CHROME_SIDE, y = LANDSCAPE_CHROME_TOP),
                 )
+            }
+
+            // The window's own, opposite it: the screen.
+            val raiseFullScreen = onToggleFullScreen
+            if (raiseFullScreen != null) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = -LANDSCAPE_CHROME_SIDE, y = LANDSCAPE_CHROME_TOP),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    raiseFullScreen?.let { toggle ->
+                        LandscapeChromeButton(
+                            icon = if (fullScreen) BitChordIcons.Minimize else BitChordIcons.Maximize,
+                            contentDescription = stringResource(
+                                if (fullScreen) Res.string.exit_full_screen else Res.string.full_screen,
+                            ),
+                            onClick = toggle,
+                            selected = fullScreen,
+                        )
+                    }
+                }
             }
 
             // The sheet closes from a downward drag anywhere nothing else
@@ -751,7 +780,11 @@ internal fun LandscapeCredits(
     /** The menu glyph is briefly the undo arrow after a quality upgrade. */
     showRevertCue: Boolean,
     onToggleLike: () -> Unit,
-    onOpenMenu: () -> Unit,
+    /**
+     * The song menu, or null on a host that raises it some other way. A phone,
+     * and a window too narrow for this shape, keep the dots.
+     */
+    onOpenMenu: (() -> Unit)?,
     onOpenAlbum: (String) -> Unit,
     /** Null browse id for anyone but the lead credit — see [NowPlayingScreen]. */
     onOpenArtist: (browseId: String?, name: String) -> Unit,
@@ -830,17 +863,19 @@ internal fun LandscapeCredits(
             )
             Spacer(Modifier.width(8.dp))
         }
-        Box(
-            Modifier.onGloballyPositioned { coordinates ->
-                onMenuBounds?.invoke(coordinates.boundsInRoot())
-            },
-        ) {
-            CircleGlyph(
-                icon = if (showRevertCue) Icons.AutoMirrored.Rounded.Undo else BitChordIcons.Ellipsis,
-                contentDescription = stringResource(Res.string.more),
-                onClick = onOpenMenu,
-                diameter = discSize,
-            )
+        if (onOpenMenu != null) {
+            Box(
+                Modifier.onGloballyPositioned { coordinates ->
+                    onMenuBounds?.invoke(coordinates.boundsInRoot())
+                },
+            ) {
+                CircleGlyph(
+                    icon = if (showRevertCue) Icons.AutoMirrored.Rounded.Undo else BitChordIcons.Ellipsis,
+                    contentDescription = stringResource(Res.string.more),
+                    onClick = onOpenMenu,
+                    diameter = discSize,
+                )
+            }
         }
     }
 }
@@ -1065,9 +1100,9 @@ internal fun LandscapeLyricsPane(
      */
     bottomInset: Dp = 0.dp,
     /**
-     * Whether the romanize / source / translate bar sits under the sheet. A
-     * desktop window folds it into the player's overflow and shows the sheet
-     * alone; every other caller keeps it.
+     * Whether the romanize / source / translate bar sits under the sheet. Every
+     * shape keeps it: the pair of toggles is how the sheet is read, and a window
+     * that hid them left the only way in through the player's overflow.
      */
     showBar: Boolean = true,
     /**
@@ -1077,6 +1112,13 @@ internal fun LandscapeLyricsPane(
      * line while keeping the two toggles either side of it.
      */
     showStatus: Boolean = true,
+    /**
+     * Where the placeholder stands before there are lines to draw. The player centres it in the
+     * sleeve, which is where its sung line rests. A column that reads from its top cannot: the
+     * sheet lands at the top the moment the lookup returns, so a centred caption is a line that
+     * visibly starts in the middle and moves up.
+     */
+    placeholderAlign: Alignment = Alignment.Center,
     modifier: Modifier = Modifier,
     panel: @Composable (Modifier) -> Unit,
 ) {
@@ -1099,7 +1141,7 @@ internal fun LandscapeLyricsPane(
                     style = MaterialTheme.typography.titleMedium,
                     color = Color.White.copy(alpha = 0.6f),
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.align(Alignment.Center),
+                    modifier = Modifier.align(placeholderAlign),
                 )
             }
         }
@@ -1110,30 +1152,40 @@ internal fun LandscapeLyricsPane(
         if (picking) {
             Box(Modifier.fillMaxWidth()) { pickBar() }
         } else if (showBar) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Fixed slots either side whether or not the toggles are drawn, so
-            // the status line stays centred as lyrics arrive.
-            Box(Modifier.size(34.dp)) { if (hasLyrics) romanizationToggle() }
-            Box(
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (showStatus) {
-                    LyricsStatusWithChange(
-                        status = status,
-                        onStatusClick = onStatusClick,
-                    )
+                // A disc's width of empty on the leading side, so the status line
+                // stays centred behind the pair on the right as lyrics arrive.
+                Box(Modifier.size(34.dp))
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (showStatus) {
+                        LyricsStatusWithChange(
+                            status = status,
+                            onStatusClick = onStatusClick,
+                        )
+                    }
+                }
+                // One column rather than a disc at either end: the way of reading
+                // the sheet is asked for top-down — translate it, and only then
+                // romanise it — and a listener looking for the second does not
+                // have to sweep the whole width to find it.
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Box(Modifier.size(34.dp)) { if (hasLyrics) translationToggle() }
+                    Box(Modifier.size(34.dp)) { if (hasLyrics) romanizationToggle() }
                 }
             }
-            Box(Modifier.size(34.dp)) { if (hasLyrics) translationToggle() }
-        }
         }
     }
 }

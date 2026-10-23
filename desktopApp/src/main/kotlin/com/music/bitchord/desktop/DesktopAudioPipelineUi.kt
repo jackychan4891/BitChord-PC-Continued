@@ -6,12 +6,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -19,27 +27,49 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.music.bitchord.data.model.Song
+import com.music.bitchord.ui.icons.BitChordIcons
 
 /**
  * The signal chain behind what is playing, stage by stage: the stream that arrived, the decoder,
  * whether anything is being resampled, the processing on top, and the device it lands on.
  *
+ * The player's quality badge opens this panel, and what it asks first is where the music should
+ * come out, so the output devices lead — see [DesktopAudioDevices]. The per-track source override
+ * is the last word, below the chain it overrides — see [DesktopSourcePins].
+ *
  * Android opens the same readout from the quality badge — see its `AudioPipelineDialog`.
  */
 @Composable
 internal fun DesktopAudioPipelineDialog(
+    song: Song?,
     format: DesktopStreamFormat?,
     sourceName: String?,
+    playingSourceId: String?,
+    sources: List<DesktopSourceConfig>,
+    pinnedSourceId: String?,
+    onChooseSource: (String?) -> Unit,
     pipeline: DesktopAudioPipeline,
     onDismiss: () -> Unit,
 ) {
     DesktopDialogPanel(onDismiss = onDismiss, maxWidth = 460) {
-        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Column(
+            // Bounded and scrollable: this is the same chain that already ran past most windows'
+            // height, and the track, its devices and its source sit above it.
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 620.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(22.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
             Text(
-                DesktopStrings["audio_pipeline", "Audio pipeline"],
+                DesktopStrings["d_track_information", "Track information"],
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
             )
+            if (song != null) TrackHeader(song)
+            OutputChooser()
             // The engine's own copy, so Source and Decoder cannot disagree while an upgrade lands.
             val source = pipeline.sourceFormat ?: format
             PipelineStage(DesktopStrings["pipeline_source", "Source"]) {
@@ -100,6 +130,153 @@ internal fun DesktopAudioPipelineDialog(
                     pipeline.bufferBytes.takeIf { it > 0 }?.let { "${it / 1024} KB" },
                 )
             }
+            if (song != null && sources.isNotEmpty()) {
+                SourceChooser(sources, pinnedSourceId, playingSourceId, onChooseSource)
+            }
+        }
+    }
+}
+
+/**
+ * Where the music comes out. Enumerated when the panel opens rather than held, as in
+ * [DesktopAudioOutputDialog]: devices come and go with what is plugged in, and choosing one here
+ * takes effect immediately, like the settings page's own list.
+ */
+@Composable
+private fun OutputChooser() {
+    val selected by DesktopAudioDevices.selected.collectAsState()
+    val changes by DesktopAudioDevices.changes.collectAsState()
+    val devices = remember(changes) { DesktopAudioDevices.available() }
+    Column {
+        Text(
+            DesktopStrings["audio_output", "Audio output"].uppercase(),
+            color = DesktopSecondary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(6.dp))
+        Column(Modifier.fillMaxWidth().desktopCardInset(RoundedCornerShape(10.dp)).padding(vertical = 4.dp)) {
+            ChoiceRow(
+                DesktopStrings["d_system_default", "System default"],
+                detail = null,
+                selected = selected == DesktopAudioDevices.SYSTEM_DEFAULT,
+                onClick = { DesktopAudioDevices.select(DesktopAudioDevices.SYSTEM_DEFAULT) },
+            )
+            devices.forEach { device ->
+                ChoiceRow(
+                    device.name,
+                    detail = device.description,
+                    selected = selected == device.id,
+                    onClick = { DesktopAudioDevices.select(device.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackHeader(song: Song) {
+    Column(
+        Modifier.fillMaxWidth().desktopCardInset(RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            song.title,
+            color = Color.White,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        // The byline says what the row elsewhere says, and here it is the caption of a measurement.
+        Text(
+            listOfNotNull(
+                song.artist.takeIf(String::isNotBlank),
+                song.albumName?.takeIf(String::isNotBlank),
+            ).joinToString(" · "),
+            color = DesktopSecondary,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** Where this track should come from — the last word, below the chain it overrides. */
+@Composable
+private fun SourceChooser(
+    sources: List<DesktopSourceConfig>,
+    pinnedSourceId: String?,
+    playingSourceId: String?,
+    onChooseSource: (String?) -> Unit,
+) {
+    Column {
+        Text(
+            DesktopStrings["d_play_from", "Play this from"].uppercase(),
+            color = DesktopSecondary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(6.dp))
+        Column(Modifier.fillMaxWidth().desktopCardInset(RoundedCornerShape(10.dp)).padding(vertical = 4.dp)) {
+            ChoiceRow(
+                DesktopStrings["d_play_from_auto", "Automatic — the usual order"],
+                detail = null,
+                selected = pinnedSourceId == null,
+                onClick = { onChooseSource(null) },
+            )
+            sources.forEach { source ->
+                ChoiceRow(
+                    source.displayName,
+                    detail = source.id.takeIf { it == playingSourceId }
+                        ?.let { DesktopStrings["now_playing", "Now playing"] },
+                    selected = source.id == pinnedSourceId,
+                    onClick = { onChooseSource(source.id) },
+                )
+            }
+        }
+        Text(
+            DesktopStrings["d_track_info_hint", "Applies to this track only. BitChord falls back to the usual order when the source you picked has no copy of it."],
+            color = DesktopSecondary,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun ChoiceRow(name: String, detail: String?, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().desktopRowClickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (!detail.isNullOrBlank()) {
+                Text(
+                    detail,
+                    color = DesktopSecondary,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        if (selected) {
+            Icon(
+                BitChordIcons.Check,
+                DesktopStrings["selected", "Selected"],
+                tint = DesktopAccent,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }

@@ -85,7 +85,7 @@ internal object DesktopTrayMenu {
             add(
                 Entry(
                     ID_PLAY_PAUSE,
-                    label = if (isPlaying) "Pause" else "Play",
+                    label = if (isPlaying) DesktopStrings["pause", "Pause"] else DesktopStrings["play", "Play"],
                     icon = if (isPlaying) "media-playback-pause" else "media-playback-start",
                     action = playPause,
                 ),

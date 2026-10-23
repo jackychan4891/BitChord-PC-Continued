@@ -68,7 +68,7 @@ look for macOS files yet, so Mac users get the release page.
 `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopUpdateChecker.kt`, shown as a dialog
 from `BitChordDesktopApp` in `DesktopApp.kt`:
 
-1. At launch it calls `GET https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest`.
+1. At launch it calls `GET https://api.github.com/repos/jackychan4891/BitChord-PC-Continued/releases/latest`.
 2. It strips the `v` from `tag_name` and compares it with `bitchord.version` (numeric, dot by dot;
    a `-beta` current version is older than the same release).
 3. If newer, it picks the asset for the running OS and shows "Update available" with Download and

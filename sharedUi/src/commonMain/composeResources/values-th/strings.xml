@@ -200,4 +200,9 @@
     <string name="search_library_empty">ค้นหาเพลงในโฟลเดอร์เพลงในเครื่องของคุณ</string>
     <string name="search_library_hint">เพลง ศิลปิน และอัลบั้ม</string>
     <string name="search_library_no_results">ไม่มีอะไรในเพลงในเครื่องตรงกับ “%1$s”</string>
+    <string name="close_player">ปิดเครื่องเล่น</string>
+    <string name="exit_full_screen">ออกจากเต็มหน้าจอ</string>
+    <string name="full_screen">เต็มหน้าจอ</string>
+    <string name="previously_played">เคยเล่นก่อนหน้า</string>
+    <string name="top_result">ผลลัพธ์อันดับสูงสุด</string>
 </resources>

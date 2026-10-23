@@ -26,7 +26,7 @@ val isArm64 = hostArch == "aarch64" || hostArch == "arm64"
 // Windows installer metadata requires MAJOR.MINOR.BUILD even though the app's public version is
 // intentionally displayed without a patch number (1.7 rather than 1.7.0).
 // The build number is the desktop version code; it also keeps "-beta1" out of the numeric installer version.
-val desktopVersionCode = 29
+val desktopVersionCode = 30
 val nativePackageVersion = appVersion.substringBefore('-').split('.').take(2).joinToString(".") + ".$desktopVersionCode"
 
 // FFmpeg decodes audio; see DesktopAudioDecoder.
@@ -497,7 +497,15 @@ compose.desktop {
         }.get()
         mainClass = composeMainClass
         jvmArgs("-Xmx512m")
-        jvmArgs("-XX:+UseG1GC", "-XX:G1PeriodicGCInterval=20000", "-XX:G1PeriodicGCSystemLoadThreshold=0")
+        // The ceiling is what the app may use; the soft ceiling is what it should keep. G1 is
+        // allowed to grow to the first but, with the periodic collection below, hands unused pages
+        // back to the operating system once it sits above the second — so a page of artwork that
+        // scrolled away stops counting as this app's memory.
+        jvmArgs("-XX:SoftMaxHeapSize=320m")
+        // Compose and Coil load a great many classes; bounding metaspace stops a leak there from
+        // showing up as RSS, and half a gig of thread stacks is more than this window spawns.
+        jvmArgs("-XX:MaxMetaspaceSize=256m", "-Xss512k")
+        jvmArgs("-XX:+UseG1GC", "-XX:+UseStringDeduplication", "-XX:G1PeriodicGCInterval=20000", "-XX:G1PeriodicGCSystemLoadThreshold=0")
         jvmArgs("-Dbitchord.version=$appVersion")
         if (desktopModuleIndexUrl.isNotBlank()) {
             jvmArgs("-Dbitchord.module.index=$desktopModuleIndexUrl")

@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import coil3.compose.AsyncImage
 import com.music.bitchord.data.model.BrowseItem
@@ -83,6 +84,7 @@ import com.music.bitchord.ui.components.SearchField
 import com.music.bitchord.ui.components.SongRow
 import com.music.bitchord.ui.components.SearchPlayingBars
 import com.music.bitchord.ui.components.thumbnailBorder
+import com.music.bitchord.ui.components.thumbnailPlaceholder
 import com.music.bitchord.ui.components.songListSkeleton
 import com.music.bitchord.ui.haptics.Haptic
 import com.music.bitchord.ui.haptics.rememberHaptics
@@ -339,6 +341,13 @@ fun SearchScreen(
                                     },
                                     onLongPress = { onSongLongPress(row.song) },
                                     onSwipeToQueue = { onSongSwipe(row.song) },
+                                    // The search page is tinted from the artwork of
+                                    // whatever is playing, so a row that paints the
+                                    // theme's own background is a black band laid
+                                    // across that wash. Nothing here needs an opaque
+                                    // row: the swipe's reveal is drawn underneath by
+                                    // the dismiss box itself.
+                                    rowBackground = Color.Transparent,
                                     isCurrent = row.song.isSameTrackAs(currentSong),
                                     isPlaying = isPlaying && row.song.isSameTrackAs(currentSong),
                                     searchPlayingStyle = true,
@@ -418,6 +427,7 @@ private fun LazyListScope.librarySearchResults(
                     onClick = { onSongClick(tracks, index) },
                     onLongPress = { onSongLongPress(song) },
                     onSwipeToQueue = { onSongSwipe(song) },
+                    rowBackground = Color.Transparent,
                     isCurrent = song.isSameTrackAs(currentSong),
                     isPlaying = isPlaying && song.isSameTrackAs(currentSong),
                     searchPlayingStyle = true,
@@ -452,7 +462,7 @@ private fun TopResultCard(
             .contextClick(onLongPress),
     ) {
         Text(
-            text = "Top result",
+            text = stringResource(Res.string.top_result),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -461,7 +471,16 @@ private fun TopResultCard(
             AsyncImage(
                 model = song.thumbnailUrl?.artworkAt(ROW_ART_PX),
                 contentDescription = null,
-                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(10.dp)),
+                // Crop rather than Coil's default fit: a video's thumbnail is wider than it is tall
+                // and carries black bars of its own, and fitted into a square that letterboxing is
+                // the black border people see around a search result once the page turns
+                // transparent for the ambient glow.
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .thumbnailBorder(RoundedCornerShape(10.dp))
+                    .thumbnailPlaceholder(RoundedCornerShape(10.dp)),
             )
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
@@ -682,11 +701,12 @@ private fun TypeaheadSongRow(
             AsyncImage(
                 model = song.artworkAt(ROW_ART_PX),
                 contentDescription = null,
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(52.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .thumbnailBorder(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .thumbnailPlaceholder(RoundedCornerShape(8.dp)),
             )
             if (isCurrent && isPlaying) SearchPlayingBars(Modifier.align(Alignment.Center))
         }
@@ -782,11 +802,12 @@ private fun RecentSearchEntityRow(
             AsyncImage(
                 model = entity.artworkUrl,
                 contentDescription = null,
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(52.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .thumbnailBorder(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .thumbnailPlaceholder(RoundedCornerShape(8.dp)),
             )
             if (isCurrent && isPlaying) {
                 SearchPlayingBars(Modifier.align(Alignment.Center))
@@ -841,6 +862,7 @@ private fun BrowseRow(item: BrowseItem, onClick: () -> Unit, onLongPress: (() ->
         AsyncImage(
             model = item.thumbnailUrl.artworkAt(ROW_ART_PX),
             contentDescription = null,
+            contentScale = ContentScale.Crop,
             modifier = Modifier
                 .size(52.dp)
                 .clip(
@@ -851,7 +873,10 @@ private fun BrowseRow(item: BrowseItem, onClick: () -> Unit, onLongPress: (() ->
                     if (item.type == BrowseType.ARTIST) CircleShape
                     else RoundedCornerShape(8.dp),
                 )
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .thumbnailPlaceholder(
+                    if (item.type == BrowseType.ARTIST) CircleShape
+                    else RoundedCornerShape(8.dp),
+                ),
         )
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {

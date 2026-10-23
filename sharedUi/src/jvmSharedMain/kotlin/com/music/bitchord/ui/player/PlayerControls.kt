@@ -318,12 +318,18 @@ private const val MIXING_LABEL_REST = 0.5f
 /**
  * The quality badge between the timestamps — "Lossless", "Hi-Res", a loading
  * shimmer while a lossless source is still being looked for.
+ *
+ * [onOpenTrackInfo] makes it a way in rather than a caption: the badge is the
+ * one thing on the player that states where the sound came from, so the panel
+ * that answers "which copy, and from where" hangs off it. Nothing is tappable
+ * where the caller has no such panel.
  */
 @Composable
 internal fun PlaybackQualityLabel(
     song: Song,
     isLoading: Boolean,
     modifier: Modifier = Modifier,
+    onOpenTrackInfo: (() -> Unit)? = null,
 ) {
     val wifiQuality by PlayerSettings.audioQualityWifi.collectAsStateWithLifecycle()
     val cellularQuality by PlayerSettings.audioQualityCellular.collectAsStateWithLifecycle()
@@ -340,6 +346,10 @@ internal fun PlaybackQualityLabel(
     // should keep saying "loading" through that stretch rather than going
     // blank only to possibly say "loading" again a moment later.
     val racingLossless by NerdStats.racingLossless.collectAsStateWithLifecycle()
+    // The press is on the label's own bounds, not on a row wrapped around it: the
+    // badge shares the gap between the two timestamps, and a wider target there
+    // would swallow the seek bar's ends.
+    val press = remember { MutableInteractionSource() }
     LosslessOrStats(
         isLoading = isLoading,
         stillRacing = song.videoId in racingLossless,
@@ -347,7 +357,15 @@ internal fun PlaybackQualityLabel(
         effectiveQuality = effectiveQuality,
         nerdStats = nerdStats,
         artworkUrl = song.thumbnailUrl,
-        modifier = modifier,
+        modifier = modifier.then(
+            if (onOpenTrackInfo == null) Modifier
+            else Modifier.clickable(
+                interactionSource = press,
+                indication = null,
+                onClickLabel = stringResource(Res.string.audio_pipeline),
+                onClick = onOpenTrackInfo,
+            )
+        ),
     )
 }
 

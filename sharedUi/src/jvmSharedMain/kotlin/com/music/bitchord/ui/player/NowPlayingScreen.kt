@@ -705,7 +705,13 @@ fun NowPlayingScreen(
      */
     onQueueDragActiveChange: (Boolean) -> Unit = {},
     onClearQueue: () -> Unit,
-    onOpenMenu: () -> Unit,
+    /**
+     * The song menu, or null on a host that raises it some other way. The desktop
+     * player passes null: it has no overflow dots, because the window's right-click
+     * opens the same menu at the pointer, and the panels and the two readings of the
+     * lyrics are buttons of their own. A phone keeps the glyph.
+     */
+    onOpenMenu: (() -> Unit)?,
     onOpenAlbum: (String) -> Unit,
     /**
      * Opens an artist's page. [browseId] is null for anyone but the lead credit:
@@ -740,13 +746,6 @@ fun NowPlayingScreen(
      */
     windowHeight: Dp,
     /**
-     * Whether the desktop player's overflow drawer — the volume bar, the
-     * lyrics/output/queue row and the lyric-sheet footer, folded behind the song
-     * menu's "More…" — is open. Handed in so a host whose song menu lives
-     * outside this screen can raise it; left null the player owns the state.
-     */
-    playerOverflowOpen: MutableState<Boolean>? = null,
-    /**
      * Set true by a host whose song menu shows the lyrics and queue toggles as
      * their own rows — the desktop player moved them out of the overflow. Each is
      * read, acted on and cleared here, so the menu can raise the panel this screen
@@ -761,15 +760,27 @@ fun NowPlayingScreen(
      * current translation state is mirrored back out through
      * [playerShowingTranslation] so that menu row can show its checkmark. Left
      * null the player never receives an outside translate request.
+     *
+     * [playerRomanizeToggle] and [playerShowingRomanization] are the same pair
+     * for the romanisation, which sits on that menu directly under the translate
+     * row.
      */
     playerTranslateToggle: MutableState<Boolean>? = null,
     playerShowingTranslation: MutableState<Boolean>? = null,
+    playerRomanizeToggle: MutableState<Boolean>? = null,
+    playerShowingRomanization: MutableState<Boolean>? = null,
     /**
      * The landscape player's corner button, which a window host supplies and a
-     * phone leaves alone: out of the player. Full screen is F11's, and the lyrics
-     * and queue panes live in the "…" menu.
+     * phone leaves alone: out of the player.
      */
     onDismissPlayer: (() -> Unit)? = null,
+    /**
+     * The other two corner buttons a window host can ask for: the lyric sheet,
+     * and full screen. Left null, as a phone leaves it, neither is drawn and the
+     * panels stay in the song menu and F11 alone.
+     */
+    onToggleFullScreen: (() -> Unit)? = null,
+    fullScreen: Boolean = false,
     /**
      * Where the player's "…" sits, in the window's own coordinates, mirrored back
      * out for a desktop host that draws the song menu outside this screen. The
@@ -805,10 +816,6 @@ fun NowPlayingScreen(
     var showCast by remember { mutableStateOf(false) }
     var showAudioOutput by remember { mutableStateOf(false) }
     var showLyricsProviders by remember { mutableStateOf(false) }
-    // On a desktop window the volume bar, the lyrics/output/queue action row
-    // and the lyric sheet's footer are folded behind a single overflow glyph,
-    // so the sleeve, the transport and the words are all the player shows.
-    val playerOverflow = playerOverflowOpen ?: remember { mutableStateOf(false) }
     // Gated on the Bluetooth permission the first time — see [rememberOutputPicker].
     val openAudioOutput = rememberOutputPicker { showAudioOutput = true }
     // Listening in a party whose host has taken the controls: the transport
@@ -1022,6 +1029,16 @@ fun NowPlayingScreen(
     }
     LaunchedEffect(lyricsTranslation.showingTranslation) {
         playerShowingTranslation?.value = lyricsTranslation.showingTranslation
+    }
+    LaunchedEffect(playerRomanizeToggle?.value) {
+        val requested = playerRomanizeToggle ?: return@LaunchedEffect
+        if (requested.value) {
+            requested.value = false
+            lyricsTranslation.toggleRomanization()
+        }
+    }
+    LaunchedEffect(lyricsTranslation.showingRomanization) {
+        playerShowingRomanization?.value = lyricsTranslation.showingRomanization
     }
     // The drawer holding the finished card, set the moment Share is confirmed.
     // Nothing is drawn here: the picture is a bitmap and a canvas, which is the
@@ -1640,85 +1657,6 @@ fun NowPlayingScreen(
                 onDismiss = { lyricsShare = null },
             )
         }
-        if (playerOverflow.value) {
-            PlayerDrawer(
-                hazeState = playerHaze,
-                title = stringResource(Res.string.more),
-                onDismiss = { playerOverflow.value = false },
-            ) {
-                PlayerActionRow(
-                    lyricsOpen = lyricsOpen,
-                    queueOpen = queueOpen,
-                    shuffleEnabled = shuffleEnabled,
-                    repeatMode = repeatMode,
-                    autoplayEnabled = autoplayEnabled,
-                    onToggleLyrics = { toggleLyrics(); playerOverflow.value = false },
-                    onToggleQueue = { toggleQueue(); playerOverflow.value = false },
-                    onToggleShuffle = onToggleShuffle,
-                    onCycleRepeat = onCycleRepeat,
-                    onToggleAutoplay = onToggleAutoplay,
-                    onOpenOutput = { playerOverflow.value = false; openAudioOutput() },
-                    onListenTogether = onListenTogether,
-                    onOpenListenTogetherMembers = openListenTogetherMembers,
-                    // Lyrics and queue are rows on the song menu now, not glyphs
-                    // here; this drawer keeps the middle pill and the rest.
-                    showLyricsAndQueue = false,
-                )
-                if (!hideVolumeBar) {
-                    Spacer(Modifier.height(20.dp))
-                    VolumeRow(
-                        value = { volume.level.value },
-                        onValueChange = onVolumeChange,
-                        onValueChangeFinished = onVolumeChangeFinished,
-                    )
-                }
-                Spacer(Modifier.height(20.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val hasLyrics = lyricsTranslation.displayedLyrics.isNotEmpty()
-                    Box(Modifier.size(34.dp)) {
-                        if (hasLyrics) {
-                            RomanizationToggleButton(
-                                state = lyricsTranslation.romanizationState,
-                                showingRomanization = lyricsTranslation.showingRomanization,
-                                enabled = !lyrics.isNullOrEmpty(),
-                                onClick = lyricsTranslation.toggleRomanization,
-                            )
-                        }
-                    }
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        LyricsStatusWithChange(
-                            status = lyricsTranslation.status,
-                            onStatusClick = {
-                                playerOverflow.value = false
-                                showLyricsProviders = true
-                            },
-                        )
-                    }
-                    Box(Modifier.size(34.dp)) {
-                        // The desktop player shows this toggle as a row on its own
-                        // song menu now, so it drops out of this overflow there; a
-                        // host that raised our overflow (playerOverflowOpen != null)
-                        // is that player. The phone path, which has no such row, keeps it.
-                        if (hasLyrics && playerOverflowOpen == null) {
-                            TranslationToggleButton(
-                                state = lyricsTranslation.translationState,
-                                showingTranslation = lyricsTranslation.showingTranslation,
-                                enabled = !lyrics.isNullOrEmpty(),
-                                onClick = lyricsTranslation.toggleTranslation,
-                            )
-                        }
-                    }
-                }
-            }
-        }
     }
 
     // A landscape window — a tablet, or a phone on its side — takes an entirely
@@ -2028,7 +1966,14 @@ fun NowPlayingScreen(
                                 .padding(horizontal = 10.dp, vertical = 8.dp)
                                 // Faded with the player rather than flown with
                                 // the sleeve: the cover in the bar has none.
-                                .graphicsLayer { alpha = if (panelOpen) 0f else dockFade() },
+                                //
+                                // A panel up is no reason to hide them. On a
+                                // phone that is when the sleeve becomes the way
+                                // back and goes quiet, but the desktop's wide
+                                // pane keeps the sleeve — and the setting is
+                                // off unless somebody went looking for it, so
+                                // the line has to be there when they turn it on.
+                                .graphicsLayer { alpha = dockFade() },
                         )
                     }
                 },
@@ -2099,6 +2044,10 @@ fun NowPlayingScreen(
                                 PlaybackQualityLabel(
                                     song = song,
                                     isLoading = isLoading,
+                                    // The badge is the way into the track's own readout — the copy
+                                    // it is playing and the source it came from. On the desktop
+                                    // that is the panel with the source picker in it.
+                                    onOpenTrackInfo = { showAudioPipeline = true },
                                     modifier = Modifier
                                         .align(Alignment.Center)
                                         .padding(horizontal = 8.dp),
@@ -2161,11 +2110,12 @@ fun NowPlayingScreen(
                         },
                         status = lyricsTranslation.status,
                         onStatusClick = { showLyricsProviders = true },
-                        // On a desktop window the sheet's footer is folded into
-                        // the overflow, and the words are lifted off the foot of
-                        // the column so the line being sung sits level with the
-                        // middle of the sleeve. A phone-height window keeps its
-                        // footer and centres the sheet in the column above it.
+                        // The desktop sheet has no footer: the provider line and the
+                        // two readings of the words are rows on its "…" menu, and the
+                        // words take the whole column. A phone-height window keeps the
+                        // bar under them. Either way the words are lifted off the foot
+                        // of a desktop column so the line being sung sits level with
+                        // the middle of the sleeve.
                         showBar = compact,
                         bottomInset = if (compact) 0.dp else LANDSCAPE_LYRICS_BOTTOM_LIFT,
                         picking = lyricPicker.picking,
@@ -2242,8 +2192,10 @@ fun NowPlayingScreen(
                     )
                 },
                 onDismiss = onDismissPlayer,
-                // Full screen, lyrics and queue have no corner buttons: F11 does
-                // the first and the "…" menu holds the other two.
+                // The window's corner keeps its single glyph: full screen. The words
+                // are not a view to switch to here, so they stay on the "…" menu.
+                onToggleFullScreen = onToggleFullScreen,
+                fullScreen = fullScreen,
             )
             playerOverlays()
         }
@@ -3475,11 +3427,13 @@ fun NowPlayingScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    CircleGlyph(
-                        icon = if (showRevertCue) Icons.AutoMirrored.Rounded.Undo else Icons.Rounded.MoreHoriz,
-                        contentDescription = stringResource(Res.string.more),
-                        onClick = onOpenMenu,
-                    )
+                    if (onOpenMenu != null) {
+                        CircleGlyph(
+                            icon = if (showRevertCue) Icons.AutoMirrored.Rounded.Undo else Icons.Rounded.MoreHoriz,
+                            contentDescription = stringResource(Res.string.more),
+                            onClick = onOpenMenu,
+                        )
+                    }
                 }
 
                 // [lyricsOpen] asked first: a close has already hidden the
@@ -3754,6 +3708,7 @@ fun NowPlayingScreen(
                 PlaybackQualityLabel(
                     song = song,
                     isLoading = isLoading,
+                    onOpenTrackInfo = { showAudioPipeline = true },
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(horizontal = 8.dp),

@@ -200,4 +200,9 @@
     <string name="search_library_empty">Recherche les titres de votre dossier Musique locale.</string>
     <string name="search_library_hint">Titres, artistes et albums</string>
     <string name="search_library_no_results">Rien dans Musique locale ne correspond à « %1$s ».</string>
+    <string name="close_player">Fermer le lecteur</string>
+    <string name="exit_full_screen">Quitter le plein écran</string>
+    <string name="full_screen">Plein écran</string>
+    <string name="previously_played">Joués précédemment</string>
+    <string name="top_result">Meilleur résultat</string>
 </resources>

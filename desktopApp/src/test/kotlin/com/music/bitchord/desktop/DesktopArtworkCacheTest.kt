@@ -20,8 +20,10 @@ class DesktopArtworkCacheTest {
     @Test
     fun theBudgetIsAFractionOfTheHeapRatherThanEverything() {
         val budget = DesktopArtworkCache.budgetBytes
-        assertTrue(budget >= 32L * 1024 * 1024, "a small heap should still cache something: $budget")
-        assertTrue(budget <= 128L * 1024 * 1024, "the cache should not grow without reason: $budget")
+        assertTrue(budget >= 12L * 1024 * 1024, "a small heap should still cache something: $budget")
+        // Decoded covers are also uploaded as GPU textures, so they are paid for twice over; the
+        // ceiling is a few screens of artwork, not a browsing history.
+        assertTrue(budget <= 24L * 1024 * 1024, "the cache should not grow without reason: $budget")
     }
 
     @Test

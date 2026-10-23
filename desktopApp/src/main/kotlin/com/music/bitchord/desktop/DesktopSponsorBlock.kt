@@ -42,16 +42,29 @@ internal object DesktopSponsorBlock {
     private val json = Json { ignoreUnknownKeys = true }
     private val httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build()
 
-    private val cache = ConcurrentHashMap<String, List<SponsorSegment>>()
+    /**
+     * Every video asked about, up to a couple of thousand.
+     *
+     * Small per entry, but the point is that it stops: an app left running for months should not be
+     * holding a record of every id it has ever seen.
+     */
+    private const val CACHE_ENTRIES = 2048
+
+    private val cache = object : LinkedHashMap<String, List<SponsorSegment>>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<SponsorSegment>>) =
+            size > CACHE_ENTRIES
+    }
+
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
 
-    fun segmentsFor(videoId: String): List<SponsorSegment> = cache[videoId].orEmpty()
+    fun segmentsFor(videoId: String): List<SponsorSegment> = synchronized(cache) { cache[videoId] }.orEmpty()
 
     suspend fun load(videoId: String) {
-        if (videoId.isBlank() || cache.containsKey(videoId)) return
+        if (videoId.isBlank() || synchronized(cache) { cache.containsKey(videoId) }) return
         if (!inFlight.add(videoId)) return
         try {
-            cache[videoId] = fetch(videoId)
+            val segments = fetch(videoId)
+            synchronized(cache) { cache[videoId] = segments }
         } catch (_: Exception) {
             // Not cached: the next track change asks again.
         } finally {

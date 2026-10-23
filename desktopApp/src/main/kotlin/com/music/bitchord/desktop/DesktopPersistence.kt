@@ -78,6 +78,18 @@ class DesktopPersistence {
 
     internal fun saveOriginalVersionIds(ids: Set<String>) = writeLines(KEY_ORIGINAL_VERSIONS, ids.toList())
 
+    /** Tracks told to play from one named source — see [DesktopSourcePins]. */
+    internal fun sourcePins(): Map<String, String> = readLines(KEY_SOURCE_PINS)
+        .mapNotNull { line ->
+            val videoId = line.substringBefore('\t', "")
+            val sourceId = line.substringAfter('\t', "")
+            if (videoId.isBlank() || sourceId.isBlank()) null else videoId to sourceId
+        }
+        .toMap()
+
+    internal fun saveSourcePins(pins: Map<String, String>) =
+        writeLines(KEY_SOURCE_PINS, pins.map { (videoId, sourceId) -> "$videoId\t$sourceId" })
+
     fun downloads(): List<Song> = readSongs(KEY_DOWNLOADS)
 
     fun saveDownloads(songs: List<Song>) = writeSongs(KEY_DOWNLOADS, songs)
@@ -302,6 +314,7 @@ class DesktopPersistence {
         const val KEY_PLAYLISTS = "playlists"
         const val KEY_MODULE_INDEX_URL = "module_index_url"
         private const val KEY_ORIGINAL_VERSIONS = "original_versions"
+        private const val KEY_SOURCE_PINS = "source_pins"
         private const val KEY_AUDIO_QUALITY = "audio_quality"
         private const val KEY_AUDIO_QUALITY_RUNGS = "audio_quality_rungs"
         const val KEY_SOURCE_CONFIGS = "source_configs"

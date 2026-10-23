@@ -372,6 +372,43 @@ internal object DesktopAppleMusicCanvas {
         "apple music", "today's hits", "session",
     )
 
+    /** A page Apple's catalog search answered with: a playlist or an album. */
+    data class PageHit(val title: String, val subtitle: String, val artworkUrl: String?, val url: String)
+
+    /**
+     * Apple's own pages for a term — the playlists and albums the music source's search cannot
+     * return, opened through the same serialized pages as every other Apple row.
+     */
+    fun searchPages(term: String, type: String, limit: Int = 10): List<PageHit> {
+        if (term.isBlank()) return emptyList()
+        val bearer = token() ?: return emptyList()
+        val url = query(
+            "$AMP/$storefront/search",
+            listOf("term" to term, "types" to type, "limit" to "$limit"),
+        )
+        val hits = parse(get(url, bearer))
+            ?.get("results")?.jsonObject
+            ?.get(type)?.jsonObject
+            ?.get("data")?.jsonArray
+            ?: return emptyList()
+        return hits.mapNotNull { hit ->
+            val record = hit as? JsonObject ?: return@mapNotNull null
+            val attributes = record["attributes"]?.jsonObject ?: return@mapNotNull null
+            val title = attributes.text("name") ?: return@mapNotNull null
+            val pageUrl = attributes.text("url") ?: return@mapNotNull null
+            // Only what this app can open itself: a page on music.apple.com.
+            if (!pageUrl.startsWith("https://music.apple.com/")) return@mapNotNull null
+            val artwork = attributes["artwork"]?.jsonObject?.text("url")
+                ?.replace("{w}", "400")?.replace("{h}", "400")?.replace("{c}", "bb")?.replace("{f}", "jpg")
+            PageHit(
+                title = title,
+                subtitle = attributes.text("curatorName") ?: attributes.text("artistName").orEmpty(),
+                artworkUrl = artwork,
+                url = pageUrl,
+            )
+        }
+    }
+
     // ── Token ────────────────────────────────────────────────────────────
 
     @Volatile private var cachedToken: String? = null

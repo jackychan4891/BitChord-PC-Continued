@@ -72,6 +72,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.withFrameNanos
@@ -108,6 +109,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -144,6 +146,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+
+/**
+ * The face lyric lines are set in, supplied by the app drawing them.
+ *
+ * A sheet of words is typeset, not just laid out, and the face belongs to the
+ * app's bundle rather than to this module: sharedUi cannot see a host's
+ * resources, so the family comes in from outside. Nil leaves the theme's own
+ * text face, which is what every caller that provides nothing has always had.
+ */
+val LocalLyricsFontFamily = staticCompositionLocalOf<FontFamily?> { null }
 
 /**
  * How far back the part of the playing line that hasn't been sung yet is held.
@@ -1380,7 +1392,7 @@ internal fun TranslationToggleButton(
     }
 }
 
-/** The left-hand companion to [TranslationToggleButton], producing Latin script. */
+/** The companion to [TranslationToggleButton] that sits under it, producing Latin script. */
 @Composable
 internal fun RomanizationToggleButton(
     state: LyricsTranslationUiState,
@@ -1714,6 +1726,9 @@ internal fun LyricsPanel(
     val viewportHeight by remember(listState) {
         derivedStateOf { listState.layoutInfo.viewportSize.height }
     }
+    // The room each row gives its halo, in the pixels the placement below measures
+    // against — the same number the list's leading inset is cut by.
+    val glowRoomPx = with(LocalDensity.current) { GLOW_ROOM.toPx() }
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect(onScrollingChange)
     }
@@ -1860,10 +1875,18 @@ internal fun LyricsPanel(
         // has a height is still measured without it, and placing then lands the
         // line at the top of the panel with nothing later correcting it — which
         // is the pane opening uncentred on a new song. Waiting for the negative
-        // start offset is waiting for the inset, on the very number the
-        // placement is measured against.
+        // start offset is waiting for the inset, on the very number the placement
+        // is measured against. Measuring it from that same layout, rather than
+        // from the height the composition saw, is what keeps the wait honest: a
+        // column whose anchor sits at its top has no inset to wait for and would
+        // otherwise hang there, and one that grows into its inset must not place
+        // before it has one.
         val info = snapshotFlow { listState.layoutInfo }
-            .first { it.viewportSize.height > 0 && it.viewportStartOffset < 0 }
+            .first { layout ->
+                val height = layout.viewportSize.height
+                val inset = (height * (0.5f - centreRaise) - glowRoomPx).coerceAtLeast(0f)
+                height > 0 && (inset <= 0f || layout.viewportStartOffset < 0)
+            }
         val start = info.viewportStartOffset
         val viewport = info.viewportSize.height
         val centre = viewport / 2f - viewport * centreRaise
@@ -1924,11 +1947,12 @@ internal fun LyricsPanel(
         return
     }
 
-    // Synced lines are centred as they are sung, which needs as much room above the first as
-    // below the last: half a viewport of padding either end lets even the opening and closing
-    // lines reach the centre. Unsynced lyrics are read, not followed, so they keep the old
-    // top-anchored inset.
-    val halfViewportDp = with(LocalDensity.current) { viewportHeight.toDp() } * 0.5f
+    // Synced lines are followed to an anchor, which needs room above the first line as tall as
+    // the anchor sits below the top — and the anchor is not the middle, it is raised by
+    // [centreRaise]. A half-viewport inset therefore opens the sheet below where the song leaves
+    // it, and the panel visibly jumps up on the first placement: the whole of the raise, which
+    // for the lyric column beside the home page was most of its height.
+    val viewportDp = with(LocalDensity.current) { viewportHeight.toDp() }
     LazyColumn(
         state = listState,
         modifier = modifier
@@ -1945,8 +1969,11 @@ internal fun LyricsPanel(
         // list hands that much back — otherwise the lines would sit a glow's
         // width further apart and further in than they used to.
         contentPadding = PaddingValues(
-            top = ((if (isSynced) halfViewportDp else 40.dp) - GLOW_ROOM).coerceAtLeast(0.dp),
-            bottom = with(LocalDensity.current) { viewportHeight.toDp() } * 0.8f,
+            top = ((if (isSynced) viewportDp * (0.5f - centreRaise) else 40.dp) - GLOW_ROOM)
+                .coerceAtLeast(0.dp),
+            // As much past the end as the anchor is from the top, so the closing line can still
+            // be sung at it, plus the room the player has always allowed for browsing beyond.
+            bottom = viewportDp * (0.8f + centreRaise),
             start = PLAYER_GUTTER - GLOW_ROOM,
             end = PLAYER_GUTTER - GLOW_ROOM,
         ),
@@ -2130,21 +2157,21 @@ internal fun LyricsPanel(
                 }
             } else {
                 val alignEnd = duet && line.alignment == LyricAlignment.End
-                val style = if (isSynced) {
-                    MaterialTheme.typography.headlineLarge.copy(
-                        fontSize = 34.sp,
-                        lineHeight = 41.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
-                    )
+                val fallback = if (isSynced) {
+                    MaterialTheme.typography.headlineLarge
                 } else {
-                    MaterialTheme.typography.headlineMedium.copy(
-                        fontSize = 30.sp,
-                        lineHeight = 38.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
-                    )
+                    MaterialTheme.typography.headlineMedium
                 }
+                // One style rather than two branches: the answering voice and both
+                // backing lines are copies of it, so a face set here is a face set
+                // on every line of the row.
+                val style = fallback.copy(
+                    fontSize = if (isSynced) 34.sp else 30.sp,
+                    lineHeight = if (isSynced) 41.sp else 38.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = LocalLyricsFontFamily.current ?: fallback.fontFamily,
+                    textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
+                )
                 // The stack sits fractionally back and the playing line comes
                 // forward to meet you, rather than the playing line swelling
                 // past the others — a smaller move, and one that doesn't push

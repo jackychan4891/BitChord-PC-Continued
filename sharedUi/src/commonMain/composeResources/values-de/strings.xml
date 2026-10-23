@@ -200,4 +200,9 @@
     <string name="search_library_empty">Durchsuche die Songs in deinem Ordner für lokale Musik.</string>
     <string name="search_library_hint">Songs, Künstler und Alben</string>
     <string name="search_library_no_results">Nichts in der lokalen Musik passt zu „%1$s“.</string>
+    <string name="close_player">Player schließen</string>
+    <string name="exit_full_screen">Vollbild beenden</string>
+    <string name="full_screen">Vollbild</string>
+    <string name="previously_played">Zuletzt gespielt</string>
+    <string name="top_result">Top-Ergebnis</string>
 </resources>
