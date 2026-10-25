@@ -7,6 +7,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -38,6 +39,22 @@ internal class DesktopEqualizer {
 
     @Volatile
     private var target: Tuning = Tuning.OFF
+
+    /** Carries the boost instead of the make-up attenuation — see [setLimiter]. */
+    @Volatile
+    private var limiter = false
+
+    @Volatile
+    private var limiterRestart = false
+
+    private var limiterEnvelope = 0f
+    private var limiterRelease = 0f
+
+    /** The centre-channel canceller, and how much of it is applied, glided so toggling is silent. */
+    @Volatile
+    private var vocalRemoval = false
+
+    private var vocalAmount = 0f
 
     private var channels = 0
     private var sampleRate = 0
@@ -73,6 +90,32 @@ internal class DesktopEqualizer {
         target = if (enabled) Tuning(curve, balance.coerceIn(-1f, 1f)) else Tuning.OFF
     }
 
+    /**
+     * Swaps the make-up attenuation for a peak limiter.
+     *
+     * The attenuation is how a boosted curve is kept inside full scale on a format with no headroom:
+     * turning the EQ up makes everything else quieter. A limiter does the same job only when the
+     * music actually peaks, so a boost stays a boost; in exchange it touches the signal, and that is
+     * why it is a choice rather than the way it always works. With it on, the curve handed to
+     * [setTuning] should carry no attenuation of its own.
+     */
+    fun setLimiter(enabled: Boolean) {
+        if (enabled && !limiter) limiterRestart = true
+        limiter = enabled
+    }
+
+    /**
+     * Pulls the centre of the stereo field out of the mix.
+     *
+     * A lead vocal is usually mixed dead centre, so subtracting the middle (the signal both
+     * channels share) from both leaves the sides: the vocal drops away, along with anything else
+     * that was panned centre. It is a cancellation, not a separator — a centred bass or kick goes
+     * with it — which is why it is an explicit switch rather than something always running.
+     */
+    fun setVocalRemoval(enabled: Boolean) {
+        vocalRemoval = enabled
+    }
+
     /** Sizes the state for a stream. Snaps rather than glides: there is nothing to be continuous with. */
     fun configure(channels: Int, sampleRate: Int) {
         if (channels == this.channels && sampleRate == this.sampleRate) return
@@ -80,6 +123,9 @@ internal class DesktopEqualizer {
         this.sampleRate = sampleRate
         state = FloatArray(this.channels * EqLayout.SLOTS * 2)
         channelGain = FloatArray(this.channels) { 1f }
+        limiterRelease = exp(-1f / (LIMITER_RELEASE_MS / 1_000f * sampleRate.coerceAtLeast(1)))
+        limiterEnvelope = 0f
+        vocalAmount = if (vocalRemoval) 1f else 0f
         running.fill(false)
         snapToTarget()
     }
@@ -88,16 +134,24 @@ internal class DesktopEqualizer {
     fun reset() {
         state.fill(0f)
         running.fill(false)
+        limiterEnvelope = 0f
+        vocalAmount = if (vocalRemoval) 1f else 0f
         snapToTarget()
     }
 
     /** Equalises [count] interleaved samples of [block], in place. */
     fun process(block: FloatArray, count: Int) {
         if (count == 0 || channels == 0 || sampleRate == 0) return
+        if (limiterRestart) {
+            limiterEnvelope = 0f
+            limiterRestart = false
+        }
         val tuning = target
+        val limiting = limiter
         // Flat *and* settled there: an equaliser that has just been switched off is still gliding
-        // down, and cutting that glide short is the click it exists to avoid.
-        if (isFlat(tuning) && isSettled(tuning)) return
+        // down, and cutting that glide short is the click it exists to avoid. A limiter still has
+        // a job to do over a flat curve, and so has a vocal canceller on its way out.
+        if (isFlat(tuning) && isSettled(tuning) && !limiting && vocalAmount < VOCAL_SETTLED) return
 
         var index = 0
         while (index < count) {
@@ -110,19 +164,52 @@ internal class DesktopEqualizer {
             var at = index
             val end = index + block_
             while (at < end) {
+                val frameStart = at
+                var peak = 0f
                 for (channel in 0 until channels) {
                     if (at >= end) break
                     var sample = block[at]
                     for (slot in 0 until active) {
                         sample = section(activeSlots[slot], channel, sample)
                     }
-                    block[at] = sample * channelGain[channel]
+                    sample *= channelGain[channel]
+                    val magnitude = abs(sample)
+                    if (magnitude > peak) peak = magnitude
+                    block[at] = sample
                     at++
                 }
+                if (channels == 2 && at == frameStart + 2) {
+                    val target = if (vocalRemoval) 1f else 0f
+                    vocalAmount += (target - vocalAmount) * VOCAL_GLIDE
+                    if (vocalAmount > VOCAL_SETTLED) {
+                        val middle = (block[frameStart] + block[frameStart + 1]) * 0.5f * vocalAmount
+                        block[frameStart] -= middle
+                        block[frameStart + 1] -= middle
+                        // Cancelling can raise one side above either input, so the limiter's peak
+                        // is measured again after it rather than from the pre-cancel samples.
+                        peak = max(abs(block[frameStart]), abs(block[frameStart + 1]))
+                    }
+                }
+                if (limiting) limit(block, frameStart, at, peak)
             }
             flushDenormals(active)
             index = end
         }
+    }
+
+    /**
+     * A linked peak limiter, after the output trim.
+     *
+     * Instant attack, so a boosted band cannot overshoot the ceiling; exponential release, the shape
+     * a gain reduction should return in. One envelope for the whole frame rather than one per
+     * channel: a limiter that pulled each side down by its own peak would swing the stereo image on
+     * every transient.
+     */
+    private fun limit(block: FloatArray, from: Int, to: Int, peak: Float) {
+        limiterEnvelope = max(peak, limiterEnvelope * limiterRelease)
+        if (limiterEnvelope <= LIMITER_CEILING) return
+        val gain = LIMITER_CEILING / limiterEnvelope
+        for (index in from until to) block[index] *= gain
     }
 
     // ---- Gliding -----------------------------------------------------------
@@ -302,6 +389,18 @@ internal class DesktopEqualizer {
 
         /** Keeps `tan` away from its pole at Nyquist. */
         private const val MAX_FREQUENCY_FRACTION = 0.45f
+
+        /** Just under full scale, so a format that clamps has nothing to clamp. */
+        private const val LIMITER_CEILING = 0.98f
+
+        /** How long the gain takes to come back after a peak — long enough not to pump. */
+        private const val LIMITER_RELEASE_MS = 120f
+
+        /** Per-frame glide for the vocal canceller — about 11 ms, so switching it is not a click. */
+        private const val VOCAL_GLIDE = 0.002f
+
+        /** Below this the canceller is doing nothing anyone can hear. */
+        private const val VOCAL_SETTLED = 1e-4f
 
         private const val DENORMAL_FLOOR = 1e-12f
     }

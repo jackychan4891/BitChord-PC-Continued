@@ -85,20 +85,25 @@ private val canvasClient: HttpClient = HttpClient.newBuilder()
  * answer: Apple's New and Radio pages are around a megabyte of HTML plain, and waiting for all
  * of it on every visit is what made those pages feel slow.
  */
-internal fun canvasGet(url: String, headers: Map<String, String> = emptyMap()): String? = runCatching {
-    val builder = HttpRequest.newBuilder(URI.create(url))
-        .timeout(Duration.ofSeconds(15))
-        .header("User-Agent", CANVAS_UA)
-        .header("Accept-Encoding", "gzip")
-    headers.forEach { (name, value) -> builder.header(name, value) }
-    val response = canvasClient.send(builder.GET().build(), HttpResponse.BodyHandlers.ofByteArray())
-    if (response.statusCode() !in 200..299) return@runCatching null
-    val body = response.body()
-    val encoded = response.headers().allValues("content-encoding").any { value ->
-        value.contains("gzip", ignoreCase = true)
-    }
-    if (encoded) body.fromGzip() else body
-}.getOrNull()?.let { source -> String(source, StandardCharsets.UTF_8) }
+internal fun canvasGet(url: String, headers: Map<String, String> = emptyMap()): String? =
+    canvasFetch(url, headers)?.takeIf { it.first }?.second
+
+/** The body and whether the server called it a success — a refusal's reason is usually in its body. */
+internal fun canvasFetch(url: String, headers: Map<String, String> = emptyMap()): Pair<Boolean, String?>? =
+    runCatching {
+        val builder = HttpRequest.newBuilder(URI.create(url))
+            .timeout(Duration.ofSeconds(15))
+            .header("User-Agent", CANVAS_UA)
+            .header("Accept-Encoding", "gzip")
+        headers.forEach { (name, value) -> builder.header(name, value) }
+        val response = canvasClient.send(builder.GET().build(), HttpResponse.BodyHandlers.ofByteArray())
+        val body = response.body()
+        val encoded = response.headers().allValues("content-encoding").any { value ->
+            value.contains("gzip", ignoreCase = true)
+        }
+        (response.statusCode() in 200..299) to
+            if (body.isEmpty()) null else String(if (encoded) body.fromGzip() else body, StandardCharsets.UTF_8)
+    }.getOrNull()
 
 private fun ByteArray.fromGzip(): ByteArray = GZIPInputStream(ByteArrayInputStream(this)).use { it.readBytes() }
 

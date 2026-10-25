@@ -29,12 +29,16 @@ import org.jetbrains.compose.resources.stringResource
 // translation arrives exactly as they do in there.
 
 /**
- * How far above the column's middle the sung line rests. Half the viewport is
- * the top of the pane: the sheet has to arrive already there, rather than being
- * placed at a middle and glided up once the viewport measures itself. The main
- * player keeps its own, smaller raise and is not touched by this.
+ * How far above the column's middle the sung line rests.
+ *
+ * This pane has always kept its words at the top of the column, so the raise is nearly the whole
+ * half-viewport and only a hair is left above the anchor for the outgoing line to rise and dim
+ * into. It stops short of the top edge itself: at exactly half the viewport the leading inset
+ * collapses to nothing, and a line handed over at the edge is out of sight before it is finished.
+ *
+ * The main player keeps its own, smaller raise and is not touched by this.
  */
-private const val SIDE_COLUMN_CENTRE_RAISE = 0.5f
+private const val SIDE_COLUMN_CENTRE_RAISE = 0.46f
 
 /**
  * The lyric sheet with its provider line and its romanization and translation
@@ -93,9 +97,8 @@ fun LyricsSidePanel(
                 // this column drops the "Lyrics by …" line but keeps its two
                 // toggles either side of the gap it leaves.
                 showStatus = false,
-                // The sheet this column reads from is placed at its top, so the line standing in
-                // for it must wait there too: centred, it is a caption that starts in the middle
-                // of the column and moves up when the lookup returns.
+                // The sheet this column reads from is placed high in the column, so the line
+                // standing in for it waits there too rather than sitting on the header.
                 placeholderAlign = Alignment.TopCenter,
                 romanizationToggle = {
                     RomanizationToggleButton(

@@ -52,6 +52,7 @@ import com.music.bitchord.data.model.MoodGenreSection
 import com.music.bitchord.data.model.ShelfItem
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.UiState
+import com.music.bitchord.ui.components.AppleScrollbarBox
 import com.music.bitchord.ui.components.ShimmerBox
 import com.music.bitchord.ui.components.contextClick
 import com.music.bitchord.ui.components.longPressMenuClickable
@@ -229,12 +230,12 @@ internal fun DesktopAppleCategories(
 @Composable
 internal fun DesktopAppleRadioPage(
     shelves: UiState<List<HomeShelf>>,
+    listState: LazyListState,
     contentPadding: PaddingValues,
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
     onRetry: () -> Unit,
     playingRadioKey: String?,
-    onSchedule: (ShelfItem) -> Unit,
 ) {
     // A station hidden from its tile is left off the page, and the row at the foot names everything
     // hidden so nothing is stranded. The page is what watches the store: hiding happens on a tile, and
@@ -243,40 +244,36 @@ internal fun DesktopAppleRadioPage(
     val rows = remember(shelves, hiddenStations) {
         (shelves as? UiState.Success)?.let { DesktopRadioClient.visible(it.data) }.orEmpty()
     }
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().background(DesktopPageGround()),
-        contentPadding = contentPadding,
-    ) {
-        item { AppleBrowsePageTitle(DesktopStrings["d_radio", "Radio"]) }
-        item {
-            Text(
-                DesktopStrings[
-                    "d_radio_page_note",
-                    "Free live stations, streamed in-app on your system default audio output.",
-                ],
-                color = DesktopAppleSecondary,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = DesktopPageGutter, vertical = 16.dp),
-            )
-        }
-        when (shelves) {
-            UiState.Loading -> item { AppleBrowseShelfSkeleton() }
-            is UiState.Error -> item { AppleBrowseError(shelves.message, onRetry) }
-            is UiState.Success -> {
-                items(rows) { shelf -> DesktopAppleShelf(shelf, onItemClick, onItemMenu, playingRadioKey, onSchedule) }
-                if (rows.isEmpty()) item {
-                    AppleBrowseEmpty(
-                        if (hiddenStations.isEmpty()) "No radio content to show yet."
-                        else DesktopStrings["d_radio_all_hidden", "Every station on this page is hidden."],
-                    )
-                }
-                if (hiddenStations.isNotEmpty()) item {
-                    Box(Modifier.padding(horizontal = DesktopPageGutter + 8.dp, vertical = 18.dp)) {
-                        DesktopHiddenRestoreRow(
-                            hidden = hiddenStations,
-                            onShow = DesktopRadioVisibility::show,
-                            onShowAll = DesktopRadioVisibility::showAll,
+    AppleScrollbarBox(listState, Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().background(DesktopPageGround()),
+            contentPadding = contentPadding,
+        ) {
+            item { AppleBrowsePageTitle(DesktopStrings["d_radio", "Radio"]) }
+            when (shelves) {
+                UiState.Loading -> item { AppleBrowseShelfSkeleton() }
+                is UiState.Error -> item { AppleBrowseError(shelves.message, onRetry) }
+                is UiState.Success -> {
+                    // The stations start straight under the page's own name. The shelf Apple labels
+                    // this feed with is a banner, not a heading, and the page already says Radio.
+                    items(rows) { shelf ->
+                        DesktopAppleShelf(shelf, onItemClick, onItemMenu, playingRadioKey, showHeading = false)
+                    }
+                    if (rows.isEmpty()) item {
+                        AppleBrowseEmpty(
+                            if (hiddenStations.isEmpty()) "No radio content to show yet."
+                            else DesktopStrings["d_radio_all_hidden", "Every station on this page is hidden."],
                         )
+                    }
+                    if (hiddenStations.isNotEmpty()) item {
+                        Box(Modifier.padding(horizontal = DesktopPageGutter + 8.dp, vertical = 18.dp)) {
+                            DesktopHiddenRestoreRow(
+                                hidden = hiddenStations,
+                                onShow = DesktopRadioVisibility::show,
+                                onShowAll = DesktopRadioVisibility::showAll,
+                            )
+                        }
                     }
                 }
             }

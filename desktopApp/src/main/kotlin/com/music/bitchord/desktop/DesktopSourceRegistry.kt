@@ -540,8 +540,15 @@ internal object DesktopSourceRegistry {
         val sameLength = matches.filter { DesktopTrackMatcher.withinSeconds(it, target, SAME_RECORDING_SEC) }
         val eligible = sameLength.ifEmpty { matches }
         if (!wantsLossless) return eligible
+        // An Atmos row outranks a plain lossless one only while Atmos is actually wanted: with the
+        // switch off, [playableHere] refuses it, and three Atmos rows in front would spend the
+        // whole attempt budget before the FLAC behind them is opened.
+        val atmosFirst = DesktopCodecs.supportsDolbyAtmos && DesktopAddonSettings.dolbyAtmosEnabled
         // Stable, so the confidence order the matcher produced survives inside each tier.
-        return eligible.sortedByDescending { it.sourceQuality == DesktopModuleSource.LOSSLESS }
+        return eligible.sortedWith(
+            compareByDescending<Song> { atmosFirst && it.sourceQuality == DesktopModuleSource.DOLBY }
+                .thenByDescending { it.sourceQuality == DesktopModuleSource.LOSSLESS },
+        )
     }
 
     /** Which of two renditions of the same recording is the better one. */
@@ -549,8 +556,10 @@ internal object DesktopSourceRegistry {
         val held = current ?: return candidate
         val a = candidate.format
         val b = held.format
-        if (a.isLossless != b.isLossless) return if (a.isLossless) candidate else held
+        // Atmos before lossless, and not the other way round: an Atmos row only reaches here when
+        // the listener asked for Atmos, and a FLAC on the same recording is the lesser answer.
         if (a.isDolbyAtmos != b.isDolbyAtmos) return if (a.isDolbyAtmos) candidate else held
+        if (a.isLossless != b.isLossless) return if (a.isLossless) candidate else held
         return if ((a.kbps ?: 0) > (b.kbps ?: 0)) candidate else held
     }
 

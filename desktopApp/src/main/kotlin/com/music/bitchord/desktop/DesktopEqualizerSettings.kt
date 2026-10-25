@@ -1,5 +1,6 @@
 package com.music.bitchord.desktop
 
+import com.music.bitchord.playback.EqCurve
 import com.music.bitchord.playback.EqLayout
 import com.music.bitchord.playback.EqualizerPreset
 import com.music.bitchord.playback.manualCurve
@@ -34,6 +35,8 @@ internal object DesktopEqualizerSettings {
     )
     private val _bands = MutableStateFlow(readBands())
     private val _preset = MutableStateFlow(EqualizerPreset.matching(_bands.value))
+    private val _peakLimiter = MutableStateFlow(persistence.boolean(KEY_PEAK_LIMITER, false))
+    private val _vocalRemoval = MutableStateFlow(persistence.boolean(KEY_VOCAL_REMOVAL, false))
 
     val enabled: StateFlow<Boolean> = _enabled
     val mode: StateFlow<DesktopEqualizerMode> = _mode
@@ -55,6 +58,12 @@ internal object DesktopEqualizerSettings {
 
     /** Which preset the bands currently are, or [EqualizerPreset.CUSTOM]. */
     val preset: StateFlow<EqualizerPreset> = _preset
+
+    /** A limiter carries the boost, rather than the curve being pulled down to make room for it. */
+    val peakLimiter: StateFlow<Boolean> = _peakLimiter
+
+    /** Cancels the centre of the stereo field, where a lead vocal usually sits. */
+    val vocalRemoval: StateFlow<Boolean> = _vocalRemoval
 
     fun setEnabled(value: Boolean) {
         _enabled.value = value
@@ -103,10 +112,31 @@ internal object DesktopEqualizerSettings {
         setBands(preset.bands)
     }
 
+    fun setPeakLimiter(value: Boolean) {
+        _peakLimiter.value = value
+        persistence.saveBoolean(KEY_PEAK_LIMITER, value)
+    }
+
+    fun setVocalRemoval(value: Boolean) {
+        _vocalRemoval.value = value
+        persistence.saveBoolean(KEY_VOCAL_REMOVAL, value)
+    }
+
     /** The curve the current tab describes, ready for [DesktopEqualizer.setTuning]. */
     fun curve() = when (_mode.value) {
         DesktopEqualizerMode.DYNAMIC -> toneCurve(_toneX.value, _toneY.value, _focused.value)
         DesktopEqualizerMode.MANUAL -> manualCurve(_bands.value)
+    }
+
+    /**
+     * The curve as it should reach the audio thread.
+     *
+     * With the limiter on, the curve's own make-up attenuation is lifted: the limiter is what keeps
+     * the boost inside full scale, and applying both would leave the limiter nothing to do.
+     */
+    fun audioCurve(): EqCurve {
+        val curve = curve()
+        return if (_peakLimiter.value) EqCurve(curve.gainsDb, curve.qs, 0f) else curve
     }
 
     private fun readBands(): List<Float> {
@@ -129,4 +159,6 @@ internal object DesktopEqualizerSettings {
     private const val KEY_FOCUSED = "equalizer_focused"
     private const val KEY_BALANCE = "equalizer_balance"
     private const val KEY_BANDS = "equalizer_bands"
+    private const val KEY_PEAK_LIMITER = "equalizer_peak_limiter"
+    private const val KEY_VOCAL_REMOVAL = "equalizer_vocal_removal"
 }

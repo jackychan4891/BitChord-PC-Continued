@@ -202,6 +202,11 @@ internal fun PlayerScrubber(
     onScrub: (Float) -> Unit,
     onScrubFinished: () -> Unit,
     /**
+     * The colour the two timestamps are cut from. Their alpha is applied here,
+     * because it depends on which bar they sit under — see [hairlineBar].
+     */
+    timeTint: Color = Color.White,
+    /**
      * The desktop player's bar, measured off the web's: a 4dp hairline that
      * thickens to 8dp under the pointer, its fill lifting from two-thirds white
      * to near-white with it, and two small tabular figures underneath. A phone
@@ -234,7 +239,7 @@ internal fun PlayerScrubber(
     } else {
         MaterialTheme.typography.labelMedium
     }
-    val timeColor = Color.White.copy(alpha = if (hairlineBar) 0.4f else 0.55f)
+    val timeColor = timeTint.copy(alpha = if (hairlineBar) 0.4f else 0.55f)
     Column(Modifier.fillMaxWidth()) {
         ThinSlider(
             value = shown,
@@ -723,6 +728,8 @@ internal fun CircleGlyph(
     active: Boolean = false,
     /** The desktop player's discs are the web's 32dp; everything else keeps 34. */
     diameter: Dp = 34.dp,
+    /** The glyph's colour — the player hands it the sleeve's, so it matches the badge. */
+    tint: Color = Color.White,
     haptic: Haptic = Haptic.Tap,
 ) {
     val haptics = rememberHaptics()
@@ -753,7 +760,7 @@ internal fun CircleGlyph(
             Icon(
                 imageVector = glyph,
                 contentDescription = contentDescription,
-                tint = Color.White,
+                tint = tint,
                 modifier = Modifier.size(diameter * CIRCLE_GLYPH_SHARE),
             )
         }
@@ -1648,6 +1655,9 @@ private fun LosslessOrStats(
             text = "Dolby Atmos",
             animated = true,
             iconPainter = painterResource(Res.drawable.ic_dolby_atmos),
+            // Tinted off the sleeve like every other badge, and given the same room as the
+            // lossless mark: an untinted white one read as a sticker laid over the player.
+            artworkUrl = artworkUrl,
             modifier = modifier,
         )
         // Lossy, but the good end of lossy — a module's 320kbps tier, which
@@ -1736,6 +1746,20 @@ private fun LosslessLabel(
 private fun artworkBadgeColor(colors: List<Color>): Color? {
     val brightest = colors.maxByOrNull { it.luminance() } ?: return null
     return lerp(brightest, Color.White, 0.65f)
+}
+
+/**
+ * The colour the quality badge wears, for the parts of the player that read as
+ * one colour with it — the credits, the timestamps and the corner discs.
+ *
+ * Asked of the same URL the badge is asked of, so this is a cache hit on
+ * [rememberArtworkColors]'s palette rather than a second decode. Plain white
+ * until a sleeve has been read, which is what those elements wore before.
+ */
+@Composable
+internal fun rememberArtworkSyncColor(artworkUrl: String?): Color {
+    val palette = artworkUrl?.let { rememberArtworkColors(it) }
+    return palette?.colors?.let(::artworkBadgeColor) ?: Color.White
 }
 
 /**

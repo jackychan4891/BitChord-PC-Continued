@@ -212,6 +212,7 @@ internal object DesktopPlayerSettings : PlayerSettingsSource {
     override val spotifyCanvasAutoHide = MutableStateFlow(true)
     override val syncedLyrics = MutableStateFlow(true)
     override val translationLanguage = MutableStateFlow("")
+    override val turntableArt = DesktopAppearanceSettings.turntableArt
     override val versionAlignmentInProgress = MutableStateFlow(false)
 
     override fun setLastPlayerScreen(value: LastPlayerScreen) {

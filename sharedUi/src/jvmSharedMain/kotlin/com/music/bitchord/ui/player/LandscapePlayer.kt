@@ -8,7 +8,9 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -47,6 +49,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -567,6 +570,9 @@ private const val GLOW_PEAK = 0.5f
 /** Aura radius as a multiple of the sleeve's shorter side, so it reaches past the corners. */
 private const val GLOW_RADIUS = 0.95f
 
+/** One turn of the deck's record. Slow enough to read as a motor rather than a spinner. */
+private const val DECK_TURN_MILLIS = 4_800
+
 /**
  * The landscape player's sleeve: the still cover, and over it the looping
  * clip when there is one.
@@ -619,6 +625,22 @@ internal fun LandscapeArtwork(
     val mixBlend = PlayerSettings.smartMixBlend.collectAsStateWithLifecycle()
     val reduceAnimation by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
     val glowPulse = rememberMixPulse({ mixBlend.value }, enabled = !reduceAnimation)
+    val turntable by PlayerSettings.turntableArt.collectAsStateWithLifecycle()
+    // A record is driven by a motor rather than pushed by a finger: it comes up to speed once and
+    // stops where it is when the music does, instead of winding down.
+    val deckTurn = remember { Animatable(0f) }
+    LaunchedEffect(turntable, isPlaying, reduceAnimation) {
+        if (turntable && isPlaying && !reduceAnimation) {
+            while (true) {
+                deckTurn.animateTo(360f, tween(DECK_TURN_MILLIS, easing = LinearEasing))
+                deckTurn.snapTo(0f)
+            }
+        }
+    }
+    // The deck is laid down only for a sleeve at rest: on its way into the mini player the cover
+    // keeps the square-ish shape the bar is coming to.
+    fun onDeck() = turntable && shadowFraction() > 0.99f
+    fun deckShape(): Shape = if (onDeck()) CircleShape else sleeveShape()
     Box(
         modifier = modifier
             // Behind the sleeve, bleeding past its edges: a soft bloom that fades in with the
@@ -640,7 +662,7 @@ internal fun LandscapeArtwork(
                     radius = radius,
                 )
                 if (glowRounded) {
-                    val outline = sleeveShape().createOutline(size, layoutDirection, this)
+                    val outline = deckShape().createOutline(size, layoutDirection, this)
                     clipPath(Path().apply { addOutline(outline) }) {
                         drawRect(brush = brush)
                     }
@@ -660,13 +682,17 @@ internal fun LandscapeArtwork(
                 // tile a shadow reads as a second, darker square.
                 .graphicsLayer {
                     shadowElevation = if (casts) 14.dp.toPx() * shadowFraction() else 0f
-                    shape = sleeveShape()
+                    shape = deckShape()
                     // As `.shadow` did: it clips only when it casts.
                     clip = casts
                 }
                 .graphicsLayer {
-                    shape = sleeveShape()
+                    shape = deckShape()
                     clip = true
+                    // The turn belongs to the layer inside the one that casts, so the record
+                    // spins under a shadow that sits still. A clip is applied in a layer's own
+                    // pixels, so the disc's edge never wanders as it goes round.
+                    rotationZ = if (onDeck()) deckTurn.value else 0f
                 }
                 .background(Color.Black.copy(alpha = 0.18f)),
             contentAlignment = Alignment.Center,
@@ -700,6 +726,9 @@ internal fun LandscapeArtwork(
                 )
             }
         }
+        // What does not turn — the grooves, the rim and the arm — laid over the artwork the
+        // sleeve spins. Under the sheet, which belongs on top of the player rather than under a deck.
+        if (onDeck()) TurntableDeck(isPlaying, reduceAnimation)
         overlay()
     }
 }
@@ -799,6 +828,9 @@ internal fun LandscapeCredits(
     onMenuBounds: ((Rect) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    // The colour the quality badge next door wears, so the credits and the two
+    // corner discs read as part of the sleeve rather than as white on top of it.
+    val artworkSyncColor = rememberArtworkSyncColor(song.thumbnailUrl)
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         Crossfade(
             targetState = song.title to song.artist,
@@ -835,9 +867,10 @@ internal fun LandscapeCredits(
                         lineHeight = 20.sp,
                         fontWeight = FontWeight.W400,
                     ),
-                    // `--systemSecondary`, the same two-thirds white the web
-                    // player's subtitle and its unlit corner buttons use.
-                    color = Color.White.copy(alpha = 0.64f),
+                    // `--systemSecondary`, which the web player's subtitle is
+                    // two-thirds white — here the sleeve's own colour at that
+                    // same strength, so it matches the quality badge.
+                    color = artworkSyncColor.copy(alpha = 0.64f),
                     // A title that's also scrolling gets to go first — starting
                     // together reads as clutter, so the artist waits a beat.
                     startDelayMillis = if (titleOverflowing) MARQUEE_ARTIST_STAGGER_MS else 0L,
@@ -859,6 +892,7 @@ internal fun LandscapeCredits(
                 onClick = onToggleLike,
                 active = liked,
                 diameter = discSize,
+                tint = artworkSyncColor,
                 haptic = if (liked) Haptic.ToggleOff else Haptic.ToggleOn,
             )
             Spacer(Modifier.width(8.dp))
@@ -874,6 +908,7 @@ internal fun LandscapeCredits(
                     contentDescription = stringResource(Res.string.more),
                     onClick = onOpenMenu,
                     diameter = discSize,
+                    tint = artworkSyncColor,
                 )
             }
         }

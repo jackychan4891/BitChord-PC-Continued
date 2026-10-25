@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -79,10 +80,11 @@ internal fun DesktopReplayPage(
     onPlaySong: (Song) -> Unit,
     onOpenArtist: (String) -> Unit,
     contentPadding: PaddingValues,
+    listState: LazyListState,
 ) {
     // The mesh behind this page is painted by the frame, so the chrome is tinted by it too.
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
+        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = contentPadding) {
             item("heading") {
                 // No arrow of its own: the top bar's back is the way out, as the gesture is on
                 // Android.

@@ -1414,6 +1414,8 @@ class DesktopPlaybackEngine(
     /** The listener's own tuning, applied to one side of the mix. */
     private fun equalise(processor: DesktopEqualizer, samples: FloatArray, count: Int) {
         processor.setTuning(equalizerEnabled, equalizerCurve, equalizerBalance)
+        processor.setLimiter(equalizerLimiter)
+        processor.setVocalRemoval(equalizerVocalRemoval)
         processor.process(samples, count)
     }
 
@@ -2327,6 +2329,10 @@ class DesktopPlaybackEngine(
 
     @Volatile private var equalizerEnabled = false
 
+    @Volatile private var equalizerLimiter = false
+
+    @Volatile private var equalizerVocalRemoval = false
+
     @Volatile private var equalizerCurve: EqCurve = EqCurve.FLAT
 
     @Volatile private var equalizerBalance = 0f
@@ -2345,10 +2351,20 @@ class DesktopPlaybackEngine(
      * The curve is rendered by the caller because working out the make-up attenuation walks the
      * whole response ([EqCurve]), and the audio thread is the one place that must not do that.
      */
-    fun setEqualizer(enabled: Boolean, curve: EqCurve, balance: Float) {
+    fun setEqualizer(
+        enabled: Boolean,
+        curve: EqCurve,
+        balance: Float,
+        limiter: Boolean = false,
+        vocalRemoval: Boolean = false,
+    ) {
         equalizerCurve = curve
         equalizerBalance = balance.coerceIn(-1f, 1f)
         equalizerEnabled = enabled
+        // Both switches live under the equaliser's own, so switching the equaliser off is a
+        // bypass rather than leaving a limiter or a canceller running behind a flat signal.
+        equalizerLimiter = enabled && limiter
+        equalizerVocalRemoval = enabled && vocalRemoval
     }
 
     fun setSpatialAudio(enabled: Boolean) {

@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import coil3.compose.LocalPlatformContext
+import com.music.bitchord.ui.graphics.Swatch
 import com.music.bitchord.ui.graphics.forPixelAccess
 import com.music.bitchord.ui.graphics.paletteSwatches
 import com.music.bitchord.ui.graphics.toImageBitmap
@@ -43,7 +44,6 @@ import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.min
 import kotlin.math.sin
 
 private val FallbackColors = listOf(
@@ -67,9 +67,10 @@ data class MeshPalette(
 )
 
 /**
- * The Apple Music "Now Playing" backdrop: four luminous colour blobs sampled
- * from the album art, drawn as soft radial gradients and blurred into a mesh.
- * Colour changes on track skip crossfade over ~1.4s instead of snapping.
+ * The Apple Music "Now Playing" backdrop: the album art's colours laid over the
+ * surface as one continuous field, with soft masses drifting within it and the
+ * whole layer blurred into a mesh. Colour changes on track skip crossfade over
+ * ~1.4s instead of snapping.
  *
  * The blobs drift when there is a reason to — the player opening, or
  * [trackKey] changing — and then come to rest. They used to orbit forever,
@@ -130,7 +131,7 @@ fun MeshGradientBackground(
 
     val tuned = (shown.colors.ifEmpty { FallbackColors } + FallbackColors)
         .take(4)
-        .map { it.tuned() }
+        .mapIndexed { index, color -> color.tuned(SlotLightness[index]) }
 
     // Each colour slot crossfades independently when the track (palette) changes,
     // unless "reduce animation" is on, in which case colours snap straight to target.
@@ -192,25 +193,57 @@ fun MeshGradientBackground(
         // Nothing off a sleeve yet, so the screen is its own dim ground and the
         // blobs join in when the colours do.
         if (shown.resolved) {
-            val anchors = listOf(
-                Offset(0.20f, 0.25f),
-                Offset(0.80f, 0.20f),
-                Offset(0.75f, 0.80f),
-                Offset(0.25f, 0.75f),
-            )
-            val speeds = listOf(1f, -0.7f, 0.85f, -1.15f)
             val drift = phase.value
 
-            animatedColors.forEachIndexed { index, color ->
-                val anchor = anchors[index]
+            // The field the masses sit in: the palette laid across the whole
+            // surface as one gradient. Sampling Apple's backdrop cell by cell,
+            // not one of them is the ground colour showing through — every part
+            // of it is a sleeve colour, and the dark comes from those colours
+            // being deep rather from from gaps between the blobs. Left the
+            // ground bare, our gaps read as the olive mud this replaced.
+            val tilt = 0.10f * sin(drift * 0.5f)
+            drawRect(
+                brush = Brush.linearGradient(
+                    colors = animatedColors.map { it.deepened() },
+                    start = Offset(size.width * (0.05f + tilt), 0f),
+                    end = Offset(size.width, size.height * (1f - tilt)),
+                ),
+            )
+
+            // Six masses over four colours, so each hue gets a mass of its own
+            // and the repeats land across the surface from each other.
+            val anchors = listOf(
+                Offset(0.18f, 0.22f),
+                Offset(0.82f, 0.16f),
+                Offset(0.50f, 0.50f),
+                Offset(0.86f, 0.78f),
+                Offset(0.16f, 0.80f),
+                Offset(0.52f, 0.04f),
+            )
+            val speeds = listOf(1f, -0.7f, 0.85f, -1.15f, 0.6f, -0.9f)
+
+            anchors.forEachIndexed { index, anchor ->
+                val color = animatedColors[index % animatedColors.size]
                 val center = Offset(
-                    x = (anchor.x + 0.16f * cos(drift * speeds[index] + index * 1.7f)) * size.width,
-                    y = (anchor.y + 0.16f * sin(drift * speeds[index] * 0.9f + index * 2.3f)) * size.height,
+                    x = (anchor.x + 0.14f * cos(drift * speeds[index] + index * 1.7f)) * size.width,
+                    y = (anchor.y + 0.14f * sin(drift * speeds[index] * 0.9f + index * 2.3f)) * size.height,
                 )
-                val radius = size.maxDimension * 0.62f
+                // Measured off the longer edge so the masses overlap into one
+                // surface, and kept well under a full alpha: a core that holds
+                // at 1 paints a disc, and a disc big enough to cover a side of
+                // the window is what turned Apple's four hues into one flat wall
+                // of red. The field underneath shows through instead. Small
+                // enough that it does not — Apple's backdrop has pockets at 7%
+                // lightness between its masses, and six overlapping discs of
+                // 0.46 of the width left no gap to have them in.
+                val radius = size.maxDimension * 0.40f
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(color.copy(alpha = 0.85f), color.copy(alpha = 0f)),
+                        colorStops = arrayOf(
+                            0f to color.copy(alpha = 0.95f),
+                            0.45f to color.copy(alpha = 0.45f),
+                            1f to color.copy(alpha = 0f),
+                        ),
                         center = center,
                         radius = radius,
                     ),
@@ -218,14 +251,31 @@ fun MeshGradientBackground(
                     center = center,
                 )
             }
+
+            // Apple's four corners are the darkest thing on its backdrop — its
+            // own are at 7–8% lightness against masses at 25% — and without them
+            // the field runs to the edge of the window like a wallpaper instead
+            // of sitting behind the cover.
+            drawRect(
+                brush = Brush.radialGradient(
+                    colorStops = arrayOf(
+                        0.40f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.62f),
+                    ),
+                    center = Offset(size.width / 2f, size.height / 2f),
+                    radius = size.maxDimension * 0.72f,
+                ),
+            )
         }
 
-        // Gentle scrim so white text stays legible over bright art.
+        // Gentle scrim so white text stays legible over bright art. Lighter than
+        // it was: it is what flattened the blobs into one another once they were
+        // bright enough to separate.
         drawRect(
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    Color.Black.copy(alpha = 0.10f),
-                    Color.Black.copy(alpha = 0.38f),
+                    Color.Black.copy(alpha = 0.06f),
+                    Color.Black.copy(alpha = 0.30f),
                 ),
             ),
         )
@@ -299,7 +349,7 @@ private val paletteCache = object : LinkedHashMap<String, MeshPalette>(0, 0.75f,
 private const val PALETTE_CACHE_ENTRIES = 64
 
 /**
- * Four mesh colours drawn from the artwork.
+ * Four mesh colours drawn from the artwork, separated by hue.
  *
  * The named swatches — vibrant, muted and friends — are a convenience over the
  * full set, and on dark or desaturated sleeves every vibrant slot comes back
@@ -307,46 +357,77 @@ private const val PALETTE_CACHE_ENTRIES = 64
  * up from [FallbackColors] is what left those covers sitting under the stock
  * purple. So the whole swatch list is read instead, and any shortfall is
  * derived from the art's own colours rather than borrowed.
+ *
+ * Two further things make a sleeve read as Apple's backdrop rather than as a
+ * smear of itself. The quantiser's filter is off: its "red I-line" rule throws
+ * away hue 10–37° under 82% saturation, which is exactly the warm band Apple
+ * paints a third of its mesh with. And the winners are taken one per slice of
+ * hue, so a green sleeve yields green, its neighbouring gold, its shadow and
+ * its highlight, rather than four greens laid one over another.
  */
 private fun paletteOf(bitmap: ImageBitmap): List<Color> {
-    fun swatchesOf(clearFilters: Boolean): List<Color> =
-        paletteSwatches(bitmap, 24, clearFilters)
-            .sortedByDescending { it.population }
-            .map { Color(it.rgb) }
-
-    val found = swatchesOf(clearFilters = false).ifEmpty {
-        // The default filter discards near-black and near-white, which on a
-        // monochrome sleeve can be everything there is.
-        swatchesOf(clearFilters = true)
-    }
-
-    val distinct = found.distinctEnough()
+    val found = bitmap.swatches(clearFilters = true)
+        .ifEmpty { bitmap.swatches(clearFilters = false) }
+        .sortedByDescending { it.score() }
+        .spreadByHue()
     return when {
-        distinct.isEmpty() -> FallbackColors
-        distinct.size >= 4 -> distinct.take(4)
-        else -> distinct.expandedToFour()
+        found.isEmpty() -> FallbackColors
+        found.size >= 4 -> found.take(4)
+        else -> found.expandedTo(4)
     }
 }
 
-/** Drop near-duplicates, so the four blobs don't collapse into one wash. */
-private fun List<Color>.distinctEnough(): List<Color> {
-    val kept = mutableListOf<Color>()
-    forEach { color -> if (kept.none { it.isCloseTo(color) }) kept += color }
-    return kept
+private fun ImageBitmap.swatches(clearFilters: Boolean): List<Swatch> =
+    paletteSwatches(this, 24, clearFilters)
+
+/**
+ * How much of the sleeve a colour covers, weighed toward the colours a mesh
+ * wants: well saturated, and sitting in the deep band Apple's own backdrop is
+ * made of rather than at either end of the exposure.
+ *
+ * Saturation is squared because a mesh has no use for the near-grey cells a
+ * population count hands to it — they were the olive wash, since a colour with
+ * nothing in it still covers a whole quarter of the screen.
+ */
+private fun Swatch.score(): Float {
+    val hsl = hslOf(rgb)
+    val chroma = 0.10f + hsl[1] * hsl[1]
+    val ground = when {
+        hsl[2] < 0.06f -> 0.3f
+        hsl[2] > 0.95f -> 0.4f
+        else -> 1f
+    }
+    return population * chroma * ground * (1f - abs(hsl[2] - 0.38f) * 1.35f)
 }
 
-private fun Color.isCloseTo(other: Color): Boolean {
-    val a = hsl()
-    val b = other.hsl()
-    val hueGap = abs(a[0] - b[0]).let { min(it, 360f - it) }
-    return hueGap < 15f && abs(a[2] - b[2]) < 0.12f
+/**
+ * The best-scoring swatch of each 30° of hue, in the order they scored.
+ *
+ * No filter of the quantiser's guarantees colour *spread*, which is what makes
+ * the masses read as separate; sorting by population alone hands the four slots
+ * to whichever hue the sleeve is mostly made of.
+ */
+private fun List<Swatch>.spreadByHue(): List<Color> {
+    val best = LinkedHashMap<Int, Color>()
+    forEach { swatch ->
+        val hsl = hslOf(swatch.rgb)
+        // Grey has no slice to sit in, so it keeps a key of its own: one achromatic
+        // colour may join the mesh, and its low chroma score is what puts it last.
+        val slice = if (hsl[1] < 0.18f) ACHROMATIC_HUE else hsl[0].toInt() / HUE_SLICE_DEGREES
+        if (slice !in best) best[slice] = Color(swatch.rgb)
+    }
+    return best.values.toList()
 }
+
+/** Twelve slices of the wheel, so two colours that share one cannot both be a blob. */
+private const val HUE_SLICE_DEGREES = 30
+private const val ACHROMATIC_HUE = -1
 
 /** Fill the empty slots off the art itself, fanning hue and lightness out. */
-private fun List<Color>.expandedToFour(): List<Color> {
+private fun List<Color>.expandedTo(count: Int): List<Color> {
     val out = toMutableList()
     var step = 1
-    while (out.size < 4) {
+    while (out.size < count) {
         out += this[(out.size - size) % size].shifted(24f * step, 0.12f * step)
         step++
     }
@@ -360,15 +441,45 @@ private fun Color.shifted(hue: Float, lightness: Float): Color {
     return Color(ColorUtils.HSLToColor(hsl))
 }
 
-private fun Color.hsl(): FloatArray =
-    FloatArray(3).also { ColorUtils.colorToHSL(toArgb(), it) }
+private fun Color.hsl(): FloatArray = hslOf(toArgb())
 
-/** Boost saturation and clamp lightness so any artwork yields a rich, non-muddy mesh. */
-private fun Color.tuned(): Color {
-    val hsl = FloatArray(3)
-    ColorUtils.colorToHSL(toArgb(), hsl)
-    hsl[1] = (hsl[1] * 1.35f).coerceAtMost(1f)
-    hsl[2] = hsl[2].coerceIn(0.28f, 0.58f)
+private fun hslOf(argb: Int): FloatArray = FloatArray(3).also { ColorUtils.colorToHSL(argb, it) }
+
+/**
+ * Saturate a sleeve colour and put it in Apple's lightness band.
+ *
+ * Measured off Apple's own backdrop, its masses sit at 10–30% lightness and
+ * 40–80% saturation. Ours were at 24–42% lightness, which is the difference
+ * between a deep field and a glowing one, and its low-saturation cells were
+ * 17–31%, which is the olive mud. The saturation floor is what forces a pale
+ * or grey sleeve colour into a hue that can carry a mass at all; the ceiling
+ * keeps a pure red from banding out to a flat wall across a side of the window.
+ *
+ * [lightness] is the slot's own exposure, so a sleeve whose four colours are
+ * all equally bright still yields masses that differ from one another.
+ */
+private fun Color.tuned(lightness: Float): Color {
+    val hsl = hsl()
+    hsl[1] = (hsl[1] * 1.55f).coerceIn(0.45f, 0.92f)
+    hsl[2] = (hsl[2] * 0.55f * lightness).coerceIn(0.07f, 0.30f)
+    return Color(ColorUtils.HSLToColor(hsl))
+}
+
+/**
+ * How much each of the four slots is lit.
+ *
+ * Sampling Apple's backdrop cell by cell, its masses are not at one exposure:
+ * they run from about 10% lightness to about 30%, and the step between them is
+ * most of what makes them read as separate bodies rather than as one long
+ * gradient. Held to a single exposure, ours flattened into exactly that — a
+ * smooth ramp across the right of the window with nothing in it.
+ */
+private val SlotLightness = listOf(1.0f, 0.58f, 1.3f, 0.82f)
+
+/** The same colour as a ground rather than as a mass: the field under the blobs. */
+private fun Color.deepened(): Color {
+    val hsl = hsl()
+    hsl[2] = (hsl[2] * 0.55f).coerceAtLeast(0.04f)
     return Color(ColorUtils.HSLToColor(hsl))
 }
 

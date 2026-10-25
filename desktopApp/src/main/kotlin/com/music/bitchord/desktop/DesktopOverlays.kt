@@ -32,6 +32,12 @@ internal class DesktopOverlays {
     var reorder by mutableStateOf(false)
     var nowPlaying by mutableStateOf(false)
 
+    /** The Ctrl+K palette: a search field and its hits, over whatever page is showing. */
+    var quickSearch by mutableStateOf(false)
+
+    /** The list of keys the window listens for. */
+    var shortcuts by mutableStateOf(false)
+
     /**
      * Which page of Settings fills the page area, or none. A place like any other: it goes into
      * the back history, so back from a sub-page lands on Settings and back from Settings on
@@ -56,15 +62,25 @@ internal class DesktopOverlays {
 /**
  * Settings and the pages its rows lead to. Only the screens are here; the short prompts behind them
  * — a sign-in, a token, a source's address — stay cards over the page, as Android's alerts do.
+ *
+ * [MAIN] lists the eight groups and the next nine are the pages they open; the last five are the
+ * screens a row inside a page leads to.
  */
 internal enum class DesktopSettingsPage {
     MAIN,
+    PLAYBACK,
+    AUDIO,
+    APPEARANCE,
+    LYRICS,
+    SOURCES,
+    STORAGE,
+    ACCOUNT,
+    GENERAL,
     EQUALIZER,
     AUDIO_OUTPUT,
     LISTEN_TOGETHER,
     LYRICS_SOURCES,
     TRANSLATION_LANGUAGE,
-    SPOTIFY_CANVAS,
     INTEGRATIONS,
     LICENSES,
 }

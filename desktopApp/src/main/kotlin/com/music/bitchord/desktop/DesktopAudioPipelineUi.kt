@@ -17,9 +17,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,8 +38,8 @@ import com.music.bitchord.ui.icons.BitChordIcons
  * whether anything is being resampled, the processing on top, and the device it lands on.
  *
  * The player's quality badge opens this panel, and what it asks first is where the music should
- * come out, so the output devices lead — see [DesktopAudioDevices]. The per-track source override
- * is the last word, below the chain it overrides — see [DesktopSourcePins].
+ * come out, so the output devices lead — see [DesktopAudioDevices]. Above them sits what the song
+ * is rather than how it arrived — see [AboutTrackStage].
  *
  * Android opens the same readout from the quality badge — see its `AudioPipelineDialog`.
  */
@@ -45,10 +48,6 @@ internal fun DesktopAudioPipelineDialog(
     song: Song?,
     format: DesktopStreamFormat?,
     sourceName: String?,
-    playingSourceId: String?,
-    sources: List<DesktopSourceConfig>,
-    pinnedSourceId: String?,
-    onChooseSource: (String?) -> Unit,
     pipeline: DesktopAudioPipeline,
     onDismiss: () -> Unit,
 ) {
@@ -69,6 +68,7 @@ internal fun DesktopAudioPipelineDialog(
                 fontWeight = FontWeight.Bold,
             )
             if (song != null) TrackHeader(song)
+            if (song != null) AboutTrackStage(song)
             OutputChooser()
             // The engine's own copy, so Source and Decoder cannot disagree while an upgrade lands.
             val source = pipeline.sourceFormat ?: format
@@ -129,9 +129,6 @@ internal fun DesktopAudioPipelineDialog(
                     DesktopStrings["pipeline_buffers", "Buffer"],
                     pipeline.bufferBytes.takeIf { it > 0 }?.let { "${it / 1024} KB" },
                 )
-            }
-            if (song != null && sources.isNotEmpty()) {
-                SourceChooser(sources, pinnedSourceId, playingSourceId, onChooseSource)
             }
         }
     }
@@ -202,44 +199,22 @@ private fun TrackHeader(song: Song) {
     }
 }
 
-/** Where this track should come from — the last word, below the chain it overrides. */
+/**
+ * What the song is, in the words Genius prints under it. Quiet when Genius is quiet: the stage
+ * arrives only with a paragraph in hand, as the rest of this panel lists nothing it cannot answer.
+ */
 @Composable
-private fun SourceChooser(
-    sources: List<DesktopSourceConfig>,
-    pinnedSourceId: String?,
-    playingSourceId: String?,
-    onChooseSource: (String?) -> Unit,
-) {
-    Column {
+private fun AboutTrackStage(song: Song) {
+    var bio by remember(song.videoId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(song.title, song.artist) { bio = DesktopGenius.about(song.title, song.artist) }
+    val text = bio
+    if (text.isNullOrBlank()) return
+    PipelineStage(DesktopStrings["d_about_track", "About this song"]) {
         Text(
-            DesktopStrings["d_play_from", "Play this from"].uppercase(),
-            color = DesktopSecondary,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(6.dp))
-        Column(Modifier.fillMaxWidth().desktopCardInset(RoundedCornerShape(10.dp)).padding(vertical = 4.dp)) {
-            ChoiceRow(
-                DesktopStrings["d_play_from_auto", "Automatic — the usual order"],
-                detail = null,
-                selected = pinnedSourceId == null,
-                onClick = { onChooseSource(null) },
-            )
-            sources.forEach { source ->
-                ChoiceRow(
-                    source.displayName,
-                    detail = source.id.takeIf { it == playingSourceId }
-                        ?.let { DesktopStrings["now_playing", "Now playing"] },
-                    selected = source.id == pinnedSourceId,
-                    onClick = { onChooseSource(source.id) },
-                )
-            }
-        }
-        Text(
-            DesktopStrings["d_track_info_hint", "Applies to this track only. BitChord falls back to the usual order when the source you picked has no copy of it."],
-            color = DesktopSecondary,
+            text,
+            color = Color.White,
             style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
         )
     }
 }

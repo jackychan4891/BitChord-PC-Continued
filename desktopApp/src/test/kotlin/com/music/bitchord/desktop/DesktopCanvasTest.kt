@@ -163,6 +163,19 @@ class DesktopCanvasTest {
         assertNull(selectCanvasVariant(master, "#EXTM3U\n#EXT-X-STREAM-INF:RESOLUTION=1280x720\nfile:///private", 540))
     }
 
+    /**
+     * The token a Spotify canvas needs is signed by a secret the web player ships, and the build
+     * carries its own copy of it. This is the excerpt the copy was taken from — a byte mistyped in
+     * either is a canvas chain that silently returns nothing.
+     */
+    @Test
+    fun `the shipped TOTP table matches what the web player declares`() {
+        val bundle = """let ej=[{secret:',7/*F("rLJ2oxaKL^f+E1xvP@N',version:61},""" +
+            """{secret:'OmE{ZA.J^":0FG\\Uz?[@WW',version:60},{secret:"{iOFn;4}<1PFYKPV?5{%u14]M>/V0hDH",version:59}].map("""
+        val (version, secret) = DesktopSpotifyTotp.entries(bundle) ?: error("the table is not where the bundle keeps it")
+        assertTrue(DesktopSpotifyToken.TOTP_SECRETS.getValue(version).contentEquals(secret))
+    }
+
     private fun field(number: Int, value: String): ByteArray {
         val bytes = value.toByteArray(StandardCharsets.UTF_8)
         return byteArrayOf((number shl 3 or 2).toByte()) + varint(bytes.size) + bytes

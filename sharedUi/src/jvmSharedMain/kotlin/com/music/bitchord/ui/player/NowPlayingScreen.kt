@@ -892,6 +892,11 @@ fun NowPlayingScreen(
     // rather than full-bleed, and is averaged on a stride off the main thread.
     val meshRefreshMs = MESH_REFRESH_MS
 
+    // The colour the quality badge wears, cut off the sleeve — read once here so
+    // the credits, the timestamps and the corner discs are asked to match it
+    // rather than each computing the same palette.
+    val artworkSyncColor = rememberArtworkSyncColor(song.thumbnailUrl)
+
     val scrub = rememberPlayerScrub(song.videoId, position, durationMs)
     // Read by the scrubber itself — see [PlayerScrubber.shown].
     val shown: () -> Float = { scrub.shown(position.positionMs, durationMs) }
@@ -2038,6 +2043,7 @@ fun NowPlayingScreen(
                                     ?.takeIf { !scrub.scrubbing && it.end > it.start }
                                     ?.let { it.start..it.end },
                                 hairlineBar = !compact,
+                                timeTint = artworkSyncColor,
                                 onScrub = onScrub,
                                 onScrubFinished = onScrubFinished,
                             ) {
@@ -3396,7 +3402,7 @@ fun NowPlayingScreen(
                                         fontWeight = FontWeight.W500,
                                         fontSize = 20.sp,
                                     ),
-                                    color = Color.White.copy(alpha = 0.55f),
+                                    color = artworkSyncColor.copy(alpha = 0.55f),
                                     enabled = scrolling,
                                     // A title that's also scrolling gets to go first —
                                     // starting together reads as clutter, so the artist
@@ -3423,6 +3429,7 @@ fun NowPlayingScreen(
                             ),
                             onClick = onToggleLike,
                             active = liked,
+                            tint = artworkSyncColor,
                             haptic = if (liked) Haptic.ToggleOff else Haptic.ToggleOn,
                         )
                         Spacer(Modifier.width(8.dp))
@@ -3432,6 +3439,7 @@ fun NowPlayingScreen(
                             icon = if (showRevertCue) Icons.AutoMirrored.Rounded.Undo else Icons.Rounded.MoreHoriz,
                             contentDescription = stringResource(Res.string.more),
                             onClick = onOpenMenu,
+                            tint = artworkSyncColor,
                         )
                     }
                 }
@@ -3702,6 +3710,7 @@ fun NowPlayingScreen(
                 transitionWindow = transitionWindow
                     ?.takeIf { !scrub.scrubbing && it.end > it.start }
                     ?.let { it.start..it.end },
+                timeTint = artworkSyncColor,
                 onScrub = onScrub,
                 onScrubFinished = onScrubFinished,
             ) {

@@ -19,19 +19,16 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 
 /**
- * What the stations that are not the BBC's are carrying right now.
+ * What the radio page's stations are carrying right now.
  *
- * The BBC publishes a now-playing feed of its own and [DesktopBbcRadio] reads that. Nothing else on
- * this page has one: a commercial stream says nothing about its programme in any feed a listener may
- * ask for, and says it *inside* the stream instead. So the record is taken off the stream itself, by
- * whichever of the three ways a broadcaster happens to send it:
+ * A live station says nothing about its programme in any feed a listener may ask for, and says it
+ * *inside* the stream instead. So the record is taken off the stream itself, by whichever of the ways
+ * a station happens to send it:
  *
+ *  - an ID3 tag at the head of a media segment, which is how Apple puts a title on its live radio;
+ *  - the words on an HLS `#EXTINF` line, where a playlist names the item it is about to play;
  *  - Shoutcast/ICY metadata, the `StreamTitle='Artist - Track'` block spliced into the audio every N
- *    bytes (Bauer's Capital, Heart, Smooth and Classic FM);
- *  - the words on an HLS `#EXTINF` line, where the playlist names the item it is about to play
- *    (Planet Radio's KIS1, KIS2 and Magic);
- *  - an ID3 tag at the head of a media segment, which is how Apple puts a title on its live radio —
- *    and how a stream that names nothing in its playlist can still be read.
+ *    bytes, which is what a station that serves plain mp3 rather than a playlist still sends.
  *
  * Each is a *read*, not a subscription: nothing here touches the stream the player is playing, and a
  * station nobody is looking at is not asked. A playlist address may carry a short-lived signature; it
@@ -65,9 +62,7 @@ internal object DesktopRadioNowPlaying {
      */
     suspend fun refresh(stations: List<DesktopRadioStation>) {
         val now = System.currentTimeMillis()
-        val due = stations.filter {
-            DesktopBbcRadio.byId(it.id) == null && now - (asked[it.id] ?: 0L) >= TTL_MILLIS
-        }
+        val due = stations.filter { now - (asked[it.id] ?: 0L) >= TTL_MILLIS }
         if (due.isEmpty()) return
         due.forEach { asked[it.id] = now }
         val read = withContext(Dispatchers.IO) {

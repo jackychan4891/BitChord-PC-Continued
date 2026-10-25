@@ -1,6 +1,7 @@
 package com.music.bitchord.ui.player
 
 import com.music.bitchord.sharedui.resources.*
+import com.music.bitchord.ui.components.AppleScrollbar
 import com.music.bitchord.ui.components.ExplicitSongTitle
 
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.draw.alpha
 import kotlin.math.abs
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -436,6 +438,9 @@ internal fun InlineQueue(
                     )
                 }
             }
+            // The queue outgrows its sheet more often than anything else on the player, so it is
+            // the one pane worth a bar over the rows themselves rather than beside them.
+            AppleScrollbar(listState, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
         }
     }
 }

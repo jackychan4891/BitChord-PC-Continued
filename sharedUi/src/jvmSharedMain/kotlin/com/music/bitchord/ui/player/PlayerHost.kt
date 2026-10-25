@@ -164,11 +164,18 @@ interface PlayerSettingsSource {
     val spotifyCanvasAutoHide: StateFlow<Boolean>
     val syncedLyrics: StateFlow<Boolean>
     val translationLanguage: StateFlow<String>
+    /**
+     * The player's cover as a record on a turntable rather than in a sleeve. A style only the
+     * window offers, so a platform that has nowhere to put its switch keeps the sleeve.
+     */
+    val turntableArt: StateFlow<Boolean> get() = NoTurntableArt
     val versionAlignmentInProgress: StateFlow<Boolean>
 
     fun setLastPlayerScreen(value: LastPlayerScreen)
     fun setLyricsOffsetMs(value: Int)
 }
+
+private val NoTurntableArt = MutableStateFlow(false)
 
 /** The player's name for the installed host's settings, read where AppSettings used to be. */
 internal val PlayerSettings: PlayerSettingsSource

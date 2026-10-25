@@ -1,5 +1,6 @@
 package com.music.bitchord.desktop
 
+import com.music.bitchord.playback.EqCurve
 import com.music.bitchord.playback.EqLayout
 import com.music.bitchord.playback.EqualizerPreset
 import com.music.bitchord.playback.manualCurve
@@ -129,6 +130,53 @@ class DesktopEqualizerTest {
         val output = run(equalizer, input)
         for (index in input.indices) {
             assertEquals(input[index], output[index], 0f, "sample $index")
+        }
+    }
+
+    // ---- The limiter -------------------------------------------------------
+
+    @Test
+    fun theLimiterCatchesThePeaksAMakeUpAttenuationWouldHaveMadeRoomFor() {
+        val equalizer = DesktopEqualizer()
+        equalizer.setLimiter(true)
+        // The curve as the settings hand it over with the limiter on: no attenuation of its own.
+        val boosted = manualCurve(List(EqLayout.MANUAL_COUNT) { EqLayout.MANUAL_RANGE_DB })
+        equalizer.setTuning(true, EqCurve(boosted.gainsDb, boosted.qs, 0f), 0f)
+        val peak = run(equalizer, stereoTone(400.0, amplitude = 0.75f)).maxOf { abs(it) }
+        assertTrue(peak <= 0.9801f, "the limiter let a sample through at $peak")
+        assertTrue(peak > 0.9f, "the limiter should be working, but the peak is only $peak")
+    }
+
+    @Test
+    fun theLimiterLeavesWhatIsAlreadyUnderTheCeilingAlone() {
+        val equalizer = DesktopEqualizer()
+        equalizer.setLimiter(true)
+        equalizer.setTuning(false, EqCurve.FLAT, 0f)
+        val input = stereoTone(1_000.0, amplitude = 0.5f)
+        val output = run(equalizer, input)
+        for (index in input.indices) {
+            assertEquals(input[index], output[index], 0f, "sample $index")
+        }
+    }
+
+    @Test
+    fun theLimiterGivesTheGainBackOnceThePeakIsOver() {
+        val equalizer = DesktopEqualizer()
+        equalizer.setLimiter(true)
+        equalizer.setTuning(false, EqCurve.FLAT, 0f)
+        equalizer.configure(2, SAMPLE_RATE)
+
+        val loud = FloatArray(2) { 2f }
+        equalizer.process(loud, loud.size)
+        // Two seconds of nothing, far longer than the release.
+        val silence = FloatArray(SAMPLE_RATE * 2)
+        equalizer.process(silence, silence.size)
+
+        val quiet = stereoTone(1_000.0, amplitude = 0.5f)
+        val output = quiet.copyOf()
+        equalizer.process(output, output.size)
+        for (index in quiet.indices) {
+            assertEquals(quiet[index], output[index], 0f, "sample $index")
         }
     }
 

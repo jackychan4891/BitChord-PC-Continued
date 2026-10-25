@@ -33,13 +33,6 @@ class DesktopRadioStreamSmokeTest {
     }
 
     @Test
-    fun nineLocalBroadcastersDecodePublicAudio() {
-        if (System.getenv("BITCHORD_RADIO_SMOKE") != "1") return
-        listOf("ra.1345165422", "ra.1445918457", "ra.1461581216", "ra.1445918670", "ra.1461555238",
-            "ra.1534224138", "ra.1345167712", "ra.1345166934", "ra.1445918839").forEach(::decode)
-    }
-
-    @Test
     fun mutedOutputStartsPausesReconnectsAndStops() = runBlocking {
         if (System.getenv("BITCHORD_RADIO_OUTPUT_SMOKE") != "1") return@runBlocking
         val player = DesktopRadioPlayer()

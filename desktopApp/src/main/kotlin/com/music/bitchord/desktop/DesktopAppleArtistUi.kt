@@ -429,13 +429,14 @@ internal fun DesktopAppleShelf(
     onItemMenu: ((ShelfItem) -> Unit)? = null,
     /** The station on air in the radio player, so its tile can be marked. */
     playingRadioKey: String? = null,
-    onRadioSchedule: ((ShelfItem) -> Unit)? = null,
+    /** Off for a page that already names itself, so the shelf's own title is left out. */
+    showHeading: Boolean = true,
 ) {
     val circles = shelf.items.isNotEmpty() && shelf.items.all { it.browseId?.startsWith("UC") == true }
     val videos = shelf.title.contains("video", ignoreCase = true)
     val more = shelf.moreBrowseId?.takeIf { it.startsWith(DesktopAppleBrowseClient.PAGE_PREFIX) }
     val heading: @Composable () -> Unit = {
-        DesktopAppleHeading(shelf.title, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
+        if (showHeading) DesktopAppleHeading(shelf.title, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
             .then(if (more != null) Modifier.clickable { onItemClick(ShelfItem(shelf.title, "", null, null, more), shelf.title) } else Modifier), chevron = true)
     }
     // Apple's track grid — the columns of short rows that read down three at a
@@ -456,33 +457,24 @@ internal fun DesktopAppleShelf(
         )
         return
     }
-    // Apple's radio page is a grid of squares with what each one is carrying underneath. That shape
-    // is drawn for the source's stations and the BBC's alike: the BBC's own feed is what puts a
-    // record under a tile, and its day is what the clock on a tile opens.
+    // Apple's radio page is a grid of squares with what each one is carrying underneath. Apple names
+    // no programme in any feed a listener may ask for, so that line is read off the stream itself.
     if (shelf.items.isNotEmpty() && shelf.items.all { DesktopRadioClient.isStation(it) }) {
-        val onAir by DesktopBbcRadio.tracks.collectAsState()
         val offAir by DesktopRadioNowPlaying.lines.collectAsState()
         val itemOf = { tile: DesktopRadioTile -> shelf.items.firstOrNull { DesktopRadioClient.keyOf(it) == tile.key } }
         DesktopRadioTileGrid(
-            shelf.title,
+            if (showHeading) shelf.title else null,
             shelf.items.map { item ->
-                val station = DesktopBbcRadio.byBrowseId(item.browseId)
                 val key = DesktopRadioClient.keyOf(item)
                 DesktopRadioTile(
                     key = key,
                     title = item.title,
-                    subtitle = station?.let { onAir[it.service]?.line } ?: offAir[key] ?: item.subtitle,
-                    // The BBC serves the record's sleeve beside its now-playing line, so its tiles
-                    // show that rather than only the monogram. The monogram stays as the fallback
-                    // for a station that has not answered yet.
-                    artworkUrl = station?.let { onAir[it.service]?.artworkUrl } ?: item.thumbnailUrl,
-                    monogram = station?.monogram,
+                    subtitle = offAir[key] ?: item.subtitle,
+                    artworkUrl = item.thumbnailUrl,
                     playing = key == playingRadioKey,
-                    hasSchedule = station != null && onRadioSchedule != null,
                 )
             },
             onOpen = { tile -> itemOf(tile)?.let { onItemClick(it, shelf.title) } },
-            onInfo = { tile -> itemOf(tile)?.let { onRadioSchedule?.invoke(it) } },
             onHide = { tile -> DesktopRadioVisibility.hide(tile.key, tile.title) },
         )
         return
@@ -529,9 +521,9 @@ internal fun DesktopArtistSignature(name: String) {
     if (ink.width <= 0 || ink.height <= 0) return
     val aspect = ink.width.toFloat() / ink.height
     val width = minOf(300.dp, 96.dp * aspect)
-    Box(
+    Column(
         Modifier.fillMaxWidth().padding(start = DesktopPageGutter, end = DesktopPageGutter, top = 40.dp, bottom = 28.dp),
-        contentAlignment = Alignment.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Image(
             ink,
@@ -539,6 +531,14 @@ internal fun DesktopArtistSignature(name: String) {
             Modifier.width(width).height(width / aspect),
             contentScale = ContentScale.Fit,
             colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.55f), BlendMode.SrcIn),
+        )
+        // The hand on its own reads as decoration; the line underneath makes it a credit.
+        Text(
+            DesktopStrings.format("d_signed_by", name, fallback = "Signed by %1\$s"),
+            color = DesktopAppleSecondary.copy(alpha = 0.78f),
+            fontSize = 12.sp,
+            letterSpacing = 0.5.sp,
+            modifier = Modifier.padding(top = 12.dp),
         )
     }
 }

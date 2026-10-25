@@ -1,6 +1,8 @@
 package com.music.bitchord.desktop
 
 import com.music.bitchord.data.canvas.SpotifyCanvasQuery
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -326,11 +328,22 @@ private fun ByteArrayOutputStream.writeVarint(value: Long) {
  * own `/api/token`, signed with the TOTP it derives from a secret published in its bundle. When
  * Spotify declines, the canvas chain simply falls through to its other three sources.
  */
+/**
+ * Whether the web player has handed out a bearer. Held as three states rather than a yes/no,
+ * because a cookie sitting in the settings is not evidence of a working Canvas: only a token is.
+ */
+internal enum class DesktopCanvasTokenState { UNTESTED, WORKING, REFUSED }
+
 internal object DesktopSpotifyToken {
 
     private const val TOKEN_URL = "https://open.spotify.com/api/token"
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    private val _state = MutableStateFlow(DesktopCanvasTokenState.UNTESTED)
+
+    /** What the last mint did, for the Settings row to report. */
+    val state: StateFlow<DesktopCanvasTokenState> = _state
 
     @Volatile private var cachedAccessToken: String? = null
     @Volatile private var accessTokenExpiresAtMs = 0L
@@ -348,6 +361,7 @@ internal object DesktopSpotifyToken {
         cachedAccessToken = null
         accessTokenExpiresAtMs = 0L
         retryAfterMs = 0L
+        _state.value = DesktopCanvasTokenState.UNTESTED
     }
 
     @Synchronized
@@ -357,35 +371,39 @@ internal object DesktopSpotifyToken {
         cachedAccessToken?.let { if (now < accessTokenExpiresAtMs - 30_000) return it }
         if (now < retryAfterMs) return null
 
-        val secret = TOTP_SECRETS.maxByOrNull { it.key }
-        val code = secret?.let { totp(it.value, now / 1000) }
-        val query = buildList {
-            add("reason" to "init")
-            add("productType" to "web-player")
-            if (code != null && secret != null) {
-                add("totp" to code)
-                add("totpServer" to code)
-                add("totpVer" to secret.key.toString())
-            }
-        }.joinToString("&") { (name, value) -> "$name=${URLEncoder.encode(value, StandardCharsets.UTF_8)}" }
-
-        val body = canvasGet(
-            "$TOKEN_URL?$query",
-            mapOf(
-                "Cookie" to "sp_dc=$cookie",
-                "Referer" to "https://open.spotify.com/",
-                "App-Platform" to "WebPlayer",
-            ),
-        )
+        // The shipped table, so a token costs one request. The bundle is only read down here once
+        // that has been overtaken — never on the way in, because it is several megabytes of
+        // JavaScript and this runs inline ahead of a canvas the listener is waiting on.
+        var entry: Pair<Int, IntArray>? = TOTP_SECRETS.maxByOrNull { it.key }?.let { it.key to it.value }
+        var body = mint(cookie, entry, now / 1000)
+        if (body?.contains(TOTP_RETIRED) == true) {
+            DesktopTrackLog.log("canvas: Spotify has retired this build's TOTP version; reading the web player's own")
+            entry = DesktopSpotifyTotp.entry() ?: entry
+            body = mint(cookie, entry, System.currentTimeMillis() / 1000)
+        }
         val root = body?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
         val token = root?.get("accessToken")?.jsonPrimitive?.contentOrNull
         if (token.isNullOrBlank()) {
             // Backed off rather than retried per track: if Spotify has changed the shape, asking on
             // every skip fixes nothing and makes every canvas lookup pay for the round trip.
             retryAfterMs = now + RETRY_MS
-            DesktopTrackLog.log("canvas: Spotify would not mint an access token")
+            // Which half broke is the difference between a dead cookie and a moved endpoint, and
+            // the Settings row can only say one of them.
+            _state.value = DesktopCanvasTokenState.REFUSED
+            DesktopTrackLog.log(
+                if (body == null) {
+                    "canvas: Spotify would not answer the token request"
+                } else {
+                    // What Spotify says no with is the whole diagnosis: `totpVerExpired` is a build
+                    // overtaken above, `Unauthorized request` is a cookie that has died, and the
+                    // Settings row can only say one of them. The answer carries nothing of the
+                    // listener's, so it is safe to keep.
+                    "canvas: Spotify refused the token request: ${body.take(MAX_LOGGED_BODY)}"
+                },
+            )
             return null
         }
+        _state.value = DesktopCanvasTokenState.WORKING
         cachedAccessToken = token
         accessTokenExpiresAtMs = root["accessTokenExpirationTimestampMs"]
             ?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: (now + 3_600_000)
@@ -480,16 +498,101 @@ internal object DesktopSpotifyToken {
     }.getOrNull()
 
     /**
+     * One token request, answered with the body whatever the status.
+     *
+     * A refusal is read rather than discarded because the reason Spotify says no is in it, and
+     * `totpVerExpired` is the difference between a cookie that has died and a version that has been
+     * retired — only one of which a rebuild of the table can fix.
+     */
+    private fun mint(cookie: String, entry: Pair<Int, IntArray>?, epochSeconds: Long): String? {
+        val code = entry?.let { totp(it.second, epochSeconds) }
+        val query = buildList {
+            add("reason" to "init")
+            add("productType" to "web-player")
+            if (code != null) {
+                add("totp" to code)
+                add("totpServer" to code)
+                add("totpVer" to entry.first.toString())
+            }
+        }.joinToString("&") { (name, value) -> "$name=${URLEncoder.encode(value, StandardCharsets.UTF_8)}" }
+        return canvasFetch(
+            "$TOKEN_URL?$query",
+            mapOf(
+                "Cookie" to "sp_dc=$cookie",
+                "Referer" to "https://open.spotify.com/",
+                "App-Platform" to "WebPlayer",
+            ),
+        )?.second
+    }
+
+    /**
      * The secrets the web player has shipped, newest last.
      *
-     * Kept as a table rather than scraped: the bundle's shape changes more often than the secret
-     * does, and an unknown version simply means the request goes out unsigned.
+     * Shipped as a table so a token request costs one round trip rather than a page and a bundle.
+     * Each entry is the secret with its bytes folded by `index % 33 + 9`, which is the same fold
+     * [DesktopSpotifyTotp] applies to what it reads, so the two are interchangeable.
+     *
+     * Spotify retires a version on a date it publishes and answers an old one with `totpVerExpired`.
+     * Version 12 was retired in October 2025 and took the canvas chain down with it; these are the
+     * three still standing as of this writing, and the scrape is what catches the next bump.
      */
-    private val TOTP_SECRETS: Map<Int, IntArray> = mapOf(
-        12 to intArrayOf(107, 81, 49, 57, 67, 93, 87, 81, 69, 67, 40, 93, 48, 50, 46, 91, 94, 113, 41, 47),
+    internal val TOTP_SECRETS: Map<Int, IntArray> = mapOf(
+        59 to intArrayOf(114, 99, 68, 74, 99, 53, 59, 109, 45, 35, 67, 82, 76, 93, 71, 78, 38, 47, 96, 57, 104, 47, 43, 125, 108, 28, 12, 114, 21, 78, 99, 96),
+        60 to intArrayOf(70, 103, 78, 119, 87, 79, 33, 90, 79, 48, 41, 36, 83, 81, 75, 77, 99, 37, 64, 92, 74, 73),
+        61 to intArrayOf(37, 61, 36, 38, 75, 38, 45, 98, 93, 88, 33, 123, 109, 119, 92, 84, 71, 124, 48, 89, 44, 102, 105, 112, 97, 108),
     )
 
     private const val RETRY_MS = 30L * 60 * 1000
 
+    /** A refusal is logged so the reason is readable, but an HTML error page is not a log line. */
+    private const val MAX_LOGGED_BODY = 220
+
     internal const val KEY_SPDC = "spotify_spdc_token"
+}
+
+private const val TOTP_RETIRED = "totpVerExpired"
+
+/**
+ * The web player's own TOTP table, read off its scripts.
+ *
+ * Spotify folds the secret into a byte array with `index % 33 + 9` and retires a version on a date
+ * it publishes — the one this build shipped with was retired in October 2025, which took the canvas
+ * chain down with it. [DesktopSpotifyToken]'s table is the fast path and this is what happens when
+ * the build has been overtaken, so it is asked for only then: the caller is already waiting on a
+ * token, and this is several megabytes of JavaScript.
+ */
+internal object DesktopSpotifyTotp {
+
+    /** Newest first, which is how the bundle declares them. */
+    private val SECRET_DECL =
+        Regex("""secret:('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"),version:(\d+)""")
+
+    /** The highest version the bundle still ships, or null when the player cannot be read. */
+    fun entry(): Pair<Int, IntArray>? {
+        val html = canvasGet("https://open.spotify.com/") ?: return null
+        for (script in SpotifyCanvasQuery.webPlayerScripts(html).take(MAX_SCRIPTS)) {
+            val body = canvasGet(script) ?: continue
+            entries(body)?.let { return it }
+        }
+        return null
+    }
+
+    /** The newest `{secret:…,version:…}` declared in one piece of the player's JavaScript. */
+    internal fun entries(bundle: String): Pair<Int, IntArray>? =
+        SECRET_DECL.findAll(bundle)
+            .mapNotNull { match ->
+                val version = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                version to unquote(match.groupValues[1]).folded()
+            }
+            .maxByOrNull { it.first }
+
+    /** A JavaScript string literal, taken back to the characters it stands for. */
+    private fun unquote(literal: String): String = literal.substring(1, literal.length - 1)
+        .replace(Regex("""\\(.)""")) { match -> match.groupValues[1] }
+
+    /** The same fold the bundle applies, so a scraped entry and a shipped one are interchangeable. */
+    private fun String.folded(): IntArray =
+        mapIndexed { index, char -> char.code xor (index % 33 + 9) }.toIntArray()
+
+    private const val MAX_SCRIPTS = 8
 }

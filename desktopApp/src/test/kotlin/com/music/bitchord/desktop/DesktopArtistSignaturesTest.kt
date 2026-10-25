@@ -31,4 +31,53 @@ class DesktopArtistSignaturesTest {
             pickSignatureUrl(parse("""{"signatures":[{"asset":{"url":"https://upload.wikimedia.org/wikipedia/commons/c/cd/X.jpg","format":"jpeg"}}]}""")),
         )
     }
+
+    /** A link arrives out of a chat message with its prose still around it. */
+    @Test
+    fun onlyTheAddressOfAPasteIsKept() {
+        assertEquals(
+            "https://signatures.example.com",
+            signatureEndpoint(
+                """
+                https://signatures.example.com
+
+                Paste this API in Settings -> Artist Signatures
+                by someone
+                """.trimIndent(),
+            ),
+        )
+        assertEquals("https://signatures.example.com/v1/signatures", signatureEndpoint("see https://signatures.example.com/v1/signatures."))
+        assertEquals("https://signatures.example.com/s/{artist}", signatureEndpoint("https://signatures.example.com/s/{artist}"))
+        assertEquals("", signatureEndpoint("nothing here at all"))
+        // Flattened on the way in, so the break survives as `\n` text rather than as whitespace.
+        assertEquals(
+            "https://signatures.example.com",
+            signatureEndpoint("""https://signatures.example.com\nPaste this API in Settings"""),
+        )
+    }
+
+    @Test
+    fun aBareHostGetsThePathTheOldRequestCarried() {
+        assertEquals(
+            "https://signatures.example.com/v1/signatures?artist=Coldplay&type=handwritten",
+            signatureRequestUrl("https://signatures.example.com", "Coldplay"),
+        )
+        assertEquals(
+            "https://signatures.example.com:8443/v1/signatures?artist=Coldplay&type=handwritten",
+            signatureRequestUrl("https://signatures.example.com:8443/", "Coldplay"),
+        )
+        // A link that already carries its own path or query is left as its author wrote it.
+        assertEquals(
+            "https://signatures.example.com/api/sig?artist=Coldplay&type=handwritten",
+            signatureRequestUrl("https://signatures.example.com/api/sig", "Coldplay"),
+        )
+        assertEquals(
+            "https://signatures.example.com/api/sig?fmt=png&artist=Coldplay&type=handwritten",
+            signatureRequestUrl("https://signatures.example.com/api/sig?fmt=png", "Coldplay"),
+        )
+        assertEquals(
+            "https://signatures.example.com/s/Coldplay",
+            signatureRequestUrl("https://signatures.example.com/s/{artist}", "Coldplay"),
+        )
+    }
 }

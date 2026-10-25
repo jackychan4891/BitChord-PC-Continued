@@ -124,33 +124,22 @@ class DesktopRadioNowPlayingTest {
     }
 }
 
-/** The radio page's rows: only free stations, and the BBC inside the local broadcasters' own row. */
+/** The radio page's rows: only the stations that stream free in-app, and no row left standing empty. */
 class DesktopRadioShelfTest {
 
     private fun item(id: String) =
         ShelfItem("Station", "", null, null, DesktopAppleBrowseClient.RADIO_PREFIX + "https://music.apple.com/gb/station/station/$id")
 
     @Test
-    fun theBbcJoinsTheLocalBroadcastersRow() {
-        val shelves = DesktopRadioClient.shelves(
+    fun theLocalBroadcastersRowGoesWithTheStations() {
+        val shelves = DesktopRadioClient.freeShelves(
             listOf(
                 HomeShelf("Featured Radio", listOf(item("ra.978194965"))),
                 HomeShelf("Local Broadcasters", listOf(item("ra.1345165422"))),
             ),
         )
-        assertEquals(listOf("Featured Radio", "Local Broadcasters"), shelves.map { it.title })
-        assertEquals(
-            DesktopBbcRadio.stations.map { it.service } + "ra.1345165422",
-            shelves.last().items.map { DesktopRadioClient.keyOf(it) },
-        )
-    }
-
-    @Test
-    fun aPageWithoutABroadcastersRowKeepsTheBbcAsItsOwn() {
-        val shelves = DesktopRadioClient.shelves(listOf(HomeShelf("Featured Radio", listOf(item("ra.unknown")))))
-        assertEquals("BBC Radio", shelves.first().title)
-        assertEquals(DesktopBbcRadio.stations.size, shelves.first().items.size)
-        assertEquals(1, shelves.size)
+        assertEquals(listOf("Featured Radio"), shelves.map { it.title })
+        assertEquals(listOf("ra.978194965"), shelves.single().items.map { DesktopRadioClient.keyOf(it) })
     }
 
     @Test

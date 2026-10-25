@@ -163,6 +163,17 @@ internal object DesktopSidebarVisibility {
     /** Hidden row key to the label it was hidden under. */
     val hidden: StateFlow<Map<String, String>> = _hidden
 
+    private val _collapsed = MutableStateFlow(persistence.boolean(KEY_COLLAPSED, false))
+
+    /** Whether the sidebar is the narrow glyph rail rather than the full list. */
+    val collapsed: StateFlow<Boolean> = _collapsed
+
+    fun setCollapsed(value: Boolean) {
+        if (_collapsed.value == value) return
+        _collapsed.value = value
+        persistence.saveBoolean(KEY_COLLAPSED, value)
+    }
+
     fun isHidden(key: String) = key in _hidden.value
 
     fun hide(key: String, label: String) {
@@ -183,6 +194,7 @@ internal object DesktopSidebarVisibility {
         runCatching { json.decodeFromString(serializer, persistence.string(KEY, "{}")) }.getOrDefault(emptyMap())
 
     private const val KEY = "sidebar_hidden"
+    private const val KEY_COLLAPSED = "sidebar_collapsed"
 }
 
 /**

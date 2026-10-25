@@ -1,5 +1,7 @@
 package com.music.bitchord.desktop
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.border
@@ -30,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -166,13 +170,15 @@ internal fun Modifier.desktopRowClickable(enabled: Boolean = true, onClick: () -
 /**
  * The dialog shell: the same card the song menu is drawn on — or, inside Settings, a page of it.
  *
- * [popup] keeps it a card even there, for a prompt a page opens over itself.
+ * [popup] keeps it a card even there, for a prompt a page opens over itself. [frosted] makes the
+ * dim and the card a blur of the window behind them, for the overlays summoned over the whole app.
  */
 @Composable
 internal fun DesktopDialogPanel(
     onDismiss: () -> Unit,
     maxWidth: Int,
     popup: Boolean = false,
+    frosted: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     if (!popup && LocalDesktopPanelIsPage.current) {
@@ -183,10 +189,15 @@ internal fun DesktopDialogPanel(
         return
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // How far the card has come in arriving, from nothing to whole. macOS grows a card out of
+        // the dim it sits in rather than dropping it there, and the dim arrives with it.
+        val enter = remember { Animatable(0f) }
+        LaunchedEffect(enter) { enter.animateTo(1f, tween(180)) }
         Box(
             Modifier
                 .fillMaxSize()
-                .background(DesktopScrim)
+                .graphicsLayer { alpha = enter.value }
+                .then(if (frosted) Modifier.desktopFrostedScrim() else Modifier.background(DesktopScrim))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -194,11 +205,17 @@ internal fun DesktopDialogPanel(
                 ),
         )
         val shape = RoundedCornerShape(20.dp)
+        val grow = 0.94f + 0.06f * enter.value
         Box(
             Modifier
                 .widthIn(max = maxWidth.dp)
                 .fillMaxWidth()
-                .desktopCard(shape),
+                .graphicsLayer {
+                    alpha = enter.value
+                    scaleX = grow
+                    scaleY = grow
+                }
+                .then(if (frosted) Modifier.desktopGlassCard(shape) else Modifier.desktopCard(shape)),
         ) {
             // Behind the content rather than around it, so it swallows clicks on the panel's own
             // background without eating the rows' own.

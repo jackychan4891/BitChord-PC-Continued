@@ -60,8 +60,9 @@ data class DesktopReplaySummary(
     /** The earliest month with anything in it, `YYYY-MM`. */
     val since: String? = null,
 ) {
-    /** One track is enough: a small Replay is a small Replay, and it grows. */
-    val isEmpty: Boolean get() = songs.isEmpty()
+    /** One track is enough: a small Replay is a small Replay, and it grows. Time without a chart
+     * is still a Replay: a week recorded before the daily rows existed is counted, not charted. */
+    val isEmpty: Boolean get() = songs.isEmpty() && totalMs == 0L
 
     val minutes: Long get() = totalMs / 60_000L
     val hours: Long get() = totalMs / 3_600_000L

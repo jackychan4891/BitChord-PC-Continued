@@ -78,6 +78,8 @@ internal fun DesktopEqualizerDialog(onDismiss: () -> Unit) {
     val enabled by DesktopEqualizerSettings.enabled.collectAsState()
     val mode by DesktopEqualizerSettings.mode.collectAsState()
     val balance by DesktopEqualizerSettings.balance.collectAsState()
+    val limiter by DesktopEqualizerSettings.peakLimiter.collectAsState()
+    val vocalRemoval by DesktopEqualizerSettings.vocalRemoval.collectAsState()
 
     DesktopDialogPanel(onDismiss = onDismiss, maxWidth = 560) {
         Row(
@@ -129,6 +131,56 @@ internal fun DesktopEqualizerDialog(onDismiss: () -> Unit) {
                 color = DesktopSecondary,
                 modifier = Modifier.padding(horizontal = panelInset(22.dp), vertical = 6.dp),
             )
+
+            SectionLabel(DesktopStrings["equalizer_limiter", "Peak limiter"])
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = panelInset(22.dp), vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    DesktopStrings[
+                        "equalizer_limiter_footer",
+                        "Lets a boost stay a boost, catching the peaks instead of turning everything down. " +
+                            "Off, the whole curve is quietly lowered to leave the boost room, as on the phone.",
+                    ],
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DesktopSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(14.dp))
+                Switch(
+                    checked = limiter,
+                    onCheckedChange = DesktopEqualizerSettings::setPeakLimiter,
+                    colors = desktopSwitchColors(),
+                )
+            }
+
+            SectionLabel(DesktopStrings["d_vocal_remover", "Vocal remover"])
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = panelInset(22.dp), vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    DesktopStrings[
+                        "d_vocal_remover_footer",
+                        "Cancels the centre of the stereo field, where a lead vocal usually sits. " +
+                            "Bass and kick are often centred too, so they thin out with it.",
+                    ],
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DesktopSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(14.dp))
+                Switch(
+                    checked = vocalRemoval,
+                    onCheckedChange = DesktopEqualizerSettings::setVocalRemoval,
+                    colors = desktopSwitchColors(),
+                )
+            }
             Spacer(Modifier.height(8.dp))
         }
 

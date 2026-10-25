@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,6 +41,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,6 +52,7 @@ import bitchord.desktopapp.generated.resources.Res
 import bitchord.desktopapp.generated.resources.logo_mark
 import com.music.bitchord.data.model.ShelfItem
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.ui.components.AppleScrollbarBox
 import com.music.bitchord.ui.icons.BitChordIcons
 import com.music.bitchord.ui.player.rememberMixPulse
 import org.jetbrains.compose.resources.painterResource
@@ -75,17 +78,41 @@ internal fun DesktopAppleSidebar(
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
     val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled
     val hidden by DesktopSidebarVisibility.hidden.collectAsState()
+    val collapsed by DesktopSidebarVisibility.collapsed.collectAsState()
     // The copy below comes from DesktopStrings rather than Compose resources, so nothing in this
     // scope would otherwise notice the language changing.
     DesktopStrings.language.collectAsState()
+    if (collapsed) {
+        DesktopAppleSidebarRail(
+            destination = destination,
+            settingsOpen = settingsOpen,
+            signedIn = signedIn,
+            accountAvatar = accountAvatar,
+            hidden = hidden,
+            onDestinationSelected = onDestinationSelected,
+            onOpenSettings = onOpenSettings,
+            onOpenAccounts = onOpenAccounts,
+        )
+        return
+    }
     Column(
         Modifier.width(260.dp).fillMaxHeight().background(Color(0x99262628))
             .border(0.5.dp, Color.White.copy(alpha = 0.05f)),
     ) {
-        if (inlineCaption) DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(40.dp)) {
-            Box(Modifier.fillMaxSize().padding(start = 10.dp), contentAlignment = Alignment.CenterStart) { DesktopWindowButtons() }
+        // The sidebar owns the caption row when the app draws the frame and the system title bar is
+        // off, so it carries the buttons and the collapse control. With a title bar above it, the
+        // control moves down to the footer rather than leaving an empty band.
+        if (inlineCaption) {
+            Box(Modifier.fillMaxWidth().height(40.dp)) {
+                DesktopTitleBarDragArea(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize().padding(start = 10.dp), contentAlignment = Alignment.CenterStart) { DesktopWindowButtons() }
+                }
+                Box(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
+                    DesktopSidebarCollapseButton()
+                }
+            }
         }
-        Column(Modifier.fillMaxWidth().weight(1f).padding(start = 16.dp, top = 8.dp, end = 16.dp)) {
+        Column(Modifier.fillMaxWidth().weight(1f).padding(start = 16.dp, top = if (inlineCaption) 0.dp else 8.dp, end = 16.dp)) {
             DesktopSidebarItem(BitChordIcons.Search, DesktopDestination.SEARCH.label, destination == DesktopDestination.SEARCH) { onDestinationSelected(DesktopDestination.SEARCH) }
             DesktopSidebarItem(BitChordIcons.Home, DesktopDestination.LISTEN_NOW.label, destination == DesktopDestination.LISTEN_NOW) { onDestinationSelected(DesktopDestination.LISTEN_NOW) }
             DesktopSidebarItem(BitChordIcons.Explore, DesktopDestination.EXPLORE.label, destination == DesktopDestination.EXPLORE) { onDestinationSelected(DesktopDestination.EXPLORE) }
@@ -115,14 +142,17 @@ internal fun DesktopAppleSidebar(
                 onHide = { DesktopSidebarVisibility.hide("dest:LOCAL_MUSIC", DesktopDestination.LOCAL_MUSIC.label) }) { onDestinationSelected(DesktopDestination.LOCAL_MUSIC) }
             Spacer(Modifier.height(24.dp))
             DesktopSidebarSection(DesktopStrings["playlists", "Playlists"])
-            LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 12.dp)) {
-                items(accountPlaylists.filterNot { "account:${it.browseId}" in hidden }, key = { "account:${it.browseId}" }) { playlist ->
-                    DesktopSidebarItem(Icons.AutoMirrored.Rounded.PlaylistPlay, playlist.title, openedCollectionId == playlist.browseId,
-                        onHide = { DesktopSidebarVisibility.hide("account:${playlist.browseId}", playlist.title) }) { onOpenAccountPlaylist(playlist) }
-                }
-                items(localPlaylists.filterNot { "local:${it.id}" in hidden }, key = { "local:${it.id}" }) { playlist ->
-                    DesktopSidebarItem(Icons.AutoMirrored.Rounded.PlaylistPlay, playlist.title, openedCollectionId == playlist.id,
-                        onHide = { DesktopSidebarVisibility.hide("local:${playlist.id}", playlist.title) }) { onOpenLocalPlaylist(playlist) }
+            val playlistsState = rememberLazyListState()
+            AppleScrollbarBox(playlistsState, Modifier.fillMaxWidth().weight(1f)) {
+                LazyColumn(Modifier.fillMaxSize(), state = playlistsState, contentPadding = PaddingValues(bottom = 12.dp)) {
+                    items(accountPlaylists.filterNot { "account:${it.browseId}" in hidden }, key = { "account:${it.browseId}" }) { playlist ->
+                        DesktopSidebarItem(Icons.AutoMirrored.Rounded.PlaylistPlay, playlist.title, openedCollectionId == playlist.browseId,
+                            onHide = { DesktopSidebarVisibility.hide("account:${playlist.browseId}", playlist.title) }) { onOpenAccountPlaylist(playlist) }
+                    }
+                    items(localPlaylists.filterNot { "local:${it.id}" in hidden }, key = { "local:${it.id}" }) { playlist ->
+                        DesktopSidebarItem(Icons.AutoMirrored.Rounded.PlaylistPlay, playlist.title, openedCollectionId == playlist.id,
+                            onHide = { DesktopSidebarVisibility.hide("local:${playlist.id}", playlist.title) }) { onOpenLocalPlaylist(playlist) }
+                    }
                 }
             }
             if (hidden.isNotEmpty()) DesktopHiddenRestoreRow(
@@ -153,6 +183,10 @@ internal fun DesktopAppleSidebar(
                 Spacer(Modifier.weight(1f))
             }
             Spacer(Modifier.width(8.dp))
+            if (!inlineCaption) {
+                DesktopSidebarCollapseButton()
+                Spacer(Modifier.width(2.dp))
+            }
             val settingsHover = remember { MutableInteractionSource() }
             val overSettings by settingsHover.collectIsHoveredAsState()
             Box(
@@ -164,6 +198,140 @@ internal fun DesktopAppleSidebar(
                 Icon(BitChordIcons.CogIcon, DesktopDestination.SETTINGS.label, tint = if (settingsOpen) DesktopAccent else if (overSettings) DesktopAppleText else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun DesktopSidebarCollapseButton() {
+    DesktopToolbarButton({ DesktopSidebarVisibility.setCollapsed(true) }, size = 28.dp) {
+        Icon(
+            BitChordIcons.ChevronLeft,
+            DesktopStrings["d_collapse_sidebar", "Collapse sidebar"],
+            tint = DesktopSecondary,
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+/**
+ * The sidebar folded down to its glyphs, for a window that is wide enough for a rail but not for
+ * the full 260dp list. Every destination that has a glyph is still one click away; the playlist
+ * rows are the part that waits for the sidebar to be opened again.
+ */
+@Composable
+private fun DesktopAppleSidebarRail(
+    destination: DesktopDestination,
+    settingsOpen: Boolean,
+    signedIn: Boolean,
+    accountAvatar: String?,
+    hidden: Map<String, String>,
+    onDestinationSelected: (DesktopDestination) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenAccounts: () -> Unit,
+) {
+    val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
+    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled
+    DesktopStrings.language.collectAsState()
+    Column(
+        Modifier.width(72.dp).fillMaxHeight().background(Color(0x99262628))
+            .border(0.5.dp, Color.White.copy(alpha = 0.05f)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (inlineCaption) {
+            DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(40.dp)) {
+                Box(Modifier.fillMaxSize().padding(start = 4.dp), contentAlignment = Alignment.CenterStart) { DesktopWindowButtons() }
+            }
+        } else {
+            Spacer(Modifier.height(12.dp))
+        }
+        Column(
+            Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            DesktopSidebarRailItem(BitChordIcons.Search, DesktopDestination.SEARCH.label, destination == DesktopDestination.SEARCH) {
+                onDestinationSelected(DesktopDestination.SEARCH)
+            }
+            DesktopSidebarRailItem(BitChordIcons.Home, DesktopDestination.LISTEN_NOW.label, destination == DesktopDestination.LISTEN_NOW) {
+                onDestinationSelected(DesktopDestination.LISTEN_NOW)
+            }
+            DesktopSidebarRailItem(BitChordIcons.Explore, DesktopDestination.EXPLORE.label, destination == DesktopDestination.EXPLORE) {
+                onDestinationSelected(DesktopDestination.EXPLORE)
+            }
+            DesktopSidebarRailItem(Icons.Rounded.Radio, DesktopDestination.RADIO.label, destination == DesktopDestination.RADIO) {
+                onDestinationSelected(DesktopDestination.RADIO)
+            }
+            Spacer(Modifier.height(14.dp))
+            DesktopSidebarRailItem(BitChordIcons.Library, DesktopDestination.LIBRARY.label, destination == DesktopDestination.LIBRARY) {
+                onDestinationSelected(DesktopDestination.LIBRARY)
+            }
+            if ("dest:HISTORY" !in hidden) {
+                DesktopSidebarRailItem(BitChordIcons.Clock, DesktopDestination.HISTORY.label, destination == DesktopDestination.HISTORY) {
+                    onDestinationSelected(DesktopDestination.HISTORY)
+                }
+            }
+            if ("dest:DOWNLOADS" !in hidden) {
+                DesktopSidebarRailItem(BitChordIcons.Download, DesktopDestination.DOWNLOADS.label, destination == DesktopDestination.DOWNLOADS) {
+                    onDestinationSelected(DesktopDestination.DOWNLOADS)
+                }
+            }
+            if ("dest:LOCAL_MUSIC" !in hidden) {
+                DesktopSidebarRailItem(BitChordIcons.Library, DesktopDestination.LOCAL_MUSIC.label, destination == DesktopDestination.LOCAL_MUSIC) {
+                    onDestinationSelected(DesktopDestination.LOCAL_MUSIC)
+                }
+            }
+        }
+        Column(
+            Modifier.padding(bottom = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            DesktopSidebarRailItem(
+                BitChordIcons.ChevronRight,
+                DesktopStrings["d_expand_sidebar", "Expand sidebar"],
+                selected = false,
+            ) { DesktopSidebarVisibility.setCollapsed(false) }
+            DesktopSidebarRailItem(BitChordIcons.CogIcon, DesktopDestination.SETTINGS.label, settingsOpen, onOpenSettings)
+            Box(
+                Modifier.size(42.dp).clip(CircleShape).clickable(onClick = onOpenAccounts),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (signedIn) {
+                    Box(Modifier.size(26.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
+                        if (accountAvatar != null) DesktopArtwork(accountAvatar, Modifier.fillMaxSize())
+                        else Icon(Icons.Rounded.AccountCircle, null, tint = DesktopSecondary, modifier = Modifier.size(24.dp))
+                    }
+                } else {
+                    Icon(
+                        Icons.Rounded.AccountCircle,
+                        DesktopStrings["sign_in", "Sign in"],
+                        tint = DesktopSecondary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One glyph in the rail: the row [DesktopSidebarItem] draws, with the label left to its tooltip. */
+@Composable
+private fun DesktopSidebarRailItem(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .size(42.dp)
+            .desktopHoverFill(corner = 10.dp, alpha = 0.05f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) Color.White.copy(alpha = 0.06f) else Color.Transparent)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, label, tint = if (selected) DesktopAccent else DesktopSecondary, modifier = Modifier.size(21.dp))
     }
 }
 

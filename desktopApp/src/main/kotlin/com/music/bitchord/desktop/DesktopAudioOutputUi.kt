@@ -11,6 +11,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.PhoneIphone
+import androidx.compose.material.icons.rounded.Speaker
+import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -22,10 +29,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.music.bitchord.ui.icons.BitChordIcons
+import java.util.Locale
 
 /**
  * Where playback is sent. Android routes through `AudioManager`; here the choice is a mixer.
@@ -78,6 +87,13 @@ private fun OutputRow(name: String, description: String, chosen: Boolean, onClic
             .padding(horizontal = panelInset(12.dp), vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(
+            outputGlyph(name, description),
+            null,
+            tint = if (chosen) DesktopAppleText else DesktopSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (description.isNotBlank()) {
@@ -94,5 +110,22 @@ private fun OutputRow(name: String, description: String, chosen: Boolean, onClic
             Spacer(Modifier.width(10.dp))
             Icon(BitChordIcons.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
         }
+    }
+}
+
+/**
+ * What a mixer reports is a name, not a class, so the glyph is guessed from the words in it.
+ * Headphones are asked about first: an "AirPods Bluetooth" should read as what you wear, not as
+ * the radio it arrives over.
+ */
+private fun outputGlyph(name: String, description: String): ImageVector {
+    val text = "$name $description".lowercase(Locale.ROOT)
+    return when {
+        "headphone" in text || "headset" in text || "airpods" in text -> Icons.Rounded.Headphones
+        "bluetooth" in text || "wireless" in text -> Icons.Rounded.Bluetooth
+        "hdmi" in text || "display" in text || " tv" in text || "television" in text -> Icons.Rounded.Tv
+        "usb" in text || "dac" in text -> Icons.Rounded.Usb
+        "iphone" in text || "phone" in text || "mobile" in text -> Icons.Rounded.PhoneIphone
+        else -> Icons.Rounded.Speaker
     }
 }

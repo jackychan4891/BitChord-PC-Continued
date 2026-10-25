@@ -4,6 +4,13 @@ import com.music.bitchord.data.model.HomeShelf
 import com.music.bitchord.data.model.ShelfItem
 import java.net.URI
 
+/**
+ * Apple Music's own live stations.
+ *
+ * The radio page used to reach past them: Apple lists local broadcasters beside its stations and each
+ * of those was wired to its own commercial stream, with a shelf of BBC national stations folded in on
+ * top. Every one of those left the app's radio page, since the point is to listen to Apple Music.
+ */
 internal object DesktopRadioClient {
     private val appleStations = mapOf(
         "ra.978194965" to "s345732",
@@ -13,26 +20,13 @@ internal object DesktopRadioClient {
         "ra.1740613859" to "s345726",
         "ra.1740614260" to "s345733",
     )
-    private val broadcasters = mapOf(
-        "ra.1345165422" to DesktopStream("https://media-ssl.musicradio.com/CapitalUK"),
-        "ra.1445918457" to DesktopStream("https://stream.planetradio.co.uk/ki1/hi/hls/?player=BMUK_HomePod", transport = "hls"),
-        "ra.1461581216" to DesktopStream("https://media-ssl.musicradio.com/HeartUKMP3"),
-        "ra.1445918670" to DesktopStream("https://stream.planetradio.co.uk/ki2/hi/hls/?player=BMUK_HomePod", transport = "hls"),
-        "ra.1461555238" to DesktopStream("https://media-ssl.musicradio.com/SmoothUKMP3"),
-        "ra.1534224138" to DesktopStream("https://media-ssl.musicradio.com/CapitalDance"),
-        "ra.1345167712" to DesktopStream("https://media-ssl.musicradio.com/ClassicFM"),
-        "ra.1345166934" to DesktopStream("http://hls.musicradio.com/CapitalXTRANational/playlist.m3u8", transport = "hls"),
-        "ra.1445918839" to DesktopStream("https://stream.planetradio.co.uk/mag/hi/hls/?player=BMUK_HomePod", transport = "hls"),
-    )
 
     /** Whether a shelf row is a live station that this player can start. */
-    fun isStation(item: ShelfItem): Boolean = item.browseId?.let { id ->
-        id.startsWith(DesktopAppleBrowseClient.RADIO_PREFIX) || id.startsWith(DesktopBbcRadio.PREFIX)
-    } == true
+    fun isStation(item: ShelfItem): Boolean =
+        item.browseId?.startsWith(DesktopAppleBrowseClient.RADIO_PREFIX) == true
 
     fun station(item: ShelfItem): DesktopRadioStation? {
         val browseId = item.browseId ?: return null
-        DesktopBbcRadio.byBrowseId(browseId)?.let { return DesktopRadioStation(it.service, it.name, null, it.streamUrl, "hls") }
         if (!browseId.startsWith(DesktopAppleBrowseClient.RADIO_PREFIX)) return null
         val url = browseId.removePrefix(DesktopAppleBrowseClient.RADIO_PREFIX)
         val valid = runCatching {
@@ -41,34 +35,20 @@ internal object DesktopRadioClient {
         }.getOrDefault(false)
         if (!valid) return null
         val id = URI(url).path.substringAfterLast('/')
-        val stream = broadcasters[id] ?: appleStations[id]?.let {
-            DesktopStream("https://opml.radiotime.com/tune.ashx?id=$it&formats=hls", transport = "hls")
-        } ?: return null
-        return DesktopRadioStation(id, item.title, item.thumbnailUrl, stream.url, stream.transport)
+        val tuneId = appleStations[id] ?: return null
+        return DesktopRadioStation(
+            id,
+            item.title,
+            item.thumbnailUrl,
+            "https://opml.radiotime.com/tune.ashx?id=$tuneId&formats=hls",
+            "hls",
+        )
     }
 
     /** Only the stations that stream free in-app; everything else on Apple's radio page needs a subscription. */
     fun freeShelves(shelves: List<HomeShelf>): List<HomeShelf> = shelves
         .map { shelf -> shelf.copy(items = shelf.items.filter { station(it) != null }) }
         .filter { it.items.isNotEmpty() }
-
-    /**
-     * The radio page's rows.
-     *
-     * Apple's page groups its free stations under its own "Local Broadcasters" heading, and the BBC's
-     * national stations are broadcasters in exactly that sense, so they are folded into that row
-     * rather than standing in a section of their own. Where a region's page has no such row the BBC
-     * keeps its own heading, so its stations are never left off the page entirely.
-     */
-    fun shelves(page: List<HomeShelf>): List<HomeShelf> {
-        val free = freeShelves(page)
-        val bbc = DesktopBbcRadio.stations.map(DesktopBbcRadio::shelfItem)
-        val broadcasters = free.indexOfFirst { it.title.contains("Broadcaster", ignoreCase = true) }
-        if (broadcasters < 0) return listOf(HomeShelf(title = "BBC Radio", items = bbc)) + free
-        return free.mapIndexed { index, shelf ->
-            if (index == broadcasters) shelf.copy(items = bbc + shelf.items) else shelf
-        }
-    }
 
     /** What a station hides under: its own id, which a page reload keeps. */
     fun keyOf(item: ShelfItem): String = station(item)?.id ?: item.browseId.orEmpty()
@@ -79,10 +59,6 @@ internal object DesktopRadioClient {
         .filter { it.items.isNotEmpty() }
 
     fun resolveStream(station: DesktopRadioStation): Result<DesktopStream> = runCatching {
-        // The BBC's worldwide pools are fixed addresses, published for anyone to listen to, so the
-        // station already carries the only thing worth resolving.
-        DesktopBbcRadio.byId(station.id)?.let { return@runCatching DesktopStream(it.streamUrl, transport = "hls") }
-        broadcasters[station.id]?.let { return@runCatching it }
         val tuneId = appleStations[station.id] ?: error("This station needs the Apple Music player")
         val body = canvasGet("https://opml.radiotime.com/tune.ashx?id=$tuneId&formats=hls")
             ?: error("Could not connect to the live station")
