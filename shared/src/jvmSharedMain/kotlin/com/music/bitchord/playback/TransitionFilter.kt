@@ -181,8 +181,13 @@ class TransitionFilter {
         /** Section Qs for a maximally flat (Butterworth) fourth-order response. */
         private val BUTTERWORTH_Q = floatArrayOf(0.54120f, 1.30656f)
 
-        /** Per-sub-block glide fraction. */
-        private const val GLIDE_RATE = 0.05f
+        /**
+         * Per-sub-block glide fraction. The ride re-aims the filter every 64 frames, and this is
+         * how far of what is left it covers each time: slow enough that a cutoff jumping a couple
+         * of octaves between two aims still sweeps instead of stepping. It was 0.05, which on a
+         * tight transition left an audible zip on the sweeps' steepest stretch.
+         */
+        private const val GLIDE_RATE = 0.035f
 
         /** How close to a parked value counts as parked, so a glide terminates. */
         private const val SETTLED_HZ = 1f

@@ -411,7 +411,7 @@ internal fun DesktopAppleLatestRelease(item: ShelfItem, onClick: () -> Unit) {
     Column {
         DesktopAppleHeading("Latest Release")
         Row(Modifier.padding(top = 15.dp).desktopQuietClick(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
-            DesktopArtwork(item.thumbnailUrl, Modifier.size(160.dp).clip(RoundedCornerShape(8.dp)).desktopHoverFill(corner = 8.dp))
+            DesktopArtwork(item.thumbnailUrl, Modifier.size(160.dp).clip(RoundedCornerShape(8.dp)).desktopArtHoverShade())
             Column(Modifier.padding(start = 20.dp, end = 12.dp)) {
                 val year = Regex("\\b(?:19|20)\\d{2}\\b").find(item.subtitle)?.value
                 if (year != null) Text(year, fontSize = 11.sp, color = DesktopAppleSecondary)
@@ -434,9 +434,10 @@ internal fun DesktopAppleShelf(
 ) {
     val circles = shelf.items.isNotEmpty() && shelf.items.all { it.browseId?.startsWith("UC") == true }
     val videos = shelf.title.contains("video", ignoreCase = true)
+    val titled = showHeading && !shelf.title.isQuietShelfTitle()
     val more = shelf.moreBrowseId?.takeIf { it.startsWith(DesktopAppleBrowseClient.PAGE_PREFIX) }
     val heading: @Composable () -> Unit = {
-        if (showHeading) DesktopAppleHeading(shelf.title, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
+        if (titled) DesktopAppleHeading(shelf.title, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
             .then(if (more != null) Modifier.clickable { onItemClick(ShelfItem(shelf.title, "", null, null, more), shelf.title) } else Modifier), chevron = true)
     }
     // Apple's track grid — the columns of short rows that read down three at a
@@ -463,7 +464,7 @@ internal fun DesktopAppleShelf(
         val offAir by DesktopRadioNowPlaying.lines.collectAsState()
         val itemOf = { tile: DesktopRadioTile -> shelf.items.firstOrNull { DesktopRadioClient.keyOf(it) == tile.key } }
         DesktopRadioTileGrid(
-            if (showHeading) shelf.title else null,
+            if (titled) shelf.title else null,
             shelf.items.map { item ->
                 val key = DesktopRadioClient.keyOf(item)
                 DesktopRadioTile(
@@ -491,7 +492,7 @@ internal fun DesktopAppleShelf(
                     DesktopArtwork(
                         item.thumbnailUrl,
                         Modifier.width(width).aspectRatio(if (videos) 16f / 9f else 1f).clip(shape)
-                            .desktopHoverFill().clickable { onItemClick(item, shelf.title) }
+                            .desktopArtHoverShade().clickable { onItemClick(item, shelf.title) }
                             .then(if (onItemMenu == null) Modifier else Modifier.contextClick { onItemMenu(item) }),
                         px = if (videos) 800 else 400,
                     )

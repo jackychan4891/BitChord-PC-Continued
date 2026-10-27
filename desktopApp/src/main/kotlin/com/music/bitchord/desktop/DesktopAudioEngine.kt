@@ -15,6 +15,7 @@ import com.music.bitchord.playback.smart.TransitionTrackInfo
 import com.music.bitchord.playback.smart.echoTailSeconds
 import com.music.bitchord.playback.smart.planSkipMix
 import com.music.bitchord.playback.smart.planTransition
+import com.music.bitchord.ui.player.PlayerAudioPulse
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -516,6 +517,11 @@ class DesktopPlaybackEngine(
 
     fun pause() {
         paused = true
+        // The pump stops feeding the meters, so the backdrop would otherwise hold
+        // the last block's loudness for as long as the music is paused.
+        pulseLevel = 0f
+        pulseBass = 0f
+        PlayerAudioPulse.silence()
         _state.update { it.copy(isPlaying = false) }
     }
 
@@ -1016,6 +1022,16 @@ class DesktopPlaybackEngine(
     private var transitionFxCount = 1
 
     /**
+     * The meters the backdrop reads: one-pole state for the low band, and the two
+     * smoothed values handed to [PlayerAudioPulse] after every output block. Held
+     * here rather than in the composable so the smoothing runs at the audio
+     * block's own rate instead of the display's.
+     */
+    private var pulseLow = 0f
+    private var pulseLevel = 0f
+    private var pulseBass = 0f
+
+    /**
      * Samples of the incoming track already rendered under the outgoing one.
      *
      * A blend plays the next track for the whole length of the fade before it
@@ -1121,6 +1137,10 @@ class DesktopPlaybackEngine(
         val track = current
         if (track == null || paused) {
             if (paused) sink.pause()
+            // Nothing is feeding the meters any more — paused, or the queue has
+            // run out — so the backdrop lets the field down rather than holding
+            // the last block's loudness.
+            if (track == null) PlayerAudioPulse.silence()
             if (paused && fadeRemaining > 0) publishBlend(playing = false)
             Thread.sleep(20)
             return
@@ -1174,8 +1194,40 @@ class DesktopPlaybackEngine(
             )
         }
         sink.write(samples, count)
+        publishPulse(samples, count)
         framesWritten += count / sink.format.channels.coerceAtLeast(1)
         if (count > 0 && _state.value.awaitingAudio) _state.update { it.copy(awaitingAudio = false) }
+    }
+
+    /**
+     * Feeds the backdrop's meters from the block about to be heard: the mix's RMS
+     * and the RMS of its low end, both smoothed with a quick attack and a slow
+     * release so a kick lifts the field and the next quiet bar lets it down
+     * gradually. Measured pre-gain, so turning the volume down does not also
+     * flatten the picture.
+     */
+    private fun publishPulse(samples: FloatArray, count: Int) {
+        if (count <= 0) return
+        val rate = sink.format.sampleRate.coerceAtLeast(1)
+        val channels = sink.format.channels.coerceAtLeast(1)
+        val lowCoefficient = 1f - kotlin.math.exp(-2.0 * Math.PI * PULSE_LOW_HZ / rate).toFloat()
+        var squares = 0.0
+        var lowSquares = 0.0
+        for (index in 0 until count) {
+            val sample = samples[index]
+            squares += sample.toDouble() * sample
+            pulseLow += lowCoefficient * (sample - pulseLow)
+            lowSquares += pulseLow.toDouble() * pulseLow
+        }
+        val level = (kotlin.math.sqrt(squares / count) * PULSE_LEVEL_SCALE).coerceIn(0.0, 1.0).toFloat()
+        val bass = (kotlin.math.sqrt(lowSquares / count) * PULSE_BASS_SCALE).coerceIn(0.0, 1.0).toFloat()
+        val seconds = count.toDouble() / channels / rate
+        val attack = (1.0 - kotlin.math.exp(-seconds / PULSE_ATTACK_SECONDS)).toFloat()
+        val release = (1.0 - kotlin.math.exp(-seconds / PULSE_RELEASE_SECONDS)).toFloat()
+        val bassAttack = (1.0 - kotlin.math.exp(-seconds / PULSE_BASS_ATTACK_SECONDS)).toFloat()
+        pulseLevel += (level - pulseLevel) * if (level > pulseLevel) attack else release
+        pulseBass += (bass - pulseBass) * if (bass > pulseBass) bassAttack else release
+        PlayerAudioPulse.publish(pulseLevel, pulseBass)
     }
 
     /** The beatmatch stretch [track] is actually rendered at — [DesktopTempoBuffer]'s clamp included. */
@@ -1233,8 +1285,27 @@ class DesktopPlaybackEngine(
             } else {
                 out
             }
-            val summed = outgoingLevel + into
-            val trim = if (summed <= CLIP_GUARD_SUM) 1f else kotlin.math.sqrt(CLIP_GUARD_SUM / summed)
+            val fxScale = 1f / transitionFxCount
+            // The texture rides a bell across the whole mix: it opens early, is at its widest
+            // with both decks equally present, and closes as the outgoing does. Fed the *summed
+            // dry* rather than one deck, so the sweep sits on the mix the way Apple's effects do
+            // instead of being an ornament on the track that happens to be leaving.
+            val textureRamp = if (textureActive) {
+                val through = ((progress - TEXTURE_START) / (1f - TEXTURE_START)).coerceIn(0f, 1f)
+                kotlin.math.sin(through * Math.PI).toFloat() *
+                    TEXTURE_SEND / kotlin.math.sqrt(transitionFxCount.toFloat())
+            } else {
+                0f
+            }
+            // The texture's own wet is folded into the headroom check: the flanger overlaps the
+            // dry by a few milliseconds, so its peaks add to the two decks' rather than replacing
+            // any of them. Past the ceiling it is the *send* that gives way, not the mix — a
+            // flanger is an ornament on the handover, and trimming the decks to make room for it
+            // is the loudness dip through the middle of every mix that Automix used to have.
+            val deckSum = outgoingLevel + into
+            val deckTrim = if (deckSum <= CLIP_GUARD_SUM) 1f else kotlin.math.sqrt(CLIP_GUARD_SUM / deckSum)
+            val textured = deckSum * deckTrim + textureRamp * TEXTURE_HEADROOM
+            val fxTrim = if (textured <= CLIP_GUARD_SUM) 1f else kotlin.math.sqrt(CLIP_GUARD_SUM / textured)
             val stop = minOf(count, index + subBlock)
             val span = stop - index
             while (index < stop) {
@@ -1255,11 +1326,11 @@ class DesktopPlaybackEngine(
                 } else {
                     0f
                 }
+                val dry = leaving * out + arriving * into
                 // Post-fader sends on the outgoing deck: a frozen beat-roll and a reverb tail. Added
                 // after the fader so they keep sounding once the outgoing dry has faded to nothing,
                 // ringing out over the incoming track through the extended tail.
                 var fxSend = 0f
-                val fxScale = 1f / transitionFxCount
                 if (beatRepeatActive) {
                     val roll = transitionBeatRepeat
                     if (roll != null) {
@@ -1282,15 +1353,12 @@ class DesktopPlaybackEngine(
                         if (ramp > 0f) fxSend += reverb.process(channel, leaving) * ramp
                     }
                 }
-                if (textureActive) {
-                    val ramp = ((progress - TEXTURE_START) / (1f - TEXTURE_START)).coerceIn(0f, 1f) * TEXTURE_SEND * fxScale
-                    if (ramp > 0f) {
-                        for (texture in transitionTextures) {
-                            fxSend += texture.process(channel, leaving) * ramp
-                        }
+                if (textureRamp > 0f) {
+                    for (texture in transitionTextures) {
+                        fxSend += texture.process(channel, dry) * textureRamp
                     }
                 }
-                mixed[index] = ((leaving * out + arriving * into) + fxSend) * trim
+                mixed[index] = dry * deckTrim + fxSend * fxTrim
                 index++
             }
             fadeRemaining -= span
@@ -2166,7 +2234,16 @@ class DesktopPlaybackEngine(
         val noEcho = plan.echoSeconds <= 0.0
         beatRepeatActive = noEcho && djStyle && plan.beatSeconds > 0.0 && plan.transitionBeats >= 4
         reverbActive = djStyle
-        val textureKinds = if (djStyle) chooseTextures(plan) else emptyList()
+        // A fallback fade gets the flanger too. The effect is most of what separates a mix from a
+        // crossfade, and a pair the planner had no tempo evidence for is exactly where all it can
+        // offer is a bare equal-power fade. GAPLESS stays dry: that is an album played through,
+        // not a mix.
+        val textureKinds = when {
+            plan.transitionStyle == TransitionStyle.GAPLESS -> emptyList()
+            djStyle -> chooseTextures(plan)
+            plan.fadeSeconds >= FALLBACK_TEXTURE_MIN_SECONDS -> listOf(TransitionTexture.FLANGER)
+            else -> emptyList()
+        }
         textureActive = textureKinds.isNotEmpty()
         beatRepeatLatched = false
         transitionBeatRepeat = if (beatRepeatActive) {
@@ -2494,9 +2571,28 @@ class DesktopPlaybackEngine(
         /** The reverb opens over the last part of the fade and holds through the tail. */
         private const val REVERB_START = 0.5f
         private const val REVERB_SEND = 0.55f
-        /** The texture send widens or grits the outgoing tail over the last stretch of the fade. */
-        private const val TEXTURE_START = 0.4f
-        private const val TEXTURE_SEND = 0.4f
+        /**
+         * The texture send rides a bell across the whole mix: open early, widest with both decks
+         * equally present, closed by the time the outgoing is. It used to start four tenths in and
+         * rise to the end — the one moment the outgoing is almost gone — which is why the flanger
+         * was hard to hear at all.
+         */
+        private const val TEXTURE_START = 0.12f
+        private const val TEXTURE_SEND = 0.5f
+        /** The send's wet, for the headroom check: the flanger adds to the dry, it does not replace it. */
+        private const val TEXTURE_HEADROOM = 1.2f
         private const val TEXTURE_TAIL_SECONDS = 0.6
+        /** Shortest fallback fade worth texturing; anything shorter is a skip, not a mix. */
+        private const val FALLBACK_TEXTURE_MIN_SECONDS = 3.0
+
+        // ---- the backdrop's meters, read by the player's mesh ----
+        /** The meter's low band: kicks and bass lines, which is what makes the field lift. */
+        private const val PULSE_LOW_HZ = 180.0
+        /** A full meter at an RMS of 1/scale — loud masters sit around 0.2–0.3 RMS. */
+        private const val PULSE_LEVEL_SCALE = 4.2
+        private const val PULSE_BASS_SCALE = 5.5
+        private const val PULSE_ATTACK_SECONDS = 0.045
+        private const val PULSE_BASS_ATTACK_SECONDS = 0.012
+        private const val PULSE_RELEASE_SECONDS = 0.32
     }
 }

@@ -201,6 +201,11 @@ internal fun DesktopSongMenuFor(
      */
     lyricsOffsetMs: Int = 0,
     onSetLyricsOffset: ((Int) -> Unit)? = null,
+    /**
+     * Starts a Listen Together party for the playing track. Only the player's
+     * menu passes it — a list row's menu has no party to host.
+     */
+    onListenTogether: (() -> Unit)? = null,
 ) {
     val close = onDismiss
     DesktopSongMenu(
@@ -248,6 +253,7 @@ internal fun DesktopSongMenuFor(
         onSearchLyrics = onSearchLyrics,
         lyricsOffsetMs = lyricsOffsetMs,
         onSetLyricsOffset = onSetLyricsOffset,
+        onListenTogether = onListenTogether?.let { { it(); close() } },
         onDismiss = close,
     )
 }
@@ -300,6 +306,8 @@ internal fun DesktopSongMenu(
     /** The player's lyrics offset and its setter; a null setter hides the "Lyrics offset" row. */
     lyricsOffsetMs: Int = 0,
     onSetLyricsOffset: ((Int) -> Unit)? = null,
+    /** Starts a Listen Together party for the playing track; null hides the row. */
+    onListenTogether: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     var pickingSleepTimer by remember { mutableStateOf(false) }
@@ -443,6 +451,10 @@ internal fun DesktopSongMenu(
         // player's menu passes it.
         onShowQueue?.let {
             DesktopMenuRow(BitChordIcons.Queue, DesktopStrings["d_view_queue", "View queue"], onClick = it)
+        }
+        // The party the player's own menu can start for the track it is playing.
+        onListenTogether?.let {
+            DesktopMenuRow(BitChordIcons.Headphones, DesktopStrings["listen_together", "Listen together"], onClick = it)
         }
 
         // The lyric sheet the player's content column can show, and the ways of

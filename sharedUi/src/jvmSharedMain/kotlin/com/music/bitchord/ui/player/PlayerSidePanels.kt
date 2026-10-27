@@ -3,6 +3,8 @@ package com.music.bitchord.ui.player
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +61,39 @@ fun LyricsSidePanel(
     lyricsUnavailable: Boolean,
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * How far above the column's middle the sung line rests. The column that
+     * stands beside a page reads from its top, so it keeps [SIDE_COLUMN_CENTRE_RAISE];
+     * the full-screen player's centred pane passes its own, smaller raise.
+     */
+    centreRaise: Float = SIDE_COLUMN_CENTRE_RAISE,
+    /**
+     * Whether the words draw as the player's own block of four crisp lines
+     * moving through a window rather than as a stack filling the column. The
+     * full-screen player passes its "Classic lyrics" toggle here.
+     */
+    windowed: Boolean = false,
+    /**
+     * Whether the translate/romanise pair is drawn under the words. The
+     * full-screen player has moved them into its song menu and passes false;
+     * the home page's lyric column keeps them.
+     */
+    showLyricsToggles: Boolean = true,
+    /**
+     * Where the placeholder stands before there are lines to draw. A column
+     * that reads from its top keeps it there; the centred player pane centres it.
+     */
+    placeholderAlign: Alignment = Alignment.TopCenter,
+    /**
+     * The player's own translate/romanise toggles, when this column is the
+     * player's lyric pane and the song menu flips them. Each ask is consumed
+     * and cleared here; the current state is mirrored back out through the
+     * second of each pair so the menu rows can show their checkmarks.
+     */
+    playerTranslateToggle: MutableState<Boolean>? = null,
+    playerShowingTranslation: MutableState<Boolean>? = null,
+    playerRomanizeToggle: MutableState<Boolean>? = null,
+    playerShowingRomanization: MutableState<Boolean>? = null,
 ) {
     val haptics = rememberHaptics()
     val lyricsOffsetMs by PlayerSettings.lyricsOffsetMs.collectAsStateWithLifecycle()
@@ -78,6 +113,26 @@ fun LyricsSidePanel(
         loadingText = lyricsLoadingText,
         haptics = haptics,
     )
+    // The menu rows ask; this column runs the ask and clears it, exactly as
+    // the landscape player does for the same pair of toggles.
+    LaunchedEffect(playerTranslateToggle?.value) {
+        if (playerTranslateToggle?.value == true) {
+            playerTranslateToggle.value = false
+            lyricsTranslation.toggleTranslation()
+        }
+    }
+    LaunchedEffect(lyricsTranslation.showingTranslation) {
+        playerShowingTranslation?.value = lyricsTranslation.showingTranslation
+    }
+    LaunchedEffect(playerRomanizeToggle?.value) {
+        if (playerRomanizeToggle?.value == true) {
+            playerRomanizeToggle.value = false
+            lyricsTranslation.toggleRomanization()
+        }
+    }
+    LaunchedEffect(lyricsTranslation.showingRomanization) {
+        playerShowingRomanization?.value = lyricsTranslation.showingRomanization
+    }
     // The provider drawer frosts this column, not the page beside it.
     val haze = remember { HazeState() }
     var showLyricsProviders by remember { mutableStateOf(false) }
@@ -95,11 +150,12 @@ fun LyricsSidePanel(
                 onStatusClick = { showLyricsProviders = true },
                 // The provider now lives in the desktop player's song menu, so
                 // this column drops the "Lyrics by …" line but keeps its two
-                // toggles either side of the gap it leaves.
+                // toggles either side of the gap it leaves — except in the
+                // player itself, where the toggles live in the song menu too.
                 showStatus = false,
-                // The sheet this column reads from is placed high in the column, so the line
-                // standing in for it waits there too rather than sitting on the header.
-                placeholderAlign = Alignment.TopCenter,
+                showToggles = showLyricsToggles,
+                placeholderAlign = placeholderAlign,
+                windowed = windowed,
                 romanizationToggle = {
                     RomanizationToggleButton(
                         state = lyricsTranslation.romanizationState,
@@ -137,9 +193,8 @@ fun LyricsSidePanel(
                         onRevealControls = {},
                         onHideControls = {},
                         translationProgress = particleProgress,
-                        // The words read near the top of the column; the
-                        // full-screen player keeps its own centred anchor.
-                        centreRaise = SIDE_COLUMN_CENTRE_RAISE,
+                        centreRaise = centreRaise,
+                        windowed = windowed,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -155,6 +210,17 @@ fun LyricsSidePanel(
             )
         }
     }
+}
+
+/**
+ * One rung of the player's back stack: while [enabled], Escape (the window's
+ * route into [PlayerBack]) reaches [onBack] before the sheet closes. The
+ * full-screen player uses this so its lyric or queue pane closes first, and
+ * only the next Escape leaves the player.
+ */
+@Composable
+fun PlayerEscapeLayer(enabled: Boolean, onBack: () -> Unit) {
+    PlayerBackHandler(enabled = enabled, onBack = onBack)
 }
 
 /** The live queue — the player's own, rows, drag and all — without the player. */

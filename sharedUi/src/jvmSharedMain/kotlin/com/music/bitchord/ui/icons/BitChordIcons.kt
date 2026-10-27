@@ -35,7 +35,7 @@ object BitChordIcons {
     private val stroke = SolidColor(Color.Black)
 
     /** A Lucide glyph: one or more round-pen strokes in the 24-unit box, never filled. */
-    private fun lucide(name: String, vararg pathData: String): ImageVector =
+    private fun lucide(name: String, vararg pathData: String, strokeWidth: Float = 2f): ImageVector =
         ImageVector.Builder(
             name = name,
             defaultWidth = 24.dp, defaultHeight = 24.dp,
@@ -45,7 +45,7 @@ object BitChordIcons {
                 addPath(
                     pathData = addPathNodes(d),
                     stroke = stroke,
-                    strokeLineWidth = 2f,
+                    strokeLineWidth = strokeWidth,
                     strokeLineCap = StrokeCap.Round,
                     strokeLineJoin = StrokeJoin.Round,
                 )
@@ -437,11 +437,13 @@ object BitChordIcons {
         )
     }
 
-    /** Two arrows apart — opening something out of its own frame. */
+    /** Two arrows apart — opening something out of its own frame. The site draws
+     *  this one at a 2.25 pen, a step heavier than the rest of the set. */
     val Maximize2: ImageVector by lazy {
         lucide(
             "bc_maximize_2",
             "M15 3h6v6", "m21 3-7 7", "m3 21 7-7", "M9 21H3v-6",
+            strokeWidth = 2.25f,
         )
     }
 

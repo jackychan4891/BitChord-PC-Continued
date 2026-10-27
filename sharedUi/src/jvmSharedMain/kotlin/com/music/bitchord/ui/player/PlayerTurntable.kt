@@ -27,7 +27,7 @@ import androidx.compose.ui.graphics.drawscope.translate
  * deck keeps its proportions at any window size and while the player docks into the bar.
  */
 @Composable
-internal fun TurntableDeck(isPlaying: Boolean, reduceAnimation: Boolean) {
+fun TurntableDeck(isPlaying: Boolean, reduceAnimation: Boolean) {
     // The arm drops onto the record when it starts turning, and lifts clear again when it stops.
     val laidDown by animateFloatAsState(
         targetValue = if (isPlaying) 1f else 0f,

@@ -53,6 +53,7 @@
     <string name="d_canvas_refused">Spotify\'s token endpoint turns this build down, so Canvas plays Apple, Tidal and community clips.</string>
     <string name="d_canvas_saved_untested">Saved. BitChord asks Spotify for a token the next time a canvas is wanted.</string>
     <string name="d_choose_something_to_play">Choose something to play</string>
+    <string name="d_classic_lyrics">Classic lyrics</string>
     <string name="d_clear_image_cache">Clear image cache</string>
     <string name="d_clear_song_cache">Clear song cache</string>
     <string name="d_close_player">Close player</string>
@@ -67,6 +68,7 @@
     <string name="d_discord_rich_presence_last_fm_and_listenbrainz">Discord rich presence, Last.fm and ListenBrainz</string>
     <string name="d_dont_repeat_songs_in_current_session">Don’t repeat songs in current session</string>
     <string name="d_downloaded_songs_will_appear_here">Downloaded songs will appear here.</string>
+    <string name="d_draws_the_words_small_and_heavy">Draws the words small and heavy, blurred away from the sung line</string>
     <string name="d_end_of_this_track">End of this track</string>
     <string name="d_everything_you_save_and_play">Everything you save and play</string>
     <string name="d_favourite">Favourite</string>

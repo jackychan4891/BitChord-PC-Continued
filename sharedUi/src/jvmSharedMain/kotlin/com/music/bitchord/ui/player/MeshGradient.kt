@@ -469,7 +469,11 @@ private const val LAYER_FADE_MS = 1_400
  * once. [alpha] scales all four, for a skip's crossfade, on top of each copy's own
  * opacity.
  */
-private fun DrawScope.drawSleeveStack(art: ImageBitmap, phase: Float, alpha: Float) {
+private fun DrawScope.drawSleeveStack(
+    art: ImageBitmap,
+    phase: Float,
+    alpha: Float,
+) {
     if (alpha <= 0.004f) return
     val width = size.width
     val height = size.height
@@ -484,7 +488,10 @@ private fun DrawScope.drawSleeveStack(art: ImageBitmap, phase: Float, alpha: Flo
                 width * layer.cx + width * layer.orbit * cos(track),
                 height * layer.cy + width * layer.orbit * sin(track),
             )
-            rotate(phase * layer.spin * RAD_TO_DEG + layer.start * 2f, pivot = Offset.Zero)
+            rotate(
+                phase * layer.spin * RAD_TO_DEG + layer.start * 2f,
+                pivot = Offset.Zero,
+            )
             scale(side / art.width.toFloat(), side / art.height.toFloat(), pivot = Offset.Zero)
         }) {
             drawImage(

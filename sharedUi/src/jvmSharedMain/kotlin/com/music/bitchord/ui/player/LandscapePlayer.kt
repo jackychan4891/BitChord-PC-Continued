@@ -161,16 +161,33 @@ private const val LANDSCAPE_ART_SHARE = 0.32f
 /** `… calc(100dvh - 330px)`: everything the sleeve leaves for the controls under it. */
 private val LANDSCAPE_ART_CONTROLS_RESERVE = 330.dp
 
-/** `… 720px)`: the sleeve stops growing there, however big the monitor. */
-private val LANDSCAPE_ART_MAX = 720.dp
+/**
+ * The sleeve stops growing there, however big the monitor. Measured off the Windows app's own
+ * full-screen player: the cover is 1185 device pixels wide on a 3840 panel, which at this
+ * display's 150% scale is the 790 below.
+ */
+private val LANDSCAPE_ART_MAX = 790.dp
 
 /** Never so small that a short window squeezes the cover into a thumbnail. */
 private val LANDSCAPE_ART_MIN = 200.dp
 
-/** `column-gap: clamp(48px, 7vw, 144px)` between the sleeve and the words. */
-private const val LANDSCAPE_GAP_SHARE = 0.07f
-private val LANDSCAPE_GAP_MIN = 48.dp
-private val LANDSCAPE_GAP_MAX = 144.dp
+/**
+ * The room between the sleeve and the words.
+ *
+ * The side column is a fixed width and this gap is padding inside it, so shrinking it
+ * slides the words toward the cover and gives the same distance back to the measure.
+ * Measured on the 2560dp screen: the sleeve ends at 1186, so the words start at 1269 and
+ * run 891 wide.
+ *
+ * The hairline this used to be read as a mistake drawn on the player: the words hard against
+ * the sleeve look like a caption to the cover rather than a column of their own. The distance
+ * is the one marked off against the sleeve in the screenshot — its left edge a little over a
+ * line of lyrics clear of the cover's corner — which is wide enough to read as its own margin
+ * and still short enough that the two columns belong to one another.
+ */
+private const val LANDSCAPE_GAP_SHARE = 0.032f
+private val LANDSCAPE_GAP_MIN = 82.dp
+private val LANDSCAPE_GAP_MAX = 240.dp
 
 /** `padding: 64px clamp(24px, 9vw, 144px)` around the two columns. */
 private val LANDSCAPE_SIDE_SHARE = 0.09f
@@ -192,9 +209,16 @@ private const val LANDSCAPE_CHROME_MS = 100
 private val LANDSCAPE_TRANSPORT_WIDTH = 390.dp
 private val LANDSCAPE_TRANSPORT_HEIGHT = 80.dp
 
-/** The credits block under the sleeve: 12 between its rows, 14 over the scrubber. */
-private val LANDSCAPE_CREDITS_GAP = 12.dp
+/** The credits block under the sleeve: 14 from its last line to the scrubber. */
 private val LANDSCAPE_SCRUBBER_GAP = 14.dp
+
+/**
+ * Air kept at either end of a centred credit line, for the two discs that stand
+ * at the end of the same block. Only a line long enough to scroll needs it, and
+ * it costs nothing otherwise: the padding is part of the line's own width, so a
+ * short title is still centred on the sleeve above it.
+ */
+private val LANDSCAPE_CREDITS_DISC_RESERVE = 88.dp
 
 /** `margin: clamp(8px, 1.6vh, 16px) auto 0` above the transport, at a typical window height. */
 private val LANDSCAPE_TRANSPORT_GAP = 12.dp
@@ -831,85 +855,88 @@ internal fun LandscapeCredits(
     // The colour the quality badge next door wears, so the credits and the two
     // corner discs read as part of the sleeve rather than as white on top of it.
     val artworkSyncColor = rememberArtworkSyncColor(song.thumbnailUrl)
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        Crossfade(
-            targetState = song.title to song.artist,
-            animationSpec = tween(durationMillis = 300),
-            modifier = Modifier.weight(1f),
-            label = "landscapeCredits",
-        ) {
-            Column {
-                var titleOverflowing by remember { mutableStateOf(false) }
-                MarqueeText(
-                    text = song.title,
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontSize = 17.sp,
-                        lineHeight = 22.sp,
-                        fontWeight = FontWeight.W600,
-                    ),
-                    color = Color.White,
-                    onOverflowChange = { titleOverflowing = it },
-                    leading = if (song.isExplicit == true) {
-                        { ExplicitBadge(Color.White) }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.opensPage(song.albumId, onOpenAlbum),
-                )
-                Spacer(Modifier.height(2.dp))
-                ArtistCreditsMarquee(
-                    text = song.artist,
-                    credits = remember(song.artist, song.artists, song.artistId) {
-                        artistCredits(song.artist, song.artists, song.artistId)
-                    },
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontSize = 15.sp,
-                        lineHeight = 20.sp,
-                        fontWeight = FontWeight.W400,
-                    ),
-                    // `--systemSecondary`, which the web player's subtitle is
-                    // two-thirds white — here the sleeve's own colour at that
-                    // same strength, so it matches the quality badge.
-                    color = artworkSyncColor.copy(alpha = 0.64f),
-                    // A title that's also scrolling gets to go first — starting
-                    // together reads as clutter, so the artist waits a beat.
-                    startDelayMillis = if (titleOverflowing) MARQUEE_ARTIST_STAGGER_MS else 0L,
-                    onOpenArtist = onOpenArtist,
-                )
-            }
-        }
-        Spacer(Modifier.width(LANDSCAPE_CREDITS_GAP))
-        // Same gate as the portrait player's: no account to like against for a
-        // guest, and no YouTube identity to rate a local file or a finished
-        // download against either.
-        if (signedIn && song.localUri == null) {
-            val liked = likeStatus == LikeStatus.LIKE
-            CircleGlyph(
-                icon = if (liked) BitChordIcons.StarFilled else BitChordIcons.Star,
-                contentDescription = stringResource(
-                    if (liked) Res.string.remove_from_liked else Res.string.like,
+    // The two lines are centred on the sleeve's own width, the way the desktop
+    // player sets them, with the discs held out at the edge of the same block.
+    // A title long enough to scroll still starts at the left: the marquee fills
+    // the width it is given, so centring it would park the first word mid-air.
+    Box(modifier = modifier.fillMaxWidth()) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
+            var titleOverflowing by remember { mutableStateOf(false) }
+            MarqueeText(
+                text = song.title,
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = 17.sp,
+                    lineHeight = 22.sp,
+                    fontWeight = FontWeight.W600,
                 ),
-                onClick = onToggleLike,
-                active = liked,
-                diameter = discSize,
-                tint = artworkSyncColor,
-                haptic = if (liked) Haptic.ToggleOff else Haptic.ToggleOn,
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-        if (onOpenMenu != null) {
-            Box(
-                Modifier.onGloballyPositioned { coordinates ->
-                    onMenuBounds?.invoke(coordinates.boundsInRoot())
+                color = Color.White,
+                onOverflowChange = { titleOverflowing = it },
+                leading = if (song.isExplicit == true) {
+                    { ExplicitBadge(Color.White) }
+                } else {
+                    null
                 },
-            ) {
+                modifier = Modifier
+                    .opensPage(song.albumId, onOpenAlbum)
+                    .padding(horizontal = LANDSCAPE_CREDITS_DISC_RESERVE),
+            )
+            Spacer(Modifier.height(2.dp))
+            ArtistCreditsMarquee(
+                text = song.artist,
+                credits = remember(song.artist, song.artists, song.artistId) {
+                    artistCredits(song.artist, song.artists, song.artistId)
+                },
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontSize = 15.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.W400,
+                ),
+                // `--systemSecondary`, which the web player's subtitle is
+                // two-thirds white — here the sleeve's own colour at that
+                // same strength, so it matches the quality badge.
+                color = artworkSyncColor.copy(alpha = 0.64f),
+                // A title that's also scrolling gets to go first — starting
+                // together reads as clutter, so the artist waits a beat.
+                startDelayMillis = if (titleOverflowing) MARQUEE_ARTIST_STAGGER_MS else 0L,
+                onOpenArtist = onOpenArtist,
+            )
+        }
+        Row(
+            modifier = Modifier.align(Alignment.CenterEnd),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Same gate as the portrait player's: no account to like against for a
+            // guest, and no YouTube identity to rate a local file or a finished
+            // download against either.
+            if (signedIn && song.localUri == null) {
+                val liked = likeStatus == LikeStatus.LIKE
                 CircleGlyph(
-                    icon = if (showRevertCue) Icons.AutoMirrored.Rounded.Undo else BitChordIcons.Ellipsis,
-                    contentDescription = stringResource(Res.string.more),
-                    onClick = onOpenMenu,
+                    icon = if (liked) BitChordIcons.StarFilled else BitChordIcons.Star,
+                    contentDescription = stringResource(
+                        if (liked) Res.string.remove_from_liked else Res.string.like,
+                    ),
+                    onClick = onToggleLike,
+                    active = liked,
                     diameter = discSize,
                     tint = artworkSyncColor,
+                    haptic = if (liked) Haptic.ToggleOff else Haptic.ToggleOn,
                 )
+                Spacer(Modifier.width(8.dp))
+            }
+            if (onOpenMenu != null) {
+                Box(
+                    Modifier.onGloballyPositioned { coordinates ->
+                        onMenuBounds?.invoke(coordinates.boundsInRoot())
+                    },
+                ) {
+                    CircleGlyph(
+                        icon = if (showRevertCue) Icons.AutoMirrored.Rounded.Undo else BitChordIcons.Ellipsis,
+                        contentDescription = stringResource(Res.string.more),
+                        onClick = onOpenMenu,
+                        diameter = discSize,
+                        tint = artworkSyncColor,
+                    )
+                }
             }
         }
     }
@@ -1141,6 +1168,12 @@ internal fun LandscapeLyricsPane(
      */
     showBar: Boolean = true,
     /**
+     * Whether the bar's translate/romanise pair is drawn. The web player's
+     * lyric pane has no bar of its own: its toggles live in the song menu, so
+     * it passes false and the empty bar folds away entirely.
+     */
+    showToggles: Boolean = true,
+    /**
      * Whether the bar's centred status line is drawn — the "Lyrics by …"
      * caption, its loading and translation siblings. The desktop player moved
      * the provider into its song menu, so its docked lyric column drops this
@@ -1154,6 +1187,12 @@ internal fun LandscapeLyricsPane(
      * visibly starts in the middle and moves up.
      */
     placeholderAlign: Alignment = Alignment.Center,
+    /**
+     * Whether the sheet is the player's own block of four lines rather than a list
+     * that fills the column. Pass it with the same flag the sheet is drawn with: a
+     * window that sized its lines to a pane it was not given reads as a gap.
+     */
+    windowed: Boolean = false,
     modifier: Modifier = Modifier,
     panel: @Composable (Modifier) -> Unit,
 ) {
@@ -1165,7 +1204,27 @@ internal fun LandscapeLyricsPane(
                 .padding(bottom = bottomInset),
         ) {
             if (hasLyrics) {
-                panel(Modifier.fillMaxSize())
+                if (windowed) {
+                    // The words move through a block hung at the foot of the room the
+                    // column leaves them — growing up the column rather than filling it.
+                    // The sheet is given the block's height as its whole pane, so the
+                    // anchor it works out from lands the sung line a whole line below the
+                    // room the block keeps at its top. A column shorter than the block
+                    // takes the height out of it rather than the anchor out of the line:
+                    // the sung line keeps its place and the block loses what it shows.
+                    BoxWithConstraints(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.BottomStart,
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(minOf(APPLE_LYRIC_WINDOW, maxHeight)),
+                        ) { panel(Modifier.fillMaxSize()) }
+                    }
+                } else {
+                    panel(Modifier.fillMaxSize())
+                }
             } else {
                 // Held at a fixed line rather than through
                 // [LyricsUnavailableLine] or [LyricsLoadingLine]: those fade
@@ -1186,7 +1245,7 @@ internal fun LandscapeLyricsPane(
         // where.
         if (picking) {
             Box(Modifier.fillMaxWidth()) { pickBar() }
-        } else if (showBar) {
+        } else if (showBar && (showStatus || showToggles)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1195,7 +1254,7 @@ internal fun LandscapeLyricsPane(
             ) {
                 // A disc's width of empty on the leading side, so the status line
                 // stays centred behind the pair on the right as lyrics arrive.
-                Box(Modifier.size(34.dp))
+                if (showToggles) Box(Modifier.size(34.dp))
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -1213,12 +1272,14 @@ internal fun LandscapeLyricsPane(
                 // the sheet is asked for top-down — translate it, and only then
                 // romanise it — and a listener looking for the second does not
                 // have to sweep the whole width to find it.
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Box(Modifier.size(34.dp)) { if (hasLyrics) translationToggle() }
-                    Box(Modifier.size(34.dp)) { if (hasLyrics) romanizationToggle() }
+                if (showToggles) {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(Modifier.size(34.dp)) { if (hasLyrics) translationToggle() }
+                        Box(Modifier.size(34.dp)) { if (hasLyrics) romanizationToggle() }
+                    }
                 }
             }
         }

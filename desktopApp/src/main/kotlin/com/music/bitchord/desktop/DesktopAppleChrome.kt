@@ -1,5 +1,7 @@
 package com.music.bitchord.desktop
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -19,13 +21,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Radio
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -33,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
@@ -44,7 +49,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import bitchord.desktopapp.generated.resources.Res
@@ -349,6 +353,7 @@ internal fun DesktopAppleFloatingPlayer(
     isLoading: Boolean,
     previousEnabled: Boolean,
     progress: Float,
+    positionMs: Long,
     durationMs: Long,
     volume: Float,
     shuffle: Boolean,
@@ -362,10 +367,10 @@ internal fun DesktopAppleFloatingPlayer(
     onRepeatModeChange: (DesktopRepeatMode) -> Unit,
     onSeek: (Long) -> Unit,
     onOpenNowPlaying: () -> Unit,
-    onVolumeChange: (Float) -> Unit,
-    onOpenAudioOutput: () -> Unit,
     onOpenLyrics: () -> Unit,
     onOpenQueue: () -> Unit,
+    onVolumeChange: (Float) -> Unit,
+    onOpenAudioOutput: () -> Unit,
     sidePanel: DesktopSidePanel?,
     liveRadio: Boolean,
     onStopRadio: () -> Unit,
@@ -390,37 +395,40 @@ internal fun DesktopAppleFloatingPlayer(
                 Modifier.matchParentSize().padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // The transport sizes are the web player's own: 28 for shuffle, play
-                    // and the loop, 26 for the pair of skips. Apple drew each shape inside
-                    // its own 28-unit box — the loop fills half of it, the skips nearly
-                    // all of it — so equalising the boxes, as this row used to, is what
-                    // made the row read as icons of several different sizes.
-                    if (!narrow) MiniPlayerButton({ onShuffleChange(!shuffle) }, enabled = !liveRadio, width = 24.dp) {
-                        Icon(BitChordIcons.TransportShuffle, DesktopStrings["shuffle", "Shuffle"], tint = if (shuffle) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(28.dp))
+                // The site's transport column: shuffle and the loop pin the two
+                // ends of a fixed 184px run, the skips and play sit between them.
+                // Every box is 28 square on a 6px corner with no hover fill —
+                // the glyphs alone carry the state, secondary until pressed pink.
+                Row(
+                    Modifier.then(if (narrow) Modifier else Modifier.width(184.dp)).padding(end = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (!narrow) PillTransportButton({ onShuffleChange(!shuffle) }, enabled = !liveRadio) {
+                        Icon(BitChordIcons.TransportShuffle, DesktopStrings["shuffle", "Shuffle"], tint = if (shuffle) DesktopAccent else WebSecondary, modifier = Modifier.size(28.dp))
                     }
-                    MiniPlayerButton(onPrevious, enabled = previousEnabled && song != null) {
-                        Icon(BitChordIcons.TransportPrevious, DesktopStrings["widget_previous", "Previous"], tint = DesktopAppleText, modifier = Modifier.size(26.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        PillTransportButton(onPrevious, enabled = previousEnabled && song != null) {
+                            Icon(BitChordIcons.TransportPrevious, DesktopStrings["widget_previous", "Previous"], tint = WebPrimary, modifier = Modifier.size(26.dp))
+                        }
+                        PillTransportButton(onPlayPause, enabled = song != null) {
+                            // The site keeps the pause glyph up through buffering
+                            // instead of swapping it for a spinner.
+                            Icon(if (isPlaying || isLoading) BitChordIcons.TransportPause else BitChordIcons.TransportPlay,
+                                if (isPlaying) DesktopStrings["pause", "Pause"] else DesktopStrings["play", "Play"],
+                                tint = WebPrimary, modifier = Modifier.size(28.dp))
+                        }
+                        PillTransportButton(if (liveRadio) onStopRadio else onNext, enabled = song != null) {
+                            Icon(if (liveRadio) BitChordIcons.Stop else BitChordIcons.TransportNext,
+                                if (liveRadio) DesktopStrings["d_stop_radio", "Stop radio"] else DesktopStrings["widget_next", "Next"],
+                                tint = WebPrimary, modifier = Modifier.size(if (liveRadio) 24.dp else 26.dp))
+                        }
                     }
-                    MiniPlayerButton(onPlayPause, enabled = song != null) {
-                        if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = DesktopAppleText, strokeWidth = 2.dp)
-                        else Icon(if (isPlaying) BitChordIcons.TransportPause else BitChordIcons.TransportPlay,
-                            if (isPlaying) DesktopStrings["pause", "Pause"] else DesktopStrings["play", "Play"],
-                            tint = DesktopAppleText, modifier = Modifier.size(28.dp))
-                    }
-                    MiniPlayerButton(if (liveRadio) onStopRadio else onNext, enabled = song != null) {
-                        Icon(if (liveRadio) BitChordIcons.Stop else BitChordIcons.TransportNext,
-                            if (liveRadio) DesktopStrings["d_stop_radio", "Stop radio"] else DesktopStrings["widget_next", "Next"],
-                            tint = DesktopAppleText, modifier = Modifier.size(if (liveRadio) 24.dp else 26.dp))
-                    }
-                    // The same filled loop glyph the main player draws. The outlined
-                    // one plus a separate "1" caption used to sit as two objects, and
-                    // the caption overlapped the loop.
-                    if (!narrow) MiniPlayerButton({ onRepeatModeChange(repeatMode.next()) }, enabled = !liveRadio, width = 24.dp) {
+                    if (!narrow) PillTransportButton({ onRepeatModeChange(repeatMode.next()) }, enabled = !liveRadio) {
                         Icon(
                             imageVector = if (repeatMode == DesktopRepeatMode.ONE) BitChordIcons.TransportRepeatOne else BitChordIcons.TransportRepeat,
                             contentDescription = repeatMode.menuLabel(),
-                            tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopAppleSecondary else DesktopAccent,
+                            tint = if (repeatMode == DesktopRepeatMode.OFF) WebSecondary else DesktopAccent,
                             modifier = Modifier.size(28.dp),
                         )
                     }
@@ -430,58 +438,77 @@ internal fun DesktopAppleFloatingPlayer(
                     progress = { currentProgress },
                     mixPulse = mixPulse,
                     durationMs = durationMs,
+                    positionMs = positionMs,
                     seekable = !liveRadio && song != null && durationMs > 0L,
                     onSeek = onSeek,
                     onOpenNowPlaying = onOpenNowPlaying,
-                    modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                    modifier = Modifier.weight(1f),
                 )
-                Box(contentAlignment = Alignment.CenterEnd) {
-                    val actionsHover = remember { MutableInteractionSource() }
+                Box(Modifier.width(132.dp), contentAlignment = Alignment.CenterEnd) {
+                    // The volume slider's hover has to come from the volume button
+                    // and the slider alone: hanging it off the whole row is what
+                    // made the slider cover the other buttons the moment the
+                    // pointer was anywhere near them.
                     val volumeHover = remember { MutableInteractionSource() }
-                    val overActions by actionsHover.collectIsHoveredAsState()
+                    val sliderHover = remember { MutableInteractionSource() }
                     val overVolume by volumeHover.collectIsHoveredAsState()
+                    val overSlider by sliderHover.collectIsHoveredAsState()
                     var sliderOpen by remember { mutableStateOf(false) }
-                    LaunchedEffect(overVolume, overActions) {
-                        if (overVolume) sliderOpen = true else if (!overActions) sliderOpen = false
+                    LaunchedEffect(overVolume, overSlider) {
+                        sliderOpen = overVolume || overSlider
                     }
                     val reveal by animateFloatAsState(if (sliderOpen) 1f else 0f, tween(150), label = "miniVolume")
                     Row(
-                        Modifier.hoverable(actionsHover),
+                        Modifier.align(Alignment.CenterEnd),
                         horizontalArrangement = Arrangement.spacedBy(9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        // While the slider is open it covers the other three, so
+                        // they fade under it the way the site's do.
                         val others = Modifier.graphicsLayer { alpha = 1f - reveal }
-                        MiniPlayerButton({ onToggleLike?.invoke() }, enabled = onToggleLike != null && song != null && !liveRadio, width = 24.dp, modifier = others) {
+                        // Always drawn at full strength, with or without a song:
+                        // a star that dims or vanishes with the track makes the
+                        // pill's right end jump about as tracks come and go.
+                        PillActionButton({ if (onToggleLike != null && song != null && !liveRadio) onToggleLike.invoke() }, modifier = others) {
                             Icon(if (liked) BitChordIcons.StarFilled else BitChordIcons.Star,
                                 if (liked) DesktopStrings["d_remove_from_favourites", "Remove from Favourites"] else DesktopStrings["d_favourite", "Favourite"],
-                                tint = if (liked) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(20.dp))
+                                tint = if (liked) DesktopAccent else WebPrimary, modifier = Modifier.size(18.dp))
                         }
-                        // Apple's own lyric bubble, in its two states — the outlined one
-                        // when the sheet is down, the filled one when it is up, exactly as
-                        // the web player swaps them. A quote mark from the Lucide set reads
-                        // as a different app's icon in a row of Apple's own.
-                        MiniPlayerButton(onOpenLyrics, enabled = !liveRadio, width = 24.dp, modifier = others) {
+                        PillActionButton(onOpenLyrics, enabled = !liveRadio, modifier = others) {
                             Icon(if (sidePanel == DesktopSidePanel.LYRICS) BitChordIcons.Lyrics else BitChordIcons.LyricsOff,
                                 DesktopStrings["open_lyrics", "Lyrics"],
-                                tint = if (sidePanel == DesktopSidePanel.LYRICS) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
+                                tint = if (sidePanel == DesktopSidePanel.LYRICS) DesktopAccent else WebPrimary, modifier = Modifier.size(18.dp))
                         }
-                        MiniPlayerButton(onOpenQueue, enabled = !liveRadio, width = 24.dp, modifier = others) {
-                            Icon(BitChordIcons.Queue, DesktopStrings["up_next", "Up next"], tint = if (sidePanel == DesktopSidePanel.QUEUE) DesktopAccent else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
+                        PillActionButton(onOpenQueue, enabled = !liveRadio, modifier = others) {
+                            Icon(BitChordIcons.Queue,
+                                DesktopStrings["up_next", "Up Next"],
+                                tint = if (sidePanel == DesktopSidePanel.QUEUE) DesktopAccent else WebPrimary, modifier = Modifier.size(18.dp))
                         }
                         Box {
-                            MiniPlayerButton({ volumeMenu = true }, width = 24.dp, modifier = Modifier.hoverable(volumeHover)) {
-                                Icon(BitChordIcons.TransportVolume(volume), DesktopStrings["d_volume_and_audio_output", "Volume and audio output"], tint = if (sliderOpen) DesktopAppleText else DesktopAppleSecondary, modifier = Modifier.size(18.dp))
+                            PillActionButton({ volumeMenu = true }, modifier = Modifier.hoverable(volumeHover)) {
+                                val icon = when {
+                                    volume <= 0f -> Icons.AutoMirrored.Rounded.VolumeOff
+                                    volume < 0.5f -> Icons.AutoMirrored.Rounded.VolumeDown
+                                    else -> Icons.AutoMirrored.Rounded.VolumeUp
+                                }
+                                Icon(icon,
+                                    DesktopStrings["volume_and_audio_output", "Volume and audio output"],
+                                    tint = WebPrimary, modifier = Modifier.size(18.dp))
                             }
                             DesktopDropdownMenu(volumeMenu, { volumeMenu = false }) {
                                 if (narrow && !liveRadio) {
-                                    DropdownMenuItem(text = { Text(if (shuffle) DesktopStrings["shuffle_on", "Shuffle on"] else DesktopStrings["shuffle_off", "Shuffle off"]) }, onClick = { onShuffleChange(!shuffle) })
+                                    DropdownMenuItem(text = { Text(if (shuffle) DesktopStrings["shuffle_on", "Shuffle On"] else DesktopStrings["shuffle_off", "Shuffle Off"]) }, onClick = { onShuffleChange(!shuffle) })
                                     DropdownMenuItem(text = { Text(repeatMode.menuLabel()) }, onClick = { onRepeatModeChange(repeatMode.next()) })
                                 }
                                 Box(Modifier.width(180.dp).padding(horizontal = 16.dp)) {
                                     DesktopThinSlider(volume, onVolumeChange, idleHeight = 4.dp, activeHeight = 8.dp)
                                 }
-                                DropdownMenuItem(text = { Text(if (liveRadio) DesktopStrings["d_radio_system_output", "Radio uses system default output"] else DesktopStrings["audio_output", "Audio output"]) }, enabled = !liveRadio,
-                                    leadingIcon = { Icon(BitChordIcons.Headphones, null) }, onClick = { volumeMenu = false; onOpenAudioOutput() })
+                                DropdownMenuItem(
+                                    text = { Text(if (liveRadio) DesktopStrings["d_radio_system_output", "Radio uses system default output"] else DesktopStrings["audio_output", "Audio Output"]) },
+                                    enabled = !liveRadio,
+                                    leadingIcon = { Icon(Icons.Rounded.Headphones, null) },
+                                    onClick = { volumeMenu = false; onOpenAudioOutput() },
+                                )
                             }
                         }
                     }
@@ -489,7 +516,7 @@ internal fun DesktopAppleFloatingPlayer(
                         DesktopThinSlider(
                             volume, onVolumeChange,
                             idleHeight = 4.dp, activeHeight = 4.dp,
-                            modifier = Modifier.padding(end = 33.dp).width(96.dp).hoverable(actionsHover)
+                            modifier = Modifier.padding(end = 33.dp).width(96.dp).hoverable(sliderHover)
                                 .graphicsLayer { alpha = reveal; translationX = (1f - reveal) * 8.dp.toPx() },
                         )
                     }
@@ -499,16 +526,32 @@ internal fun DesktopAppleFloatingPlayer(
     }
 }
 
+/** A transport glyph's box: 28 square on a 6px corner, no hover fill. */
 @Composable
-private fun MiniPlayerButton(
+private fun PillTransportButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
-    width: Dp = 28.dp,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     Box(
-        modifier.size(width, 28.dp).clip(RoundedCornerShape(4.dp))
+        modifier.size(28.dp).clip(RoundedCornerShape(6.dp))
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+/** An action glyph's box: 24×28 on a 4px corner, no hover fill, white until pressed pink. */
+@Composable
+private fun PillActionButton(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier.size(24.dp, 28.dp).clip(RoundedCornerShape(4.dp))
             .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -521,6 +564,7 @@ private fun MiniPlayerLcd(
     progress: () -> Float,
     mixPulse: com.music.bitchord.ui.player.MixPulse,
     durationMs: Long,
+    positionMs: Long,
     seekable: Boolean,
     onSeek: (Long) -> Unit,
     onOpenNowPlaying: () -> Unit,
@@ -532,14 +576,88 @@ private fun MiniPlayerLcd(
     DesktopStrings.language.collectAsState()
     val scrubbing = seekable && (overStrip || scrub != null)
     val focus by animateFloatAsState(if (scrubbing) 1f else 0f, tween(100), label = "lcdScrub")
-    Box(modifier.height(44.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpenNowPlaying)) {
-        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            if (song != null) DesktopArtwork(song.thumbnailUrl, Modifier.size(34.dp).clip(RoundedCornerShape(6.dp)), px = 160)
-            else Image(painterResource(Res.drawable.logo_mark), "BitChord", Modifier.padding(5.dp).size(24.dp))
-            Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                Text(song?.title ?: "BitChord", color = DesktopAppleText, fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(song?.artist ?: DesktopStrings["d_not_playing", "Not Playing"], color = DesktopAppleSecondary, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    // The cover's own hover darkens the sleeve and fades in the expand glyph —
+    // the cue that the artwork is the way up into the full player.
+    val coverHover = remember { MutableInteractionSource() }
+    val overCover by coverHover.collectIsHoveredAsState()
+    val expand by animateFloatAsState(if (overCover) 1f else 0f, tween(200), label = "lcdExpand")
+    Box(modifier.clip(RoundedCornerShape(6.dp))) {
+        Row(
+            Modifier.fillMaxSize().padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .hoverable(coverHover)
+                    .clickable(onClick = onOpenNowPlaying),
+            ) {
+                if (song != null) {
+                    // Two sleeves crossfade on a skip: the outgoing one holds
+                    // its frame while the incoming one dissolves over it, so a
+                    // change of song is one continuous blend rather than a pop
+                    // to the placeholder and back.
+                    var coverUrl by remember { mutableStateOf<String?>(null) }
+                    var coverOld by remember { mutableStateOf<String?>(null) }
+                    val coverFade = remember { Animatable(1f) }
+                    LaunchedEffect(song.thumbnailUrl) {
+                        val url = song.thumbnailUrl
+                        if (url != coverUrl) {
+                            coverOld = coverUrl
+                            coverUrl = url
+                            coverFade.snapTo(0f)
+                            coverFade.animateTo(1f, tween(600, easing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)))
+                            coverOld = null
+                        }
+                    }
+                    Box(Modifier.fillMaxSize()) {
+                        coverOld?.let { DesktopArtwork(it, Modifier.fillMaxSize(), px = 160) }
+                        coverUrl?.let {
+                            DesktopArtwork(it, Modifier.fillMaxSize().graphicsLayer { alpha = coverFade.value }, px = 160)
+                        }
+                    }
+                } else Image(painterResource(Res.drawable.logo_mark), "BitChord", Modifier.padding(5.dp).size(24.dp))
+                // The site's hover: the sleeve drops under a half-black scrim
+                // while its own 14 dp white maximize-2 (2.25 pen) fades in at
+                // the centre — the cue that the art is the way up.
+                Box(
+                    Modifier.fillMaxSize()
+                        .graphicsLayer { alpha = expand }
+                        .background(Color.Black.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        BitChordIcons.Maximize2, DesktopStrings["d_now_playing", "Now playing"],
+                        tint = Color.White, modifier = Modifier.size(14.dp),
+                    )
+                }
             }
+            // Hovering the strip dims the titles to 30% and blurs them, the
+            // site's group/scrub trick for handing the eye to the times.
+            Column(
+                Modifier.weight(1f).padding(start = 8.dp)
+                    .graphicsLayer { alpha = 1f - 0.7f * focus }
+                    .then(if (focus > 0.01f) Modifier.blur(3.dp * focus) else Modifier),
+            ) {
+                Text(song?.title ?: "BitChord", color = WebPrimary, fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(song?.artist ?: DesktopStrings["d_not_playing", "Not Playing"], color = WebSecondary, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        // The hover times: elapsed on the left, the remaining as a minus time on
+        // the right, both reading the drag position while a scrub is in flight.
+        if (seekable && focus > 0f) {
+            val shownMs = (scrub?.let { (it * durationMs).toLong() } ?: positionMs).coerceAtLeast(0L)
+            Text(
+                webTime(shownMs),
+                modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 11.dp).graphicsLayer { alpha = focus },
+                color = WebPrimary, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "-" + webTime(durationMs - shownMs),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 11.dp).graphicsLayer { alpha = focus },
+                color = WebPrimary, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.SemiBold,
+            )
         }
         // The bar rides the bottom of the pill rather than the middle of the
         // LCD: laid over the sleeve it read as a scratch across the artwork.
@@ -568,13 +686,16 @@ private fun MiniPlayerLcd(
                     }
                 }
                 .drawBehind {
+                    // 2px on the 6px line at rest; 4px dropped to the 5px line
+                    // while the pointer is on it — the site's hover growth.
                     val barHeight = (2.dp + 2.dp * focus).toPx()
-                    val top = size.height - barHeight
+                    val bottomInset = (6.dp - 1.dp * focus).toPx()
+                    val top = size.height - bottomInset - barHeight
                     val width = size.width
                     val base = (scrub ?: progress()).coerceIn(0f, 1f)
                     val fill = base + (1f - base) * mixPulse.cover
                     val radius = androidx.compose.ui.geometry.CornerRadius(barHeight / 2f)
-                    drawRoundRect(Color.White.copy(alpha = 0.16f), Offset(0f, top), Size(width, barHeight), radius)
+                    drawRoundRect(WebPageQuaternary, Offset(0f, top), Size(width, barHeight), radius)
                     drawRoundRect(Color.White.copy(alpha = mixPulse.alpha(0.64f)), Offset(0f, top), Size(width * fill, barHeight), radius)
                 },
         )

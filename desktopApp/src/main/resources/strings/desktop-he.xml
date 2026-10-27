@@ -44,6 +44,7 @@
     <string name="d_blur_unfocused_lyrics">טשטוש שורות שאינן בפוקוס</string>
     <string name="d_choose_something_to_play">בחר משהו להשמעה</string>
     <string name="d_choose_the_browser_sign_in_button_below">בחר למטה את הדפדפן, סיים את הכניסה בחלון הדפדפן הנפרד, ואז סגור אותו כדי לחזור ל-BitChord.</string>
+    <string name="d_classic_lyrics">מילות שיר קלאסיות</string>
     <string name="d_close_player">סגור את הנגן</string>
     <string name="d_close_up_next">סגור את הבא בתור</string>
     <string name="d_closing_the_window_leaves_bitchord_in_the_tray_instead_o">סגירת החלון משאירה את BitChord במגש במקום לצאת</string>
@@ -53,6 +54,7 @@
     <string name="d_discord_rich_presence_last_fm_and_listenbrainz">נוכחות עשירה ב-Discord, ‏Last.fm ו-ListenBrainz</string>
     <string name="d_dont_repeat_songs_in_current_session">אל תחזור על שירים בפעילות הזו</string>
     <string name="d_downloaded_songs_will_appear_here">שירים שהורדו יופיעו כאן.</string>
+    <string name="d_draws_the_words_small_and_heavy">מציג את המילים קטנות וכבדות, ומטשטש אותן הרחק מהשורה המושרת</string>
     <string name="d_end_of_this_track">סוף הרצועה</string>
     <string name="d_everything_you_save_and_play">כל מה שאתה שומר ומשמיע</string>
     <string name="d_favourite">מועדף</string>
@@ -80,6 +82,7 @@
     <string name="d_monthly_listeners">מאזינים חודשיים</string>
     <string name="d_music">מוזיקה</string>
     <string name="d_my_music_source">מקור המוזיקה שלי</string>
+    <string name="d_n_rows_tucked_away">%1$d שורות הוסתרו מסרגל הצד</string>
     <string name="d_name_optional">שם (אופציונלי)</string>
     <string name="d_new">חדש</string>
     <string name="d_new_music_moods_and_discoveries">מוזיקה חדשה, מצבי רוח וגילויים</string>
@@ -88,6 +91,7 @@
     <string name="d_nobody_is_signed_in">אף אחד לא מחובר. הספרייה, הפלייליסטים וההיסטוריה שלך זקוקים ל חשבון YouTube Music.</string>
     <string name="d_not_found">לא נמצא</string>
     <string name="d_not_playing">לא מנגן</string>
+    <string name="d_nothing_hidden_yet">עוד לא הוסתר כלום</string>
     <string name="d_off">כבוי</string>
     <string name="d_ok">אישור</string>
     <string name="d_one">אחד</string>
@@ -151,6 +155,7 @@
     <string name="d_artist_signature_service">שירות חתימת אמן</string>
     <string name="d_artist_signature_off">כבוי. כלום לא נשלף עד שתוסיף קישור משלך.</string>
     <string name="d_artist_signature_dialog">BitChord מבקש חתימה בכתב יד משירות לבחירתך ומציג אותה בלבן מעל כותרת האמן. על הקישור לענות ב־JSON. שים {artist} במקום שבו צריך להיות השם, או השמט אותו והשם יתווסף כ־?artist=…&amp;type=handwritten. נקה את השדה כדי שלא יישלף כלום.</string>
+    <string name="hidden_items">פריטים מוסתרים</string>
     <string name="spotify_canvas_needs_cookie">כדי להשתמש ב־Spotify Canvas, ספק את עוגיית ה־sp_dc של Spotify שלך.</string>
     <string name="d_canvas_refused">Spotify סירב למסור אסימון, לכן Canvas משתמש במקורות האחרים שלו.</string>
     <string name="d_canvas_saved_untested">נשמר. BitChord יבקש אסימון מ־Spotify בפעם הבאה ש־canvas נדרש.</string>

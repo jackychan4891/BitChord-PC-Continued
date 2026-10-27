@@ -40,10 +40,8 @@ import com.music.bitchord.ui.LyricsProviderState
 import com.music.bitchord.data.lyrics.LyricsSource
 import com.music.bitchord.ui.player.LyricsSidePanel
 import com.music.bitchord.ui.player.LocalLyricsFontFamily
-import com.music.bitchord.ui.player.NowPlayingScreen
 import com.music.bitchord.ui.player.QueueSidePanel
 import com.music.bitchord.ui.player.PlayerBack
-import com.music.bitchord.ui.player.RepeatModes
 import com.music.bitchord.ui.player.rememberMixPulse
 import com.music.bitchord.data.model.QueueTier
 import androidx.compose.animation.AnimatedVisibility
@@ -238,7 +236,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -284,7 +281,6 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -3224,11 +3220,6 @@ fun BitChordDesktopApp() {
     val playerShowingTranslation = remember(selectedSong?.videoId) { mutableStateOf(false) }
     val playerRomanizeToggle = remember(selectedSong?.videoId) { mutableStateOf(false) }
     val playerShowingRomanization = remember(selectedSong?.videoId) { mutableStateOf(false) }
-    // Where the player's own "…" sits, reported up by the shared player: the
-    // sleeve's width and the words' column ride on the window's size, so the menu
-    // has to follow the glyph rather than sit at a fixed corner. A right-click
-    // opens the same menu, at the same place.
-    val playerMenuBounds = remember(selectedSong?.videoId) { mutableStateOf<Rect?>(null) }
 
     /** The song menu's verbs for [song], as the player sheet offers them. */
     fun playerSongActions(song: Song) = DesktopSongActions(
@@ -3602,17 +3593,18 @@ fun BitChordDesktopApp() {
                         },
                         onSeek = ::seekPlayer,
                         onOpenNowPlaying = ::openPlayerFromUser,
+                        // A second click on the same button puts the column away, as in Apple Music.
+                        onOpenLyrics = { overlays.toggleSidePanel(DesktopSidePanel.LYRICS) },
+                        onOpenQueue = { overlays.toggleSidePanel(DesktopSidePanel.QUEUE) },
                         onVolumeChange = {
                             volume = it
                             persistence.saveString("volume", it.toString())
                         },
                         onOpenAudioOutput = { overlays.audioOutput = true },
-                        // A second click on the same button puts the column away, as in Apple Music.
-                        onOpenLyrics = { overlays.toggleSidePanel(DesktopSidePanel.LYRICS) },
-                        onOpenQueue = { overlays.toggleSidePanel(DesktopSidePanel.QUEUE) },
                         sidePanel = overlays.sidePanel,
                         liveRadio = liveRadio,
                         onStopRadio = { radioPlayer.stop() },
+                        positionMs = if (liveRadio) 0L else playback.positionMs,
                     )
                 },
                 pageNavigation = { compact ->
@@ -3693,7 +3685,7 @@ fun BitChordDesktopApp() {
                             DesktopWindowMode.exit()
                             overlays.nowPlaying = false
                         },
-                    ) { windowWidth, windowHeight ->
+                    ) { _, _ ->
                         val current = selectedSong ?: return@DesktopPlayerSheet
                         val playerSong = trackLinks?.takeIf { it.videoId == current.videoId }
                             ?.let { extra ->
@@ -3709,44 +3701,24 @@ fun BitChordDesktopApp() {
                                 )
                             }
                             ?: current
-                        NowPlayingScreen(
+                        DesktopWebPlayer(
                             song = playerSong,
                             isPlaying = playback.isPlaying,
                             isLoading = playback.isLoading,
                             position = playerPosition,
                             durationMs = playback.durationMs,
-                            audioVersionSwitching = false,
-                            qualityUpgraded = false,
-                            queue = liveQueue.songs,
-                            queueIndex = liveQueue.index,
-                            hasPrevious = liveQueue.hasPrevious,
-                            hasNext = liveQueue.hasNext,
-                            repeatMode = when (repeatMode) {
-                                DesktopRepeatMode.OFF -> RepeatModes.OFF
-                                DesktopRepeatMode.ONE -> RepeatModes.ONE
-                                DesktopRepeatMode.ALL -> RepeatModes.ALL
-                            },
+                            transitionWindow = playback.transitionWindow?.let { it.start..it.end },
+                            previousEnabled = liveQueue.hasPrevious || playback.positionMs > BACK_RESTARTS_AFTER_MS,
+                            nextEnabled = liveQueue.hasNext,
                             shuffleEnabled = shuffle,
-                            autoplayEnabled = DesktopAutoplay.enabled(partyState, autoplay),
+                            repeatMode = repeatMode,
+                            liked = current.videoId in likedIds,
                             signedIn = youtubeSignedIn,
-                            accountName = activeAccount?.name?.takeIf(String::isNotBlank),
-                            likeStatus = when (current.videoId) {
-                                in likedIds -> LikeStatus.LIKE
-                                in dislikedIds -> LikeStatus.DISLIKE
-                                else -> LikeStatus.INDIFFERENT
-                            },
+                            canvas = canvas,
                             onToggleLike = { toggleLike(current) },
                             onPlayPause = ::togglePlayPauseFromUser,
-                            onNext = ::playNext,
                             onPrevious = ::playPrevious,
-                            onBlockedControl = {
-                                DesktopPlayerHost.showMessage("Only the party host can change playback")
-                            },
-                            onSeek = ::seekPlayer,
-                            onSeekFraction = { fraction ->
-                                val duration = playbackEngine.state.value.durationMs
-                                if (duration > 0) seekPlayer((fraction * duration).toLong())
-                            },
+                            onNext = ::playNext,
                             onToggleShuffle = { setShuffle(!shuffle) },
                             // The phone's order: off, all, one.
                             onCycleRepeat = {
@@ -3757,15 +3729,69 @@ fun BitChordDesktopApp() {
                                 }
                                 persistence.saveString("repeat_mode", repeatMode.name)
                             },
-                            onToggleAutoplay = {
-                                setAutoplay(!DesktopAutoplay.enabled(DesktopListenTogether.state.value, autoplay))
+                            onSeek = ::seekPlayer,
+                            volume = volume,
+                            onVolumeChange = {
+                                volume = it
+                                persistence.saveString("volume", it.toString())
                             },
-                            onJumpTo = ::playQueueIndex,
-                            onRemoveFromQueue = ::removeFromQueue,
-                            onMoveInQueue = ::moveInQueue,
-                            onClearQueue = ::clearQueue,
+                            onOpenAudioOutput = { overlays.audioOutput = true },
                             onOpenMenu = { playerMenuOpen = true },
-                            playerMenuBounds = playerMenuBounds,
+                            menu = {
+                                if (playerMenuOpen) {
+                                    DesktopSongMenuFor(
+                                        song = playerSong,
+                                        liked = current.videoId in likedIds,
+                                        actions = playerSongActions(current),
+                                        onToggleLike = { toggleLike(current) },
+                                        onRevertToOriginal = {
+                                            DesktopOriginalVersion.pin(current.videoId)
+                                            playbackEngine.reloadCurrent()
+                                        }.takeIf {
+                                            playback.streamSourceId != null &&
+                                                playback.streamSourceId != "youtube" &&
+                                                DesktopMusicSources.hasYouTubeOriginal(current) &&
+                                                !DesktopOriginalVersion.isPinned(current.videoId)
+                                        },
+                                        onUpgradeQuality = {
+                                            DesktopOriginalVersion.clear(current.videoId)
+                                            playbackEngine.reloadCurrent(forceSourceRefresh = true)
+                                        }.takeIf { DesktopOriginalVersion.isPinned(current.videoId) },
+                                        onShowLyrics = {
+                                            playerMenuOpen = false
+                                            playerLyricsToggle.value = true
+                                        },
+                                        onShowQueue = {
+                                            playerMenuOpen = false
+                                            playerQueueToggle.value = true
+                                        },
+                                        onTranslate = {
+                                            playerMenuOpen = false
+                                            playerTranslateToggle.value = true
+                                        },
+                                        showingTranslation = playerShowingTranslation.value,
+                                        translateEnabled = !sharedLyrics.isNullOrEmpty(),
+                                        onRomanize = {
+                                            playerMenuOpen = false
+                                            playerRomanizeToggle.value = true
+                                        },
+                                        showingRomanization = playerShowingRomanization.value,
+                                        romanizeEnabled = !sharedLyrics.isNullOrEmpty(),
+                                        fromPlayer = true,
+                                        lyricsProviders = menuLyricsProviders,
+                                        onSelectLyricsProvider = { label -> lyricsOnly = label },
+                                        onSearchLyrics = { title, artist -> searchLyrics(title, artist) },
+                                        lyricsOffsetMs = lyricsOffsetMs,
+                                        onSetLyricsOffset = { DesktopPlayerSettings.setLyricsOffsetMs(it) },
+                                        onListenTogether = {
+                                            playerMenuOpen = false
+                                            overlays.nowPlaying = false
+                                            overlays.listenTogether = true
+                                        },
+                                        onDismiss = { playerMenuOpen = false },
+                                    )
+                                }
+                            },
                             onOpenAlbum = { id ->
                                 overlays.nowPlaying = false
                                 openAlbum(id)
@@ -3787,41 +3813,30 @@ fun BitChordDesktopApp() {
                                     }
                                 }
                             },
-                            onOpenPlaybackSource = {
-                                val id = playerSong.playbackSourceId
-                                overlays.nowPlaying = false
-                                if (playerSong.playbackSourceType == PlaybackSourceType.BROWSE && id != null) {
-                                    openAlbum(id)
-                                }
-                            },
-                            onListenTogether = {
-                                overlays.nowPlaying = false
-                                overlays.listenTogether = true
-                            },
+                            queue = liveQueue.songs,
+                            queueIndex = liveQueue.index,
+                            autoplayEnabled = DesktopAutoplay.enabled(partyState, autoplay),
+                            onJumpTo = ::playQueueIndex,
+                            onRemoveFromQueue = ::removeFromQueue,
+                            onMoveInQueue = ::moveInQueue,
+                            onClearQueue = ::clearQueue,
                             lyrics = sharedLyrics,
                             lyricsSource = sharedLyricsSource,
                             lyricsProviderStates = providerStates,
                             onSelectLyricsProvider = { source -> lyricsOnly = source.label },
                             lyricsUnavailable = sharedLyricsUnavailable,
-                            lyricsOffsetOpen = false,
-                            onDismissLyricsOffset = {},
-                            windowWidth = windowWidth,
-                            windowHeight = windowHeight,
                             playerLyricsToggle = playerLyricsToggle,
                             playerQueueToggle = playerQueueToggle,
                             playerTranslateToggle = playerTranslateToggle,
                             playerShowingTranslation = playerShowingTranslation,
                             playerRomanizeToggle = playerRomanizeToggle,
                             playerShowingRomanization = playerShowingRomanization,
-                            onDismissPlayer = {
+                            fullScreen = DesktopWindowMode.fullScreen.collectAsState().value,
+                            onToggleFullScreen = DesktopWindowMode::toggle,
+                            onDismiss = {
                                 DesktopWindowMode.exit()
                                 overlays.nowPlaying = false
                             },
-                            // The two corners the phone keeps in its "…" menu are
-                            // drawn here instead: this is a window with a screen to
-                            // fill and words that want to be read at size.
-                            onToggleFullScreen = DesktopWindowMode::toggle,
-                            fullScreen = DesktopWindowMode.fullScreen.collectAsState().value,
                             // The window's right-click raises the same song menu the
                             // player's "…" does, so the two paths cannot disagree
                             // about where it belongs. Consumed on the initial pass so
@@ -3840,97 +3855,6 @@ fun BitChordDesktopApp() {
                                 }
                             },
                         )
-                        // The lyrics toggle sits in the corner, on the player itself: a glyph that
-                        // raises the words, and goes once they are up — the ⋯ menu keeps its own
-                        // copy for the times the glyph is not where the pointer is. No backing
-                        // disc: on a sleeve it read as a button painted onto the artwork rather
-                        // than as part of it, and the hover wash below is the only ground it needs.
-                        if (!playerLyricsToggle.value) {
-                            Box(
-                                Modifier
-                                    .align(Alignment.BottomStart)
-                                    .padding(start = 24.dp, bottom = 24.dp)
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .desktopHoverWash()
-                                    .clickable { playerLyricsToggle.value = true },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    // The outlined bubble the web player puts up when the words are
-                                    // down; the filled one belongs to the state where they are not,
-                                    // and this glyph is only drawn while they are down.
-                                    BitChordIcons.LyricsOff,
-                                    DesktopStrings["open_lyrics", "Lyrics"],
-                                    tint = Color.White,
-                                    modifier = Modifier.size(15.dp),
-                                )
-                            }
-                        }
-                        if (playerMenuOpen) {
-                            // Pinned to the player's own "…", whose position the
-                            // shared player reports up: the sleeve's width, and
-                            // the words' column, both move with the window.
-                            val bounds = playerMenuBounds.value
-                            Box(
-                                Modifier
-                                    .align(Alignment.TopStart)
-                                    .offset {
-                                        IntOffset(
-                                            x = bounds?.left?.roundToInt() ?: 0,
-                                            y = bounds?.top?.roundToInt() ?: 0,
-                                        )
-                                    }
-                                    .size(32.dp),
-                            ) {
-                                DesktopSongMenuFor(
-                                    song = playerSong,
-                                    liked = current.videoId in likedIds,
-                                    actions = playerSongActions(current),
-                                    onToggleLike = { toggleLike(current) },
-                                    onRevertToOriginal = {
-                                        DesktopOriginalVersion.pin(current.videoId)
-                                        playbackEngine.reloadCurrent()
-                                    }.takeIf {
-                                        playback.streamSourceId != null &&
-                                            playback.streamSourceId != "youtube" &&
-                                            DesktopMusicSources.hasYouTubeOriginal(current) &&
-                                            !DesktopOriginalVersion.isPinned(current.videoId)
-                                    },
-                                    onUpgradeQuality = {
-                                        DesktopOriginalVersion.clear(current.videoId)
-                                        playbackEngine.reloadCurrent(forceSourceRefresh = true)
-                                    }.takeIf { DesktopOriginalVersion.isPinned(current.videoId) },
-                                    onShowLyrics = {
-                                        playerMenuOpen = false
-                                        playerLyricsToggle.value = true
-                                    },
-                                    onShowQueue = {
-                                        playerMenuOpen = false
-                                        playerQueueToggle.value = true
-                                    },
-                                    onTranslate = {
-                                        playerMenuOpen = false
-                                        playerTranslateToggle.value = true
-                                    },
-                                    showingTranslation = playerShowingTranslation.value,
-                                    translateEnabled = !sharedLyrics.isNullOrEmpty(),
-                                    onRomanize = {
-                                        playerMenuOpen = false
-                                        playerRomanizeToggle.value = true
-                                    },
-                                    showingRomanization = playerShowingRomanization.value,
-                                    romanizeEnabled = !sharedLyrics.isNullOrEmpty(),
-                                    fromPlayer = true,
-                                    lyricsProviders = menuLyricsProviders,
-                                    onSelectLyricsProvider = { label -> lyricsOnly = label },
-                                    onSearchLyrics = { title, artist -> searchLyrics(title, artist) },
-                                    lyricsOffsetMs = lyricsOffsetMs,
-                                    onSetLyricsOffset = { DesktopPlayerSettings.setLyricsOffsetMs(it) },
-                                    onDismiss = { playerMenuOpen = false },
-                                )
-                            }
-                        }
                         val message by DesktopPlayerHost.messages.collectAsState()
                         LaunchedEffect(message) {
                             if (message != null) {
@@ -5311,7 +5235,7 @@ private fun DesktopFrame(
                                             Modifier.align(Alignment.TopStart).fillMaxWidth()
                                                 .padding(horizontal = 10.dp, vertical = 10.dp),
                                         ) { pageNavigation(compact) }
-                                        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = if (compact) 82.dp else 10.dp)) { topBar(compact) }
+                                        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = if (compact) 82.dp else 20.dp)) { topBar(compact) }
                                         if (compact) Box(Modifier.align(Alignment.BottomCenter)) { bottomBar(true) }
                                     }
                                     Box(
@@ -5722,7 +5646,7 @@ private fun DesktopLibrarySongContent(
         ) {
             gridItems(songs, key = Song::videoId) { song ->
                 Column(Modifier.fillMaxWidth().desktopQuietClick { onSongClick(song) }) {
-                    DesktopArtwork(song.thumbnailUrl, Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(12.dp)).desktopHoverFill(corner = 12.dp), px = CARD_ART_PX)
+                    DesktopArtwork(song.thumbnailUrl, Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(12.dp)).desktopArtHoverShade(), px = CARD_ART_PX)
                     Spacer(Modifier.height(7.dp))
                     Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
                     Text(song.artist, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -5767,7 +5691,7 @@ private fun DesktopLibraryGroupingContent(
         ) {
             gridItems(groups, key = { it.key }) { group ->
                 Column(Modifier.fillMaxWidth().desktopQuietClick { onGroupClick(group.key to group.value) }) {
-                    DesktopArtwork(group.value.firstOrNull()?.thumbnailUrl, Modifier.fillMaxWidth().height(150.dp).clip(CircleShape).desktopHoverFill(), px = CARD_ART_PX)
+                    DesktopArtwork(group.value.firstOrNull()?.thumbnailUrl, Modifier.fillMaxWidth().height(150.dp).clip(CircleShape).desktopArtHoverShade(), px = CARD_ART_PX)
                     Spacer(Modifier.height(7.dp))
                     Text(group.key, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
                     Text(DesktopStrings.format("d_count_songs", group.value.size, fallback = "${group.value.size} songs"), color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
@@ -6386,6 +6310,14 @@ private fun DesktopSettingsScreen(
                         DesktopStrings["apple_colour_blobs_subtitle", "Drift the artwork's colours behind the player, as in Apple Music"],
                         legacyMeshGradient,
                         onLegacyMeshGradientChange,
+                    )
+                    val lyricsClassic by DesktopAppearanceSettings.lyricsClassic.collectAsState()
+                    SettingsToggle(
+                        BitChordIcons.Lyrics,
+                        DesktopStrings["d_classic_lyrics", "Classic lyrics"],
+                        DesktopStrings["d_draws_the_words_small_and_heavy", "Draws the words small and heavy, blurred away from the sung line"],
+                        lyricsClassic,
+                        DesktopAppearanceSettings::setLyricsClassic,
                     )
                     SettingsToggle(
                         BitChordIcons.Film,

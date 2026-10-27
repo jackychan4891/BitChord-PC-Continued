@@ -44,6 +44,7 @@
     <string name="d_blur_unfocused_lyrics">フォーカス外の歌詞をぼかす</string>
     <string name="d_choose_something_to_play">再生するものを選んでください</string>
     <string name="d_choose_the_browser_sign_in_button_below">下からブラウザを選び、別のブラウザウィンドウでログインを済ませてそのウィンドウを閉じると BitChord に戻ります。</string>
+    <string name="d_classic_lyrics">従来の歌詞表示</string>
     <string name="d_close_player">プレーヤーを閉じる</string>
     <string name="d_close_up_next">次に再生を閉じる</string>
     <string name="d_closing_the_window_leaves_bitchord_in_the_tray_instead_o">ウィンドウを閉じても終了せず、BitChord はトレイに残ります</string>
@@ -53,6 +54,7 @@
     <string name="d_discord_rich_presence_last_fm_and_listenbrainz">Discord リッチプレゼンス、Last.fm、ListenBrainz</string>
     <string name="d_dont_repeat_songs_in_current_session">このセッションで曲を繰り返さない</string>
     <string name="d_downloaded_songs_will_appear_here">ダウンロードした曲がここに表示されます。</string>
+    <string name="d_draws_the_words_small_and_heavy">歌詞を小さく太く描き、歌っている行から離れるほどぼかします</string>
     <string name="d_end_of_this_track">この曲の終わり</string>
     <string name="d_everything_you_save_and_play">保存したものと再生したもののすべて</string>
     <string name="d_favourite">お気に入り</string>
@@ -80,6 +82,7 @@
     <string name="d_monthly_listeners">月間リスナー</string>
     <string name="d_music">ミュージック</string>
     <string name="d_my_music_source">マイ音楽ソース</string>
+    <string name="d_n_rows_tucked_away">サイドバーから %1$d 行を非表示にしています</string>
     <string name="d_name_optional">名前（任意）</string>
     <string name="d_new">新着</string>
     <string name="d_new_music_moods_and_discoveries">新しい音楽、ムード、発見</string>
@@ -88,6 +91,7 @@
     <string name="d_nobody_is_signed_in">誰もログインしていません。ライブラリ、プレイリスト、履歴には YouTube Music アカウントが必要です。</string>
     <string name="d_not_found">見つかりません</string>
     <string name="d_not_playing">再生していません</string>
+    <string name="d_nothing_hidden_yet">まだ非表示の項目はありません</string>
     <string name="d_off">オフ</string>
     <string name="d_ok">OK</string>
     <string name="d_one">1曲</string>
@@ -151,6 +155,7 @@
     <string name="d_artist_signature_service">アーティスト署名サービス</string>
     <string name="d_artist_signature_off">オフ：リンクを追加するまで何も取得しません。</string>
     <string name="d_artist_signature_dialog">BitChord は指定したサービスに手書き署名を要求し、アーティストヘッダーの上に白で描画します。リンクは JSON で応答する必要があります。名前を入れる場所に {artist} を記載してください。省略した場合は名前が ?artist=…&amp;type=handwritten として追加されます。何も取得したくない場合は欄を空にしてください。</string>
+    <string name="hidden_items">非表示の項目</string>
     <string name="spotify_canvas_needs_cookie">Spotify Canvas を使うには、Spotify の sp_dc クッキーを入力してください。</string>
     <string name="d_canvas_refused">Spotify がトークンを発行しなかったため、Canvas は他のソースを使用します。</string>
     <string name="d_canvas_saved_untested">保存しました。次に Canvas が必要になったとき、BitChord は Spotify にトークンを要求します。</string>

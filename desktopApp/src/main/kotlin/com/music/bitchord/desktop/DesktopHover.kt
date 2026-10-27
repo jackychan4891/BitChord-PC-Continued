@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -123,6 +124,34 @@ internal fun Modifier.desktopHoverFill(
 
 private val ROW_HOVER_CORNER = 7.dp
 private const val ROW_HOVER_ALPHA = 0.07f
+
+/**
+ * How a cover answers the pointer: it darkens. Rows and buttons wash white, but a sleeve
+ * washing white reads as a washed-out picture rather than a pointed-at one, and the site's
+ * own artwork hover is a black scrim. Drawn over the artwork, so it is the same shade on
+ * every sleeve in the app.
+ */
+@Composable
+internal fun Modifier.desktopArtHoverShade(): Modifier = composed {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shade by animateFloatAsState(
+        targetValue = if (hovered) 1f else 0f,
+        animationSpec = tween(ART_HOVER_MS),
+        label = "artShade",
+    )
+    this
+        .hoverable(interaction)
+        .drawWithContent {
+            drawContent()
+            if (shade <= 0.001f) return@drawWithContent
+            drawRect(androidx.compose.ui.graphics.Color.Black.copy(alpha = ART_HOVER_ALPHA * shade))
+        }
+}
+
+/** The site's own artwork scrim: half black. */
+private const val ART_HOVER_ALPHA = 0.5f
+private const val ART_HOVER_MS = 140
 
 /**
  * A click that reaches the whole tile but lights none of it.

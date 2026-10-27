@@ -146,6 +146,12 @@ interface PlayerSettingsSource {
     val lastPlayerScreen: StateFlow<LastPlayerScreen>
     val legacyMeshGradient: StateFlow<Boolean>
     val lyricsBlur: StateFlow<Boolean>
+    /**
+     * The lyrics as this app first drew them — a small heavy line, blurred as it leaves the sung
+     * one — rather than the large crisp lines that fill the pane. A style only the window offers,
+     * so a platform with nowhere to put its switch keeps the new one.
+     */
+    val lyricsClassic: StateFlow<Boolean> get() = NoLyricsClassic
     val lyricsOffsetMs: StateFlow<Int>
     val lyricsSourceOrder: StateFlow<List<LyricsSource>>
     val meteredConnection: StateFlow<Boolean?>
@@ -176,6 +182,7 @@ interface PlayerSettingsSource {
 }
 
 private val NoTurntableArt = MutableStateFlow(false)
+private val NoLyricsClassic = MutableStateFlow(false)
 
 /** The player's name for the installed host's settings, read where AppSettings used to be. */
 internal val PlayerSettings: PlayerSettingsSource

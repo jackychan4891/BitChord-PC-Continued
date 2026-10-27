@@ -212,6 +212,12 @@ internal fun PlayerScrubber(
      * keeps the thicker bar its finger has to land on.
      */
     hairlineBar: Boolean = false,
+    /**
+     * Apple's rule for the two figures: they stand at either end of the bar rather
+     * than under it, so the bar keeps the whole width between them and the line
+     * beneath is free for the quality badge. Only the desktop player asks for it.
+     */
+    timesFlankBar: Boolean = false,
     centerLabel: @Composable BoxScope.() -> Unit = {},
 ) {
     val shown = shown()
@@ -239,7 +245,7 @@ internal fun PlayerScrubber(
         MaterialTheme.typography.labelMedium
     }
     val timeColor = timeTint.copy(alpha = if (hairlineBar) 0.4f else 0.55f)
-    Column(Modifier.fillMaxWidth()) {
+    val slider: @Composable () -> Unit = {
         ThinSlider(
             value = shown,
             onValueChange = onScrub,
@@ -254,6 +260,41 @@ internal fun PlayerScrubber(
             restColor = if (hairlineBar) Color.White.copy(alpha = 0.64f) else Color.White.copy(alpha = 0.92f),
             inactiveColor = Color.White.copy(alpha = if (hairlineBar) 0.18f else 0.26f),
         )
+    }
+    val elapsed = formatTime((shown * durationMs).toLong())
+    val remaining = "-" + formatTime(durationMs - (shown * durationMs).toLong())
+    val mixingShown by remember { derivedStateOf { mixPulse.cover > 0f } }
+    Column(Modifier.fillMaxWidth()) {
+        if (timesFlankBar) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(text = elapsed, style = timeStyle, color = timeColor)
+                Box(Modifier.weight(1f)) { slider() }
+                Text(text = remaining, style = timeStyle, color = timeColor)
+            }
+            // The bar took the whole width, so the badge keeps the line under it.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .graphicsLayer { alpha = 1f - mixPulse.cover },
+                ) {
+                    centerLabel()
+                }
+                if (mixingShown) {
+                    MixingLabel(mixPulse, Modifier.align(Alignment.Center))
+                }
+            }
+            return@Column
+        }
+        slider()
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -267,12 +308,12 @@ internal fun PlayerScrubber(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = formatTime((shown * durationMs).toLong()),
+                    text = elapsed,
                     style = timeStyle,
                     color = timeColor,
                 )
                 Text(
-                    text = "-" + formatTime(durationMs - (shown * durationMs).toLong()),
+                    text = remaining,
                     style = timeStyle,
                     color = timeColor,
                 )
@@ -288,7 +329,6 @@ internal fun PlayerScrubber(
             ) {
                 centerLabel()
             }
-            val mixingShown by remember { derivedStateOf { mixPulse.cover > 0f } }
             if (mixingShown) {
                 MixingLabel(mixPulse, Modifier.align(Alignment.Center))
             }

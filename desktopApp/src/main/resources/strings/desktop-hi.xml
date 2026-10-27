@@ -44,6 +44,7 @@
     <string name="d_blur_unfocused_lyrics">बिना फ़ोकस वाले बोल धुंधले करें</string>
     <string name="d_choose_something_to_play">सुनने के लिए कुछ चुनें</string>
     <string name="d_choose_the_browser_sign_in_button_below">नीचे ब्राउज़र चुनें, अलग ब्राउज़र विंडो में साइन इन पूरा करें और BitChord में लौटने के लिए उसे बंद करें।</string>
+    <string name="d_classic_lyrics">क्लासिक बोल</string>
     <string name="d_close_player">प्लेयर बंद करें</string>
     <string name="d_close_up_next">अगला बंद करें</string>
     <string name="d_closing_the_window_leaves_bitchord_in_the_tray_instead_o">विंडो बंद करने पर BitChord बंद होने के बजाय ट्रे में रहता है</string>
@@ -53,6 +54,7 @@
     <string name="d_discord_rich_presence_last_fm_and_listenbrainz">Discord रिच प्रेज़ेंस, Last.fm और ListenBrainz</string>
     <string name="d_dont_repeat_songs_in_current_session">इस सत्र में गाने न दोहराएँ</string>
     <string name="d_downloaded_songs_will_appear_here">डाउनलोड किए गए गाने यहाँ दिखेंगे।</string>
+    <string name="d_draws_the_words_small_and_heavy">शब्दों को छोटा और भारी बनाकर दिखाता है, गाई जा रही पंक्ति से धुंधला करते हुए</string>
     <string name="d_end_of_this_track">इस ट्रैक का अंत</string>
     <string name="d_everything_you_save_and_play">जो कुछ आप सहेजते और सुनते हैं</string>
     <string name="d_favourite">पसंदीदा</string>
@@ -80,6 +82,7 @@
     <string name="d_monthly_listeners">मासिक श्रोता</string>
     <string name="d_music">संगीत</string>
     <string name="d_my_music_source">मेरा संगीत स्रोत</string>
+    <string name="d_n_rows_tucked_away">%1$d पंक्तियाँ साइडबार से छिपाई गईं</string>
     <string name="d_name_optional">नाम (वैकल्पिक)</string>
     <string name="d_new">नया</string>
     <string name="d_new_music_moods_and_discoveries">नया संगीत, मूड और खोजें</string>
@@ -88,6 +91,7 @@
     <string name="d_nobody_is_signed_in">कोई साइन इन नहीं है। आपकी लाइब्रेरी, प्लेलिस्ट और इतिहास के लिए एक YouTube Music खाता चाहिए।</string>
     <string name="d_not_found">नहीं मिला</string>
     <string name="d_not_playing">कोई प्लेबैक नहीं</string>
+    <string name="d_nothing_hidden_yet">अभी कुछ भी नहीं छिपाया गया है</string>
     <string name="d_off">बंद</string>
     <string name="d_ok">ठीक है</string>
     <string name="d_one">एक</string>
@@ -151,6 +155,7 @@
     <string name="d_artist_signature_service">कलाकार हस्तक्षर सेवा</string>
     <string name="d_artist_signature_off">बंद। जब तक अपनी लिंक न जोड़ें, कुछ नहीं लाया जाता।</string>
     <string name="d_artist_signature_dialog">BitChord आपकी चुनी सेवा से हस्तलिखित हस्तक्षर माँगता है और उसे कलाकार हेडर पर सफेद में बनाता है। लिंक को JSON में उत्तर देना चाहिए। जहाँ नाम होना चाहिए वहाँ {artist} रखें, या उसे छोड़ दें तो नाम ?artist=…&amp;type=handwritten के रूप में जुड़ेगा। कुछ भी न लाने के लिए फ़ील्ड खाली करें।</string>
+    <string name="hidden_items">छिपे हुए आइटम</string>
     <string name="spotify_canvas_needs_cookie">Spotify Canvas उपयोग करने के लिए अपना Spotify sp_dc कुकी दें।</string>
     <string name="d_canvas_refused">Spotify ने टोकन नहीं दिया, इसलिए Canvas अन्य स्रोत इस्तेमाल करता है।</string>
     <string name="d_canvas_saved_untested">सहेजा गया। अगली बार canvas चाहिए होने पर BitChord Spotify से टोकन माँगेगा।</string>

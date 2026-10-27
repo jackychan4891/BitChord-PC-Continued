@@ -44,6 +44,7 @@
     <string name="d_blur_unfocused_lyrics">Rozmywaj tekst poza fokusem</string>
     <string name="d_choose_something_to_play">Wybierz coś do odtworzenia</string>
     <string name="d_choose_the_browser_sign_in_button_below">Wybierz poniżej przeglądarkę, dokończ logowanie w osobnym oknie przeglądarki, a następnie zamknij je, aby wrócić do BitChord.</string>
+    <string name="d_classic_lyrics">Klasyczne teksty</string>
     <string name="d_close_player">Zamknij odtwarzacz</string>
     <string name="d_close_up_next">Zamknij Następne</string>
     <string name="d_closing_the_window_leaves_bitchord_in_the_tray_instead_o">Zamknięcie okna zostawia BitChord w zasobniku zamiast go zamykać</string>
@@ -53,6 +54,7 @@
     <string name="d_discord_rich_presence_last_fm_and_listenbrainz">Rich Presence Discorda, Last.fm i ListenBrainz</string>
     <string name="d_dont_repeat_songs_in_current_session">Nie powtarzaj utworów w tej sesji</string>
     <string name="d_downloaded_songs_will_appear_here">Pobrane utwory pojawią się tutaj.</string>
+    <string name="d_draws_the_words_small_and_heavy">Rysuje słowa małe i pogrubione, rozmywając je z dala od śpiewanego wersu</string>
     <string name="d_end_of_this_track">Koniec tego utworu</string>
     <string name="d_everything_you_save_and_play">Wszystko, co zapisujesz i odtwarzasz</string>
     <string name="d_favourite">Ulubione</string>
@@ -80,6 +82,7 @@
     <string name="d_monthly_listeners">MIESIĘCZNI SŁUCHACZE</string>
     <string name="d_music">MUZYKA</string>
     <string name="d_my_music_source">Moje źródło muzyki</string>
+    <string name="d_n_rows_tucked_away">%1$d wierszy ukrytych na pasku bocznym</string>
     <string name="d_name_optional">Nazwa (opcjonalnie)</string>
     <string name="d_new">Nowości</string>
     <string name="d_new_music_moods_and_discoveries">Nowa muzyka, nastroje i odkrycia</string>
@@ -88,6 +91,7 @@
     <string name="d_nobody_is_signed_in">Nikt nie jest zalogowany. Twoja biblioteka, playlisty i historia wymagają konta YouTube Music.</string>
     <string name="d_not_found">Nie znaleziono</string>
     <string name="d_not_playing">Brak odtwarzania</string>
+    <string name="d_nothing_hidden_yet">Nic nie jest jeszcze ukryte</string>
     <string name="d_off">Wyłączone</string>
     <string name="d_ok">OK</string>
     <string name="d_one">Jeden</string>
@@ -151,6 +155,7 @@
     <string name="d_artist_signature_service">Usługa podpisu artysty</string>
     <string name="d_artist_signature_off">Wyłączone. Nic nie jest pobierane, aż dodasz własny link.</string>
     <string name="d_artist_signature_dialog">BitChord prosi wybrany serwis o odręczny podpis i rysuje go na biało w nagłówku artysty. Link musi odpowiadać JSON-em. Wstaw {artist} w miejscu nazwy, albo pomiń ją, a nazwa zostanie dodana jako ?artist=…&amp;type=handwritten. Wyczyść pole, aby nic nie pobierać.</string>
+    <string name="hidden_items">Ukryte elementy</string>
     <string name="spotify_canvas_needs_cookie">Aby używać Spotify Canvas, podaj plik cookie sp_dc Spotify.</string>
     <string name="d_canvas_refused">Spotify nie chciał wydać tokenu, więc Canvas korzysta z innych źródeł.</string>
     <string name="d_canvas_saved_untested">Zapisano. BitChord poprosi Spotify o token, gdy canvas znów będzie potrzebny.</string>

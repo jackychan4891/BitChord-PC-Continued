@@ -130,7 +130,7 @@ private fun DesktopRadioTileView(
             // the square does, but they are not the thing being pointed at.
             Box(
                 Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(8.dp))
-                    .desktopHoverFill(corner = 8.dp).desktopQuietClick(onClick = onOpen)
+                    .desktopArtHoverShade().desktopQuietClick(onClick = onOpen)
                     .contextClick { menu = true },
             ) {
                 DesktopArtwork(tile.artworkUrl, Modifier.fillMaxSize(), px = 600)

@@ -44,6 +44,7 @@
     <string name="d_blur_unfocused_lyrics">Buramkan lirik yang tidak difokuskan</string>
     <string name="d_choose_something_to_play">Pilih sesuatu untuk diputar</string>
     <string name="d_choose_the_browser_sign_in_button_below">Pilih peramban di bawah, selesaikan masuk di jendela peramban terpisah, lalu tutup untuk kembali ke BitChord.</string>
+    <string name="d_classic_lyrics">Lirik klasik</string>
     <string name="d_close_player">Tutup pemutar</string>
     <string name="d_close_up_next">Tutup Berikutnya</string>
     <string name="d_closing_the_window_leaves_bitchord_in_the_tray_instead_o">Menutup jendela membuat BitChord tetap di baki, bukan keluar</string>
@@ -53,6 +54,7 @@
     <string name="d_discord_rich_presence_last_fm_and_listenbrainz">Rich Presence Discord, Last.fm, dan ListenBrainz</string>
     <string name="d_dont_repeat_songs_in_current_session">Jangan ulangi lagu pada sesi ini</string>
     <string name="d_downloaded_songs_will_appear_here">Lagu yang diunduh akan muncul di sini.</string>
+    <string name="d_draws_the_words_small_and_heavy">Menggambar lirik kecil dan tebal, kabur menjauh dari baris yang dinyanyikan</string>
     <string name="d_end_of_this_track">Akhir trek ini</string>
     <string name="d_everything_you_save_and_play">Semua yang kamu simpan dan putar</string>
     <string name="d_favourite">Favorit</string>
@@ -80,6 +82,7 @@
     <string name="d_monthly_listeners">PENDENGAR BULANAN</string>
     <string name="d_music">MUSIK</string>
     <string name="d_my_music_source">Sumber musikku</string>
+    <string name="d_n_rows_tucked_away">%1$d baris disembunyikan dari bilah sisi</string>
     <string name="d_name_optional">Nama (opsional)</string>
     <string name="d_new">Baru</string>
     <string name="d_new_music_moods_and_discoveries">Musik baru, suasana, dan penemuan</string>
@@ -88,6 +91,7 @@
     <string name="d_nobody_is_signed_in">Belum ada yang masuk. Pustaka, playlist, dan riwayatmu memerlukan akun YouTube Music.</string>
     <string name="d_not_found">Tidak ditemukan</string>
     <string name="d_not_playing">Tidak sedang memutar</string>
+    <string name="d_nothing_hidden_yet">Belum ada yang disembunyikan</string>
     <string name="d_off">Mati</string>
     <string name="d_ok">OK</string>
     <string name="d_one">Satu</string>
@@ -151,6 +155,7 @@
     <string name="d_artist_signature_service">Layanan tanda tangan artis</string>
     <string name="d_artist_signature_off">Nonaktif. Tidak ada yang diambil sampai Anda menambahkan tautan sendiri.</string>
     <string name="d_artist_signature_dialog">BitChord meminta tanda tangan tulisan tangan ke layanan pilihan Anda dan menggambarnya dengan warna putih di atas header artis. Tautan harus menjawab dengan JSON. Taruh {artist} di tempat nama seharusnya, atau hilangkan dan nama akan ditambahkan sebagai ?artist=…&amp;type=handwritten. Kosongkan kolom untuk tidak mengambil apa pun.</string>
+    <string name="hidden_items">Item tersembunyi</string>
     <string name="spotify_canvas_needs_cookie">Untuk memakai Spotify Canvas, berikan cookie sp_dc Spotify Anda.</string>
     <string name="d_canvas_refused">Spotify tidak mau memberikan token, jadi Canvas memakai sumber lainnya.</string>
     <string name="d_canvas_saved_untested">Tersimpan. BitChord meminta token ke Spotify saat canvas dibutuhkan lagi.</string>

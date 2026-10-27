@@ -166,6 +166,43 @@ fun vocalActivityBetween(analysis: TrackAnalysis, start: Double, end: Double): D
 }
 
 /**
+ * The earliest point of the unbroken stretch of the outgoing track's timeline
+ * that carries no singing, looking back from [start] and no further than
+ * [floor] — or null when [start] is voiced or the mask cannot answer.
+ *
+ * This is the one piece of context the stored mask names exactly: the instant
+ * the outgoing song is between lines. A blend that opens there puts the
+ * incoming track's entrance under no vocal instead of under one, and the
+ * stretch itself is how much longer the fade may be made without covering any
+ * singing at all.
+ *
+ * Two guards keep a coarse mask from inventing gaps. The curve is at most 240
+ * points over a whole track, so callers only accept a result that buys a few
+ * seconds. And a mask that never reports singing anywhere is a fallback
+ * analyzer's flat estimate, not evidence of an instrumental — reading it as
+ * one would stretch every track it touched.
+ */
+fun vocalGapOpening(analysis: TrackAnalysis, start: Double, floor: Double): Double? {
+    val mask = analysis.vocalActivityMask
+    val curve = analysis.energyCurve
+    if (mask.isEmpty() || mask.size != curve.size) return null
+    if (!start.isFinite() || !floor.isFinite() || start <= floor) return null
+    if (mask.none { it.isFinite() && it >= VOCAL_ACTIVE_THRESHOLD }) return null
+    var index = mask.lastIndex
+    while (index >= 0 && curve[index].time > start) index -= 1
+    var opening = start
+    while (index >= 0) {
+        val time = curve[index].time
+        if (!time.isFinite() || time < floor) break
+        val value = mask[index]
+        if (value.isFinite() && value >= VOCAL_ACTIVE_THRESHOLD) break
+        opening = min(opening, time)
+        index -= 1
+    }
+    return opening.takeIf { it < start }
+}
+
+/**
  * Both windows measurably singing at once. Null means "no evidence", which
  * never blocks; absence of a mask is not absence of a vocal, but acting on it
  * would punish every track a fallback analyzer handled.

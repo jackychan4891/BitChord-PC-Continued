@@ -78,10 +78,25 @@ private const val AUTO_TRANSITION_MAX_SECONDS = 12.0
 private const val AUTO_FALLBACK_SECONDS = 8.0
 
 /**
- * The Automix window: a mix lives entirely within the last 30 s of the outgoing track and the first
- * 30 s of the incoming one. See [clampToMixWindow].
+ * How deep into the incoming track a hand-off may enter: near its head, not wherever its arrangement
+ * happens to be. See [settleIncomingCue].
+ *
+ * The outgoing side is no longer held to the same window. It used to be, and that forbade every
+ * contextual mix: a blend that reaches back into an unvoiced stretch, or a ranked exit inside the
+ * final minute when the music itself stops there, both started before `length - 30` and were
+ * flattened onto that instant — a zero-length transition the renderer silently refused. Where a mix
+ * may close is bounded by the ranking's discarded-music budget instead, which is the guard that was
+ * doing the real work all along.
  */
 private const val MIX_WINDOW_SECONDS = 30.0
+
+/**
+ * The furthest a blend may reach back into an unvoiced stretch of the outgoing track, and the least
+ * it must buy to be worth moving. The mask is roughly a one-second grid, so anything shorter than a
+ * few samples is a breath between two lines rather than a gap between sections.
+ */
+private const val CONTEXT_GAP_MAX_SECONDS = 32.0
+private const val CONTEXT_GAP_MIN_SECONDS = 3.0
 
 /** Below this a track would spend too much of itself transitioning to be worth planning. */
 private const val MIN_SMART_DURATION_SECONDS = 45.0
@@ -1329,7 +1344,11 @@ private fun analysisReadyForTrack(analysis: TrackAnalysis, track: TransitionTrac
  * Plans the transition out of [currentTrack] and into [nextTrack].
  *
  * Called on every playback tick; the returned plan describes the transition
- * whether or not it has started yet.
+ * whether or not it has started yet. Where it opens is contextual under
+ * Advanced Automix: a blend reaches back into a stretch of the outgoing track
+ * that is not being sung when one reaches it, so the incoming song enters
+ * between lines and the fade is longer than the bare tempo rules would allow.
+ * Where it closes is still the arrangement's exit, near the end of the track.
  *
  * @param albumSequential true only when this is an album genuinely being
  *   played through in order, which is the sole case that earns a gapless
@@ -1376,38 +1395,25 @@ fun planTransition(
         advanced = advanced,
         phraseBars = phraseBars,
     )
-    return clampToMixWindow(
-        plan,
-        length = max(duration.orZero(), trackDurationSeconds(currentTrack)),
-        playbackTime = max(0.0, currentTime.orZero()),
-    )
+    return settleIncomingCue(plan)
 }
 
 /**
- * Apple-style Automix window: mixing is confined to the last [MIX_WINDOW_SECONDS] of the outgoing
- * track and the first [MIX_WINDOW_SECONDS] of the incoming one. The planner's own overlaps are far
- * shorter than this in practice, so the clamp is a guard that keeps the invariant true no matter how
- * the anchors are ranked — it never lengthens a mix, only refuses to let one start too early or cue
- * too deep into the next track.
+ * The last hard rail on a finished plan: the incoming track is never cued more than
+ * [MIX_WINDOW_SECONDS] into its own head.
+ *
+ * Nothing on the outgoing side is clamped here any more. The old window rewrote every start earlier
+ * than the last 30 s to exactly `length - 30` and pulled the end along with it, which turned a
+ * ranked exit inside the final minute — and every phrase-length mix longer than half a minute — into
+ * a zero-length transition. A plan is now taken as the arrangement ranked it; what keeps a mix near
+ * the end is [rankMixOutCandidates]' discarded-music budget and, for the opening, [contextualStart].
  */
-private fun clampToMixWindow(plan: TransitionPlan, length: Double, playbackTime: Double): TransitionPlan {
-    if (plan.blocked || length <= 0.0) return plan
-    var result = plan
-    val earliestStart = (length - MIX_WINDOW_SECONDS).coerceAtLeast(0.0)
-    if (result.transitionStart < earliestStart) {
-        val end = result.transitionEnd.coerceAtLeast(earliestStart)
-        result = result.copy(
-            shouldStart = playbackTime >= earliestStart,
-            transitionStart = earliestStart,
-            transitionEnd = end,
-            fadeSeconds = (end - earliestStart).coerceAtLeast(0.0),
-        )
+private fun settleIncomingCue(plan: TransitionPlan): TransitionPlan =
+    if (plan.blocked || plan.incomingCueTime <= MIX_WINDOW_SECONDS) {
+        plan
+    } else {
+        plan.copy(incomingCueTime = MIX_WINDOW_SECONDS)
     }
-    if (result.incomingCueTime > MIX_WINDOW_SECONDS) {
-        result = result.copy(incomingCueTime = MIX_WINDOW_SECONDS)
-    }
-    return result
-}
 
 private fun planTransitionInner(
     analysis: TrackAnalysis = TrackAnalysis(),
@@ -1700,6 +1706,45 @@ private fun nextBeatOnGrid(analysis: TrackAnalysis, from: Double): Double? {
 }
 
 /**
+ * The blend's real opening: [plannedStart], moved back to the beginning of a
+ * stretch of the outgoing track that is not being sung when one reaches it.
+ *
+ * The transition start is the instant the incoming song becomes audible under
+ * the outgoing one. Landing that instant between lines is the difference
+ * between an entrance and a collision, and the stored vocal mask names it more
+ * exactly than any structural boundary can. Growing the fade backwards over
+ * unvoiced material makes the blend longer and its entrance cleaner at once,
+ * while the exit stays exactly where the arrangement put it — so the song is
+ * still left near its end, only the overlap is drawn out.
+ *
+ * Bounds: at most twice the overlap the tempo rules asked for, at most
+ * [CONTEXT_GAP_MAX_SECONDS], and never less than [CONTEXT_GAP_MIN_SECONDS] of
+ * extra material — a fraction of the coarse mask grid is a breath, not a gap.
+ * A pressed ("skip") mix is left alone: the listener asked for that one to
+ * join on the next beat.
+ */
+private fun contextualStart(
+    analysis: TrackAnalysis,
+    mixOutType: String,
+    plannedStart: Double,
+    mixEnd: Double,
+    maximumOverlap: Double,
+    nextLength: Double,
+): Double {
+    if (mixOutType == "skip") return plannedStart
+    val cap = minOf(
+        CONTEXT_GAP_MAX_SECONDS,
+        maximumOverlap * 2,
+        mixEnd * 0.4,
+        if (nextLength > 0) nextLength * 0.4 else CONTEXT_GAP_MAX_SECONDS,
+    )
+    val floor = max(0.0, mixEnd - cap)
+    if (plannedStart - floor < CONTEXT_GAP_MIN_SECONDS) return plannedStart
+    val opening = vocalGapOpening(analysis, plannedStart, floor) ?: return plannedStart
+    return if (plannedStart - opening >= CONTEXT_GAP_MIN_SECONDS) opening else plannedStart
+}
+
+/**
  * The adaptive overlap ending at [mixAnchor]: a beat-matched blend when the
  * tempi agree, a filter ride when they don't. Timing only; the caller
  * decides whether it has started.
@@ -1806,6 +1851,8 @@ private fun mixPlan(
 
     val finalIncomingCueTime: Double
     val transitionStart: Double
+    val plannedStart: Double
+    val cuesFromHandoff: Boolean
 
     if (sameBeatBlend && beatSeconds > 0) {
         val introDropTime = incomingHandoffTime / max(0.8, incomingPlaybackRate)
@@ -1813,36 +1860,53 @@ private fun mixPlan(
         val totalOverlap = if (traits != null) wholeBars(clamped, beatSeconds, maximumOverlap) else clamped
         val targetStart = max(0.0, mixEnd - totalOverlap)
         val earliestTransitionStart = max(0.0, mixEnd - maximumOverlap)
-        transitionStart = alignedTransitionStart(
+        plannedStart = alignedTransitionStart(
             analysis,
             targetStart,
             mixEnd - 0.05,
             preferEarlier = true,
             minimum = earliestTransitionStart,
         )
-        finalIncomingCueTime =
-            max(0.0, incomingHandoffTime - (mixEnd - transitionStart) * incomingPlaybackRate)
+        cuesFromHandoff = true
     } else {
         val desiredOverlap = max(overlap, introPreroll + handoffSeconds * 0.42)
         val clamped = clamp(desiredOverlap, min(handoffSeconds, maximumOverlap), maximumOverlap)
         val actualOverlap = if (traits != null) wholeBars(clamped, beatSeconds, maximumOverlap) else clamped
         val targetStart = max(0.0, mixEnd - actualOverlap)
         val earliestTransitionStart = max(0.0, mixEnd - maximumOverlap)
-        transitionStart = alignedTransitionStart(
+        plannedStart = alignedTransitionStart(
             analysis,
             targetStart,
             mixEnd - 0.05,
             preferEarlier = desiredOverlap > overlap + 0.5,
             minimum = earliestTransitionStart,
         )
-        finalIncomingCueTime = if (hasIncomingPreroll) {
-            max(0.0, incomingHandoffTime - (mixEnd - transitionStart) * incomingPlaybackRate)
-        } else {
-            incomingCueTime
-        }
+        cuesFromHandoff = hasIncomingPreroll
+    }
+
+    transitionStart = contextualStart(
+        analysis = analysis,
+        mixOutType = mixOutType,
+        plannedStart = plannedStart,
+        mixEnd = mixEnd,
+        maximumOverlap = maximumOverlap,
+        nextLength = nextLength,
+    )
+    finalIncomingCueTime = if (cuesFromHandoff) {
+        max(0.0, incomingHandoffTime - (mixEnd - transitionStart) * incomingPlaybackRate)
+    } else {
+        incomingCueTime
     }
 
     val alignedOverlap = mixEnd - transitionStart
+    // A blend grown into a vocal gap covers more beats than the tempo rules
+    // asked for; the renderer reads this count to size the beat roll, so it has
+    // to describe the fade that will actually run.
+    val renderedBeats = if (transitionStart < plannedStart - 0.01 && gridBeatSeconds > 0) {
+        max(MIN_FADE_BEATS, round(alignedOverlap / gridBeatSeconds).toInt())
+    } else {
+        transitionBeats
+    }
     val hasBassContent = analysis.lowEnergyCurve.isNotEmpty() || nextAnalysis.lowEnergyCurve.isNotEmpty()
     val measuredVocalOverlap = plannedVocalOverlap(
         analysis = analysis,
@@ -1897,7 +1961,7 @@ private fun mixPlan(
         incomingPlaybackRate = incomingRateFor(incomingPlaybackRate, traits != null),
         outgoingPlaybackRate = outgoingRateFor(incomingPlaybackRate, traits != null),
         pickupSeconds = pickupSeconds,
-        transitionBeats = transitionBeats,
+        transitionBeats = renderedBeats,
         bassSwap = sameBeatBlend || hasBassContent,
         transitionStyle = if (sameBeatBlend) TransitionStyle.DJ_BLEND else TransitionStyle.DJ_FILTER,
         // The two styles are alternatives, not a scale: a matched pair hands the

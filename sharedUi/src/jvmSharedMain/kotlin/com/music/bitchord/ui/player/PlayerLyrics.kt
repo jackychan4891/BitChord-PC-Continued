@@ -141,7 +141,6 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlin.math.sqrt
 import kotlin.random.Random
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -367,6 +366,105 @@ private fun falloffAlpha(values: FloatArray, x: Float): Float {
 private const val LINE_CENTRE_RAISE = 0.07f
 
 /**
+ * The player's column, measured off Apple Music's full-screen lyrics: the line of a
+ * song at 52 and its wrapped rows 70 apart, with the entries themselves 119 apart. The
+ * face is the display family's bold — at this size the extra-heavy weight the small
+ * stack needed reads as a solid block.
+ */
+private val APPLE_LYRIC_FONT_SIZE = 52.sp
+private val APPLE_LYRIC_LINE_HEIGHT = 70.sp
+private val APPLE_LYRIC_GAP = 29.dp
+
+/**
+ * How far a line of the block is allowed to run. A sentence the column cannot set on one
+ * line takes a second row, and that row is paid for out of the block's own height rather
+ * than out of the lines it has to show — otherwise a wrapped verse costs the reader two
+ * of the three lines coming up.
+ */
+private const val APPLE_LYRIC_ROWS = 2
+
+/**
+ * The lines the block holds from the one being sung down — the sung line itself and the
+ * three coming after it. With the line the song has just left above them, the block shows five.
+ */
+private const val APPLE_LYRIC_LINES = 4
+
+/** How far a line sits below the one above it: its rows, their shared halo, and the gap. */
+private fun appleLyricPitch(rows: Int) =
+    APPLE_LYRIC_LINE_HEIGHT.value.dp * rows + GLOW_ROOM * 2 + APPLE_LYRIC_GAP
+
+/**
+ * Empty room the window keeps at its top and bottom edges, and the bleed it
+ * asks the list for at its sides.
+ *
+ * A blurred row spreads well past its own ink, and the list is the clip: without
+ * this room the topmost line loses its crown and the last word of a long line
+ * loses its right edge, which is the cut-off the window used to show. The edge
+ * fade runs inside the same distance, so it softens a departing row over the
+ * room rather than over the line above it — whose ink starts a full glow further
+ * down than the fade ends.
+ */
+internal val APPLE_LYRIC_HALO = 26.dp
+
+/**
+ * The block's height: [room][APPLE_LYRIC_HALO] at either edge, the line the song has just
+ * left, and below it the [four][APPLE_LYRIC_LINES] from the one being sung down — every one
+ * of them counted at [APPLE_LYRIC_ROWS] rows, so a verse that wraps takes lines off the
+ * song and not off the block.
+ */
+internal val APPLE_LYRIC_WINDOW =
+    APPLE_LYRIC_HALO * 2 + appleLyricPitch(1) +
+        appleLyricPitch(APPLE_LYRIC_ROWS) * APPLE_LYRIC_LINES - APPLE_LYRIC_GAP
+
+/**
+ * How much of the block the line being sung gives back to the top of it — a little over half
+ * a line, asked for as a lowering of the words rather than a raising of the room above them.
+ * What it buys is the clearance the line the song has just left was short of: at the inset
+ * without it, that line's crown sat on the block's edge and the fade there read as the line
+ * going missing rather than letting go.
+ */
+private val APPLE_LYRIC_SUNG_DROP = 40.dp
+
+/**
+ * How far below the top of the block the line being sung rests: the room its top edge
+ * keeps, the whole line the song has just left, and the [drop][APPLE_LYRIC_SUNG_DROP]
+ * below them. A distance rather than a share of the block, so the line above stays a line
+ * however tall the pane has made the window, and what has been sung is seen letting go —
+ * blurred, not gone at an edge.
+ */
+internal val APPLE_LYRIC_SUNG_INSET = APPLE_LYRIC_HALO + appleLyricPitch(1) + APPLE_LYRIC_SUNG_DROP
+
+/**
+ * How far a window line defocuses per line of distance from the one being sung, and the
+ * ceiling on it. Deeper than the stack's ramp, which has a whole page to read ahead in;
+ * short of the block's own halo, so the furthest line of the five is still a line rather
+ * than a smudge the reader counts as missing.
+ */
+private const val APPLE_LYRIC_BLUR_PX_PER_LINE = 6f
+private const val APPLE_LYRIC_BLUR_MAX_PX = 20f
+
+/**
+ * The block's fall-away either side of the line being sung. Shallower than the stack's:
+ * five lines is not many to read a song in, and a line too dim to make out is a line the
+ * block has lost all the same.
+ */
+private val APPLE_LYRIC_FALLOFF_ALPHA = floatArrayOf(1f, 0.5f, 0.36f, 0.26f, 0.2f)
+
+/** How long the window's incoming line takes to come up to full brightness. */
+private const val APPLE_LINE_FADE_MS = 480
+
+/**
+ * The window's second voices, keeping the same proportions the small stack gave
+ * them — a reading under the line it translates, a backing voice a step below both.
+ */
+private val APPLE_SUB_LYRIC_FONT_SIZE = 30.sp
+private val APPLE_SUB_LYRIC_LINE_HEIGHT = 37.sp
+private val APPLE_BACKING_FONT_SIZE = 34.sp
+private val APPLE_BACKING_LINE_HEIGHT = 43.sp
+private val APPLE_SUB_BACKING_FONT_SIZE = 24.sp
+private val APPLE_SUB_BACKING_LINE_HEIGHT = 31.sp
+
+/**
  * The shape of the page the lyrics are going to fill.
  *
  * One entry per line of the song, and one number per row that line wraps to.
@@ -466,8 +564,19 @@ private const val GAP_REST_SCALE = 0.76f
 private const val GAP_BREATH = 0.20f
 private const val GAP_PUFF = 0.35f
 
-/** How long the row takes to come in. */
-private const val GAP_ENTER_MS = 400
+/**
+ * How long the row takes to come in, and the curve it comes in on.
+ *
+ * The reference does not flash the beads on at the start of a break: they arrive
+ * underneath the words, fading and growing at once, and are simply *there* by the
+ * time the first one lights. The old opening ran on [LYRIC_EASING] — a line
+ * handover's curve, which spends its first third barely moving and then snaps —
+ * and at four tenths of a second it read as a pop. This one accelerates for a
+ * moment and then spends most of its length arriving, which is what gives the
+ * fade somewhere to happen.
+ */
+private const val GAP_ENTER_MS = 620
+private val GAP_ENTER_EASING = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
 
 /**
  * The exit: a push and a pull. [GAP_SPLIT] of it is the beads swelling outward
@@ -513,12 +622,14 @@ private val LYRIC_EASING = CubicBezierEasing(0.41f, 0f, 0.12f, 0.99f)
  * Deliberately under half of what the renderer this came from uses. Its lines
  * carry the whole scroll themselves, so a long delay only means arriving late;
  * here the list has already moved underneath them, and the same delay reads as
- * the rows being dragged rather than following.
+ * the rows being dragged rather than following. The step came down again when
+ * the settle was lengthened: a slow spring behind a wide stagger spends its
+ * travel fanning the stack apart, which is the one thing here that reads as
+ * several lines moving rather than one column.
  */
 private const val STAGGER_STEPS = 4
-private const val STAGGER_STEP_MS = 50f
-private const val LINE_SPRING_MS = 1_200f
-private val LINE_SPRING_DAMPED = sqrt(19f)
+private const val STAGGER_STEP_MS = 30f
+private const val LINE_SPRING_MS = 1_000f
 
 /** One handover: how far the list jumped, and the line it jumped to. */
 private class ScrollRun(val id: Int, val delta: Float, val anchor: Int) {
@@ -534,12 +645,23 @@ private class ScrollRun(val id: Int, val delta: Float, val anchor: Int) {
     }
 }
 
-/** A unit displacement left on a damped spring (ω 10, damping 9) after [ms]. */
+/**
+ * The rise, as one critically damped settle: the displacement left after [ms].
+ *
+ * The spring this replaces was underdamped and quick — most of the travel was
+ * spent inside the first third of a second, and what followed was a wobble
+ * closing behind it, which on a stack of lines reads as the words being snapped
+ * into place and then nudged. Critical damping starts from rest, accelerates
+ * once and arrives without a second movement: the same distance takes about a
+ * second here, and is still visibly moving at a quarter of that. That tail is
+ * what makes the handover read as carried rather than dropped.
+ */
 private fun lineSpringRemaining(ms: Float): Float {
     if (ms <= 0f) return 1f
     if (ms >= LINE_SPRING_MS) return 0f
     val t = ms / 1000f
-    return exp(-9f * t) * (cos(LINE_SPRING_DAMPED * t) + 9f / LINE_SPRING_DAMPED * sin(LINE_SPRING_DAMPED * t))
+    val w = 9f
+    return (1f + w * t) * exp(-w * t)
 }
 
 /**
@@ -1733,6 +1855,12 @@ internal fun LyricsPanel(
      * column sits higher so the words read nearer the top.
      */
     centreRaise: Float = LINE_CENTRE_RAISE,
+    /**
+     * True for the main player's own column, which draws the words as four large
+     * crisp lines moving through a window rather than as a stack that fills the
+     * pane. The home page's lyric column and the phone's sheet pass false.
+     */
+    windowed: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val panelPlaying = isPlaying && active
@@ -1818,6 +1946,25 @@ internal fun LyricsPanel(
     val reduceDynamicBlur by PlayerSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val lyricsBlur by PlayerSettings.lyricsBlur.collectAsStateWithLifecycle()
     val reduceAnimation by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val lyricsClassic by PlayerSettings.lyricsClassic.collectAsStateWithLifecycle()
+
+    // The player's column, and only the player's: the words as large crisp lines moving
+    // through a window. The switch hands them back to the stack this app drew first.
+    val appleLyrics = windowed && !lyricsClassic
+    // Where the song's line rests within what the list has to show. The windowed stack
+    // hangs a whole line below the top of its own window — a distance, which the list's
+    // measured height is turned back into the share every placement below works from;
+    // the filling stack keeps the raise its caller gave it.
+    val raise = if (appleLyrics) {
+        val inset = with(LocalDensity.current) { APPLE_LYRIC_SUNG_INSET.toPx() }
+        if (viewportHeight > 0) {
+            0.5f - inset / viewportHeight
+        } else {
+            0.5f - APPLE_LYRIC_SUNG_INSET.value / APPLE_LYRIC_WINDOW.value
+        }
+    } else {
+        centreRaise
+    }
 
     val glowing = !reduceAnimation && !reduceDynamicBlur && lyricsBlur &&
         renderEffectBlurSupported
@@ -1855,7 +2002,7 @@ internal fun LyricsPanel(
     val currentLine by rememberUpdatedState(focusLine)
     // Whether the reader has brought the sung line back to where the panel keeps
     // it themselves — the one sign that they are done looking about.
-    val sungLineAtAnchor by remember(listState, centreRaise) {
+    val sungLineAtAnchor by remember(listState, raise) {
         derivedStateOf {
             val info = listState.layoutInfo
             val line = currentLine
@@ -1863,7 +2010,7 @@ internal fun LyricsPanel(
                 false
             } else {
                 val visible = info.visibleItemsInfo.firstOrNull { it.index == line }
-                val centre = info.viewportSize.height / 2f - info.viewportSize.height * centreRaise
+                val centre = info.viewportSize.height / 2f - info.viewportSize.height * raise
                 visible != null &&
                     abs(visible.offset - info.viewportStartOffset - centre) < info.viewportSize.height * 0.05f
             }
@@ -1900,7 +2047,7 @@ internal fun LyricsPanel(
                 val viewport = info.viewportSize.height
                 val line = currentLine
                 if (line >= 0 && viewport > 0) {
-                    val centre = viewport / 2f - viewport * centreRaise
+                    val centre = viewport / 2f - viewport * raise
                     val offset = (centre + info.viewportStartOffset).toInt()
                     if (reduceAnimation) {
                         listState.scrollToItem(line, scrollOffset = offset)
@@ -1973,17 +2120,22 @@ internal fun LyricsPanel(
         val info = snapshotFlow { listState.layoutInfo }
             .first { layout ->
                 val height = layout.viewportSize.height
-                val inset = (height * (0.5f - centreRaise) - glowRoomPx).coerceAtLeast(0f)
+                val inset = (height * (0.5f - raise) - glowRoomPx).coerceAtLeast(0f)
                 height > 0 && (inset <= 0f || layout.viewportStartOffset < 0)
             }
         val start = info.viewportStartOffset
         val viewport = info.viewportSize.height
-        val centre = viewport / 2f - viewport * centreRaise
+        val centre = viewport / 2f - viewport * raise
         val visible = info.visibleItemsInfo.firstOrNull { it.index == target }
         if (!placed) {
             listState.scrollToItem(target, scrollOffset = (centre + start).toInt())
             placed = true
-        } else if (visible != null && !reduceAnimation) {
+        // The window's handover is a fade, not a rise — the line the panel is
+        // gliding to comes up to the anchor transparent and brightens as it
+        // arrives, so the sung line is never seen travelling into its spot.
+        // Its scroll is therefore one glide of the whole block, not the
+        // staggered run the filling stack springs back with.
+        } else if (visible != null && !reduceAnimation && !appleLyrics) {
             // The list jumps to its new place at once and every row then
             // springs from where it was drawn, each a little behind the one
             // before it, so the stack arrives one line after another.
@@ -1998,8 +2150,15 @@ internal fun LyricsPanel(
             } else {
                 val moved = listState.scrollBy(delta)
                 if (moved != 0f) {
+                    // A line can arrive before the last one has settled — fast
+                    // verses do — and starting clean would drop whatever travel
+                    // the anchor still owed, which is a visible hop of up to a
+                    // fifth of the pitch right where the eye is reading. The
+                    // new run begins from that residual instead, so two
+                    // handovers back to back are one continuous movement.
+                    val carried = run.shift(target, since.floatValue)
                     since.floatValue = 0f
-                    run = ScrollRun(run.id + 1, moved, target)
+                    run = ScrollRun(run.id + 1, moved + carried, target)
                 }
             }
         } else if (visible != null) {
@@ -2038,14 +2197,21 @@ internal fun LyricsPanel(
 
     // Synced lines are followed to an anchor, which needs room above the first line as tall as
     // the anchor sits below the top — and the anchor is not the middle, it is raised by
-    // [centreRaise]. A half-viewport inset therefore opens the sheet below where the song leaves
+    // [raise]. A half-viewport inset therefore opens the sheet below where the song leaves
     // it, and the panel visibly jumps up on the first placement: the whole of the raise, which
     // for the lyric column beside the home page was most of its height.
     val viewportDp = with(LocalDensity.current) { viewportHeight.toDp() }
+    // The window defocuses its off-focus lines deep enough that their halos reach
+    // well past their own ink, and the list is what clips them: the bleed grows by
+    // that much room at each side and the padding hands it straight back, so the
+    // words stay exactly where they were set and only the clip moves. The stack
+    // keeps the gutter and the fade it has always had.
+    val bleed = if (appleLyrics) PLAYER_GUTTER + APPLE_LYRIC_HALO else PLAYER_GUTTER
+    val edgeFade = if (appleLyrics) APPLE_LYRIC_HALO else 28.dp
     LazyColumn(
         state = listState,
         modifier = modifier
-            .bleedHorizontally(PLAYER_GUTTER)
+            .bleedHorizontally(bleed)
             .nestedScroll(controlsOnScroll)
             .nestedScroll(keepScroll)
             // Browsing leaves taps to each lyric row's seek action throughout
@@ -2054,20 +2220,22 @@ internal fun LyricsPanel(
             // would swallow every choice before the row ever saw it.
             .revealLyricsControlsOnTap(!controlsOpen && !picking, onBottomHalfTap)
             .browseLyricsOnWheel { browsingByDrag = true }
-            .fadingEdges(),
+            .fadingEdges(top = edgeFade, bottom = edgeFade),
         // Each row carries GLOW_ROOM of its own inset for the halo, so the
         // list hands that much back — otherwise the lines would sit a glow's
         // width further apart and further in than they used to.
         contentPadding = PaddingValues(
-            top = ((if (isSynced) viewportDp * (0.5f - centreRaise) else 40.dp) - GLOW_ROOM)
+            top = ((if (isSynced) viewportDp * (0.5f - raise) else 40.dp) - GLOW_ROOM)
                 .coerceAtLeast(0.dp),
             // As much past the end as the anchor is from the top, so the closing line can still
             // be sung at it, plus the room the player has always allowed for browsing beyond.
-            bottom = viewportDp * (0.8f + centreRaise),
-            start = PLAYER_GUTTER - GLOW_ROOM,
-            end = PLAYER_GUTTER - GLOW_ROOM,
+            bottom = viewportDp * (0.8f + raise),
+            start = bleed - GLOW_ROOM,
+            end = bleed - GLOW_ROOM,
         ),
-        verticalArrangement = Arrangement.spacedBy(0.dp),
+        // The window's four lines are evenly ruled; the stack let its rows run
+        // together and leaned on the blur to tell them apart.
+        verticalArrangement = Arrangement.spacedBy(if (appleLyrics) APPLE_LYRIC_GAP else 0.dp),
     ) {
         itemsIndexed(lines) { index, line ->
             if (!isSynced && isGeniusSectionHeader(line.text)) {
@@ -2138,7 +2306,10 @@ internal fun LyricsPanel(
             val hoverSource = remember { MutableInteractionSource() }
             val hovered by hoverSource.collectIsHoveredAsState()
             val blurTargetPx = when {
-                !isSynced || reduceDynamicBlur || !lyricsBlur || browsing || isActive || hovered -> 0f
+                !isSynced || reduceDynamicBlur || !lyricsBlur ||
+                    browsing || isActive || hovered -> 0f
+                appleLyrics ->
+                    (distance * APPLE_LYRIC_BLUR_PX_PER_LINE).coerceAtMost(APPLE_LYRIC_BLUR_MAX_PX)
                 else -> (distance * LYRIC_BLUR_PX_PER_LINE).coerceAtMost(LYRIC_BLUR_MAX_PX)
             }
             val blurPx by animateFloatAsState(
@@ -2156,6 +2327,10 @@ internal fun LyricsPanel(
                 // row is being pointed at while somebody is reading.
                 browsing -> BROWSING_ALPHA
                 isActive -> 1f
+                // The window is only five lines tall, so the line that has just
+                // been sung keeps its dim instead of blanking out: an empty slot
+                // above the words is a hole Apple's block never has.
+                appleLyrics -> falloffAlpha(APPLE_LYRIC_FALLOFF_ALPHA, distance)
                 // A line already sung rises and lets go; one still ahead stays legible.
                 sung -> falloffAlpha(LINE_SUNG_ALPHA, distance)
                 else -> falloffAlpha(LINE_FALLOFF_ALPHA, distance)
@@ -2165,6 +2340,26 @@ internal fun LyricsPanel(
                 animationSpec = tween(LYRIC_BLUR_MS, easing = LYRIC_EASING),
                 label = "lyricAlpha",
             )
+            // A sung line keeps its dim as the block glides it up out of the
+            // anchor; the fade is the next handover's, when the line above it
+            // moves up into the sung spot and the finished line — now two
+            // slots above — lets go. The sung line itself is solid throughout.
+            val windowFade = if (appleLyrics) {
+                val fade = remember(index) { Animatable(1f) }
+                LaunchedEffect(focusLine, placed, browsing) {
+                    if (browsing || !placed) {
+                        fade.snapTo(1f)
+                    } else if (index > focusLine - 2) {
+                        fade.snapTo(1f)
+                    } else if (index == focusLine - 2) {
+                        fade.snapTo(1f)
+                        fade.animateTo(0f, tween(APPLE_LINE_FADE_MS, easing = LYRIC_EASING))
+                    } else {
+                        fade.animateTo(0f, tween(APPLE_LINE_FADE_MS, easing = LYRIC_EASING))
+                    }
+                }
+                fade.value
+            } else 1f
             if (line.isGap) {
                 // A break keeps its own time rather than being marked: three dots
                 // filled one after another as the interlude runs out, so the row
@@ -2202,7 +2397,10 @@ internal fun LyricsPanel(
                     targetValue = if (isActive) 1f else 0f,
                     animationSpec = tween(
                         durationMillis = if (isActive) GAP_ENTER_MS else GAP_COLLAPSE_MS.toInt(),
-                        easing = LYRIC_EASING,
+                        // The close stays the reference's half-second; only the
+                        // opening is reshaped, and it is the fade-in that has to
+                        // read as the row arriving rather than appearing.
+                        easing = if (isActive) GAP_ENTER_EASING else LYRIC_EASING,
                     ),
                     label = "gapSwell",
                 )
@@ -2268,13 +2466,13 @@ internal fun LyricsPanel(
                             // would be the very drift it is here to cancel.
                             val info = listState.layoutInfo
                             val here = info.visibleItemsInfo.firstOrNull { it.index == index }
-                            val anchor = info.viewportSize.height * (0.5f - centreRaise) +
+                            val anchor = info.viewportSize.height * (0.5f - raise) +
                                 info.viewportStartOffset + gapRowHalfPx
                             val hold = if (here == null) 0f else
                                 anchor - here.offset - here.size / 2f
                             scaleX = grow
                             scaleY = grow
-                            translationY = run.shift(index, since.floatValue) *
+                            translationY = (if (appleLyrics) 0f else run.shift(index, since.floatValue)) *
                                 focusBlurFactor.value + hold
                             // Bright through the push, gone through the pull: a
                             // fade that started on the way out would have the
@@ -2371,10 +2569,21 @@ internal fun LyricsPanel(
                 // One style rather than two branches: the answering voice and both
                 // backing lines are copies of it, so a face set here is a face set
                 // on every line of the row.
+                // The window's block is read at a distance and holds few enough
+                // lines to be set large; the stack is read as a page and leans on
+                // the blur to say which line is being sung.
                 val style = fallback.copy(
-                    fontSize = if (isSynced) 34.sp else 30.sp,
-                    lineHeight = if (isSynced) 41.sp else 38.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = when {
+                        !isSynced -> 30.sp
+                        appleLyrics -> APPLE_LYRIC_FONT_SIZE
+                        else -> 34.sp
+                    },
+                    lineHeight = when {
+                        !isSynced -> 38.sp
+                        appleLyrics -> APPLE_LYRIC_LINE_HEIGHT
+                        else -> 41.sp
+                    },
+                    fontWeight = if (isSynced && appleLyrics) FontWeight.Bold else FontWeight.ExtraBold,
                     fontFamily = LocalLyricsFontFamily.current ?: fallback.fontFamily,
                     textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
                 )
@@ -2435,13 +2644,14 @@ internal fun LyricsPanel(
                     .graphicsLayer {
                         scaleX = scale
                         scaleY = scale
-                        translationY = run.shift(index, since.floatValue) * focusBlurFactor.value
+                        translationY = (if (appleLyrics) 0f else run.shift(index, since.floatValue)) *
+                            focusBlurFactor.value
                         // Pinned to the line's own top: the zoom opens downward,
                         // and the size coming back off when a handover lands
                         // takes nothing down with it — a line that has been said
                         // keeps the height the panel scrolled it up to.
                         transformOrigin = TransformOrigin(if (alignEnd) 1f else 0f, 0f)
-                        alpha = lineAlpha
+                        alpha = lineAlpha * windowFade
                     }
                     .blur(blur, BlurredEdgeTreatment.Unbounded)
                     .clip(RoundedCornerShape(10.dp))
@@ -2497,8 +2707,8 @@ internal fun LyricsPanel(
                 // seeks to the same place.
                 val sub = subReveal.lines?.getOrNull(index)
                 val subStyle = style.copy(
-                    fontSize = SUB_LYRIC_FONT_SIZE,
-                    lineHeight = SUB_LYRIC_LINE_HEIGHT,
+                    fontSize = if (appleLyrics) APPLE_SUB_LYRIC_FONT_SIZE else SUB_LYRIC_FONT_SIZE,
+                    lineHeight = if (appleLyrics) APPLE_SUB_LYRIC_LINE_HEIGHT else SUB_LYRIC_LINE_HEIGHT,
                     fontWeight = FontWeight.Bold,
                 )
                 // The answering voice is only on screen while it is being sung,
@@ -2599,8 +2809,8 @@ internal fun LyricsPanel(
                                 line = backing.withoutBracketPunctuation(),
                                 clock = clock,
                                 style = style.copy(
-                                    fontSize = BACKING_FONT_SIZE,
-                                    lineHeight = BACKING_LINE_HEIGHT,
+                                    fontSize = if (appleLyrics) APPLE_BACKING_FONT_SIZE else BACKING_FONT_SIZE,
+                                    lineHeight = if (appleLyrics) APPLE_BACKING_LINE_HEIGHT else BACKING_LINE_HEIGHT,
                                 ),
                                 isActive = isActive,
                                 sung = sung,
@@ -2629,8 +2839,8 @@ internal fun LyricsPanel(
                                         line = subBacking.withoutBracketPunctuation(),
                                         clock = clock,
                                         style = subStyle.copy(
-                                            fontSize = SUB_BACKING_FONT_SIZE,
-                                            lineHeight = SUB_BACKING_LINE_HEIGHT,
+                                            fontSize = if (appleLyrics) APPLE_SUB_BACKING_FONT_SIZE else SUB_BACKING_FONT_SIZE,
+                                            lineHeight = if (appleLyrics) APPLE_SUB_BACKING_LINE_HEIGHT else SUB_BACKING_LINE_HEIGHT,
                                         ),
                                         isActive = isActive,
                                         sung = sung,

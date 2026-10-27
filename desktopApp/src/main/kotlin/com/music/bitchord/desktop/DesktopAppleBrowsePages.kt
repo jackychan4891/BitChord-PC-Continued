@@ -315,12 +315,14 @@ private fun AppleBrowseHeroShelf(
         // page is the only thing beside the title. A tile still answers a right
         // click with its menu.
         val more = shelf.moreBrowseId
-        DesktopAppleHeading(
-            shelf.title,
-            Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
-                .then(if (more != null) Modifier.clickable { onItemClick(ShelfItem(shelf.title, "", null, null, more), shelf.title) } else Modifier),
-            chevron = more != null,
-        )
+        if (!shelf.title.isQuietShelfTitle()) {
+            DesktopAppleHeading(
+                shelf.title,
+                Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
+                    .then(if (more != null) Modifier.clickable { onItemClick(ShelfItem(shelf.title, "", null, null, more), shelf.title) } else Modifier),
+                chevron = more != null,
+            )
+        }
         DesktopScrollableRow(spacing = 20.dp) {
             items(shelf.items) { item ->
                 val interaction = remember { MutableInteractionSource() }
@@ -335,14 +337,18 @@ private fun AppleBrowseHeroShelf(
                         )
                         .contextClick(menu),
                 ) {
-                    Text(
-                        shelf.subtitle.ifBlank { shelf.title }.uppercase(Locale.ROOT),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = DesktopAppleSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // A tile's overline is the shelf's real subtitle; an untitled shelf
+                    // would only echo the title that was just taken away above it.
+                    if (shelf.subtitle.isNotBlank() || !shelf.title.isQuietShelfTitle()) {
+                        Text(
+                            shelf.subtitle.ifBlank { shelf.title }.uppercase(Locale.ROOT),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = DesktopAppleSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
                         item.title,
                         fontSize = 22.sp,
@@ -394,7 +400,7 @@ private fun AppleBrowseRecentShelf(
                     // Only the cover lights up, not the caption under it.
                     DesktopArtwork(
                         item.thumbnailUrl,
-                        Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)).desktopHoverFill(corner = 8.dp),
+                        Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)).desktopArtHoverShade(),
                         px = 400,
                     )
                     AppleBrowseCaptions(item.title, item.subtitle)
@@ -782,7 +788,7 @@ private fun AppleBrowseStations(seeds: List<Song>, onStartStation: (Song) -> Uni
                 ) {
                     DesktopArtwork(
                         song.thumbnailUrl,
-                        Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)).desktopHoverFill(corner = 8.dp),
+                        Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)).desktopArtHoverShade(),
                         px = 400,
                     )
                     AppleBrowseCaptions("${song.artist} Station", song.title)
@@ -802,7 +808,7 @@ private fun AppleBrowseWideShelf(shelf: HomeShelf, onItemClick: (ShelfItem, Stri
                     DesktopArtwork(
                         item.thumbnailUrl,
                         Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
-                            .desktopHoverFill(corner = 8.dp),
+                            .desktopArtHoverShade(),
                         px = 800,
                     )
                     AppleBrowseCaptions(item.title, item.subtitle)
@@ -851,7 +857,7 @@ private fun AppleBrowseCategoryRow(row: List<MoodGenre>, columns: Int, onCategor
                 Box(
                     Modifier.matchParentSize().background(
                         Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f))),
-                    ).desktopHoverFill(corner = 10.dp),
+                    ).desktopArtHoverShade(),
                 )
                 Text(
                     category.title,
@@ -955,6 +961,15 @@ private fun String.isAppleBrowseEditorial(): Boolean {
     return value in setOf("albums", "singles", "albums & singles", "new albums & singles", "new releases") ||
         value.contains("featured") || value.contains("editorial")
 }
+
+/**
+ * Shelf labels that say nothing the screen has not already said: the backend's generic
+ * "Albums & singles", and a "New" that only repeats the page's own title. The rows stay;
+ * only the line above them goes.
+ */
+internal fun String.isQuietShelfTitle(): Boolean = trim().lowercase(Locale.ROOT) in setOf(
+    "new", "albums & singles",
+)
 
 private fun HomeShelf.isAppleBrowseWide(): Boolean =
     title.contains("interview", ignoreCase = true) || title.contains("video", ignoreCase = true)

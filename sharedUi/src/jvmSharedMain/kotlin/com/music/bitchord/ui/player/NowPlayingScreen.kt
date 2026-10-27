@@ -191,8 +191,16 @@ internal const val ART_RETRIES = 3
 /** How long to leave it before trying a failed cover again. */
 internal const val ART_RETRY_DELAY_MS = 1_500L
 
-/** How long the cover takes to dissolve from the outgoing track into the incoming one. */
-internal const val ART_CROSSFADE_MS = 320
+/**
+ * How long the cover takes to dissolve from the outgoing track into the incoming one.
+ *
+ * Measured off Apple's AutoMix: the sleeve does not cut over at the handover, it
+ * swims from one cover to the next across the mix — long enough that what the eye
+ * registers is one picture becoming another, rather than a new picture appearing.
+ * A third of a second was the length of a UI state change; a second and a half is
+ * the length of the gesture.
+ */
+internal const val ART_CROSSFADE_MS = 1_500
 
 /**
  * How long a canvas lookup waits for the track's album name before giving up
@@ -838,6 +846,7 @@ fun NowPlayingScreen(
     }
     val hideVolumeBar by PlayerSettings.hideVolumeBar.collectAsStateWithLifecycle()
     val hideSongStatus by PlayerSettings.hideSongStatus.collectAsStateWithLifecycle()
+    val lyricsClassic by PlayerSettings.lyricsClassic.collectAsStateWithLifecycle()
 
     // Animated cover art: the looping video some labels publish alongside a
     // release, laid over the sleeve. A miss is the normal answer — see
@@ -2051,6 +2060,9 @@ fun NowPlayingScreen(
                                     ?.takeIf { !scrub.scrubbing && it.end > it.start }
                                     ?.let { it.start..it.end },
                                 hairlineBar = !compact,
+                                // The desktop bar keeps the whole width between its two
+                                // figures, the way the recording lays it out.
+                                timesFlankBar = !compact,
                                 timeTint = artworkSyncColor,
                                 onScrub = onScrub,
                                 onScrubFinished = onScrubFinished,
@@ -2115,6 +2127,10 @@ fun NowPlayingScreen(
                     )
                 },
                 lyricsPane = { compact ->
+                    // The window is the desktop player's own arrangement, and the
+                    // sheet inside it has to be drawn to match: a large line ruled
+                    // for four of them in a pane sized to the small stack is neither.
+                    val windowed = !compact && !lyricsClassic
                     LandscapeLyricsPane(
                         hasLyrics = lyricsTranslation.displayedLyrics.isNotEmpty(),
                         placeholder = if (lyricsUnavailable) {
@@ -2132,6 +2148,7 @@ fun NowPlayingScreen(
                         // the middle of the sleeve.
                         showBar = compact,
                         bottomInset = if (compact) 0.dp else LANDSCAPE_LYRICS_BOTTOM_LIFT,
+                        windowed = windowed,
                         picking = lyricPicker.picking,
                         pickBar = {
                             LyricsPickBar(
@@ -2181,6 +2198,7 @@ fun NowPlayingScreen(
                                 onRevealControls = {},
                                 onHideControls = {},
                                 translationProgress = particleProgress,
+                                windowed = windowed,
                                 canPick = lyricsShareEnabled,
                                 picking = lyricPicker.picking,
                                 picked = lyricPicker.picks,

@@ -19,6 +19,7 @@ internal object DesktopAppearanceSettings {
     private val _hideVolumeBar = flag(KEY_HIDE_VOLUME_BAR, false)
     private val _ambientBackdrop = flag(KEY_AMBIENT_BACKDROP, true)
     private val _turntableArt = flag(KEY_TURNTABLE_ART, false)
+    private val _lyricsClassic = flag(KEY_LYRICS_CLASSIC, false)
 
     /** Freezes the main player's gradient instead of drifting. */
     val reduceAnimation: StateFlow<Boolean> = _reduceAnimation
@@ -35,6 +36,9 @@ internal object DesktopAppearanceSettings {
     /** The player's artwork as a record on a turntable rather than a sleeve. */
     val turntableArt: StateFlow<Boolean> = _turntableArt
 
+    /** The player's words drawn small and heavy, blurred away from the sung line. */
+    val lyricsClassic: StateFlow<Boolean> = _lyricsClassic
+
     fun setReduceAnimation(value: Boolean) = write(KEY_REDUCE_ANIMATION, value, _reduceAnimation)
 
     fun setReduceDynamicBlur(value: Boolean) = write(KEY_REDUCE_DYNAMIC_BLUR, value, _reduceDynamicBlur)
@@ -44,6 +48,8 @@ internal object DesktopAppearanceSettings {
     fun setAmbientBackdrop(value: Boolean) = write(KEY_AMBIENT_BACKDROP, value, _ambientBackdrop)
 
     fun setTurntableArt(value: Boolean) = write(KEY_TURNTABLE_ART, value, _turntableArt)
+
+    fun setLyricsClassic(value: Boolean) = write(KEY_LYRICS_CLASSIC, value, _lyricsClassic)
 
     private fun write(key: String, value: Boolean, into: MutableStateFlow<Boolean>) {
         DesktopPersistence().saveBoolean(key, value)
@@ -55,4 +61,5 @@ internal object DesktopAppearanceSettings {
     internal const val KEY_HIDE_VOLUME_BAR = "hide_volume_bar"
     internal const val KEY_AMBIENT_BACKDROP = "ambient_backdrop"
     internal const val KEY_TURNTABLE_ART = "turntable_art"
+    internal const val KEY_LYRICS_CLASSIC = "lyrics_classic"
 }

@@ -192,6 +192,7 @@ internal object DesktopPlayerSettings : PlayerSettingsSource {
     )
     override val legacyMeshGradient = MutableStateFlow(false)
     override val lyricsBlur = MutableStateFlow(true)
+    override val lyricsClassic = DesktopAppearanceSettings.lyricsClassic
     override val lyricsOffsetMs = MutableStateFlow(
         persistence.int(KEY_LYRICS_OFFSET, 0).coerceIn(MIN_LYRICS_OFFSET_MS, MAX_LYRICS_OFFSET_MS),
     )
