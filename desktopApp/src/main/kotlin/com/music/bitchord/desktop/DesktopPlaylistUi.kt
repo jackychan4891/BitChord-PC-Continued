@@ -526,7 +526,7 @@ private fun ReorderSongRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            Icons.Rounded.DragHandle,
+            BitChordIcons.Grip,
             DesktopStrings["drag_to_reorder", "Drag to reorder"],
             tint = DesktopSecondary,
             modifier = Modifier
@@ -737,7 +737,7 @@ private fun PrivacyPill(icon: ImageVector, label: String, selected: Boolean, onC
 
 private val PlaylistPrivacy.icon: ImageVector
     get() = when (this) {
-        PlaylistPrivacy.PRIVATE -> Icons.Rounded.Lock
-        PlaylistPrivacy.UNLISTED -> Icons.Rounded.Link
-        PlaylistPrivacy.PUBLIC -> Icons.Rounded.Public
+        PlaylistPrivacy.PRIVATE -> BitChordIcons.Lock
+        PlaylistPrivacy.UNLISTED -> BitChordIcons.Link
+        PlaylistPrivacy.PUBLIC -> BitChordIcons.Globe
     }

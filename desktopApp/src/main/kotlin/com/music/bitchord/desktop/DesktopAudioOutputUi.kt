@@ -121,11 +121,11 @@ private fun OutputRow(name: String, description: String, chosen: Boolean, onClic
 private fun outputGlyph(name: String, description: String): ImageVector {
     val text = "$name $description".lowercase(Locale.ROOT)
     return when {
-        "headphone" in text || "headset" in text || "airpods" in text -> Icons.Rounded.Headphones
+        "headphone" in text || "headset" in text || "airpods" in text -> BitChordIcons.Headphones
         "bluetooth" in text || "wireless" in text -> Icons.Rounded.Bluetooth
         "hdmi" in text || "display" in text || " tv" in text || "television" in text -> Icons.Rounded.Tv
         "usb" in text || "dac" in text -> Icons.Rounded.Usb
         "iphone" in text || "phone" in text || "mobile" in text -> Icons.Rounded.PhoneIphone
-        else -> Icons.Rounded.Speaker
+        else -> BitChordIcons.Speaker
     }
 }

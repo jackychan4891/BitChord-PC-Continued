@@ -23,11 +23,15 @@ class DesktopLyricsSourceOrderTest {
     }
 
     @Test
-    fun theDesktopOffersThePhonesProvidersInThePhonesOrder() {
-        // One provider list for both apps: the lookup is the phone's LyricsRepository.
+    fun theDesktopOffersThePhonesProvidersInThePhonesOrderPlusItsOwn() {
+        // One provider list for both apps — the lookup is the phone's LyricsRepository — widened by
+        // the two databases only the desktop reaches, which `:shared` has no name for.
         val names = DesktopLyricsClient.sources.map { it.name }
-        assertEquals(LyricsSource.offered.map { it.label }, names)
-        assertTrue(names.all { lyricsSourceNamed(it) != null })
+        assertEquals(LyricsSource.offered.map { it.label }, names.filter { lyricsSourceNamed(it) != null })
+        // Each of the desktop's own is declared beside the source it is a variant of, so the
+        // out-of-the-box order still reads as the phone's.
+        assertEquals("BetterLyrics Syllable", names[names.indexOf("BetterLyrics") + 1])
+        assertEquals("NetEase (YRC)", names[names.indexOf("BetterLyrics Syllable") + 1])
         // The unsynced fallback is last by definition.
         assertEquals("Genius", names.last())
     }

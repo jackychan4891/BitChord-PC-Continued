@@ -181,7 +181,7 @@ private fun ReorderableSourceList(
                             onClick = { onToggle(name) },
                             leading = {
                                 Icon(
-                                    Icons.Rounded.DragHandle,
+                                    BitChordIcons.Grip,
                                     DesktopStrings["drag_to_reorder", "Drag to reorder"],
                                     tint = DesktopSecondary,
                                     modifier = Modifier

@@ -96,6 +96,32 @@ internal fun Modifier.revealLyricsControlsOnTap(
 }
 
 /**
+ * Treat a mouse wheel over the lyric panel as the same thing a drag is: somebody
+ * reading rather than following.
+ *
+ * A wheel never raises [androidx.compose.foundation.interaction.DragInteraction],
+ * so the panel's rule of dropping the depth of field while it is scrolled by hand
+ * only answered a touchpad or a finger here — the commonest way to move the list on
+ * a desktop was the one way that left every line out of focus.
+ */
+@Composable
+internal fun Modifier.browseLyricsOnWheel(onBrowse: () -> Unit): Modifier {
+    val currentOnBrowse = rememberUpdatedState(onBrowse)
+    return pointerInput(Unit) {
+        awaitEachGesture {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Main)
+                if (event.changes.any { it.scrollDelta != Offset.Zero }) {
+                    currentOnBrowse.value()
+                    break
+                }
+                if (event.changes.none { it.pressed }) break
+            }
+        }
+    }
+}
+
+/**
  * Toggle Spotify Canvas controls from an unhandled video tap.
  *
  * Unlike [revealLyricsControlsOnTap], this observes at the final pointer pass

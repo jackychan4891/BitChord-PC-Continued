@@ -1875,17 +1875,25 @@ fun NowPlayingScreen(
                     // The whole screen is the sheets' frost source: there is
                     // no full-bleed banner here to be it instead.
                     if (legacyMesh) {
-                        // Apple Music's backdrop: four blobs of the sleeve's own
-                        // colours, drifting behind the player for as long as it is
-                        // up. One or the other shows, never both, and the frost
-                        // source stays mounted either way so the sheets go on
-                        // blurring what is behind them. "Reduce animation" still
-                        // parks the blobs, as it does everywhere else.
+                        // Apple Music's backdrop: the sleeve's own colours as
+                        // separate masses, drifting behind the player for as long
+                        // as it is up. One or the other shows, never both, and the
+                        // frost source stays mounted either way so the sheets go
+                        // on blurring what is behind them. "Reduce animation"
+                        // still parks the blobs, as it does everywhere else.
                         Box(backgroundModifier.hazeSource(playerHaze)) {
                             MeshGradientBackground(
                                 palette = rememberArtworkColors(remoteArt, canvasFrame),
                                 trackKey = song.videoId,
                                 continuous = true,
+                                driftMillis = 3_000,
+                                sleeveStack = true,
+                                // Past what the masses needed: four opaque
+                                // samples of a sleeve carry the cover's own
+                                // edges, and the blur is the only thing standing
+                                // between those edges and a rectangle sliding
+                                // across the backdrop.
+                                blurRadius = 84.dp,
                             )
                         }
                     } else {
@@ -2247,14 +2255,20 @@ fun NowPlayingScreen(
         if (legacyMeshBackdrop) {
             // v1.5's backdrop, restored verbatim: no seam, because the blobs
             // are not anchored to anything on screen — they fill the player and
-            // the artwork simply sits on top of them. Keyed on the track, so
-            // they drift when the player opens and on every skip, then rest.
-            // Position ticks recompose this screen twice a second and must not
-            // drag a full-screen blur along with them, which is why the palette
-            // is passed as one immutable value.
+            // the artwork simply sits on top of them. Keyed on the track, so a
+            // skip rearranges them, and continuous, because the reference this
+            // copies is visibly travelling the whole time it plays: masses that
+            // settle after one glide read as a wallpaper, not a mesh. Position
+            // ticks recompose this screen twice a second and must not drag a
+            // full-screen blur along with them, which is why the palette is
+            // passed as one immutable value.
             MeshGradientBackground(
                 palette = rememberArtworkColors(remoteArt, canvasFrame),
                 trackKey = song.videoId,
+                continuous = true,
+                driftMillis = 3_000,
+                sleeveStack = true,
+                blurRadius = 84.dp,
                 modifier = Modifier.graphicsLayer { alpha = 1f - fullArtworkBackdropAlpha },
             )
         } else if (!tabletArtworkBackdrop && !spotifyCanvasPresentation) {

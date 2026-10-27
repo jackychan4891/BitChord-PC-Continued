@@ -361,7 +361,7 @@ private fun EmptyReplay(period: DesktopReplayPeriod) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(
-            Icons.Rounded.Schedule,
+            BitChordIcons.Clock,
             contentDescription = null,
             tint = Color.White.copy(alpha = 0.4f),
             modifier = Modifier.size(44.dp),

@@ -83,7 +83,7 @@ internal fun DesktopAccountButton(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Rounded.Person,
+                    BitChordIcons.Person,
                     DesktopStrings["accounts", "Accounts"],
                     tint = Color.White.copy(alpha = 0.85f),
                     modifier = Modifier.size(16.dp),
@@ -223,7 +223,7 @@ private fun DesktopProfileRow(
             )
         } else {
             Icon(
-                Icons.Rounded.Person,
+                BitChordIcons.Person,
                 null,
                 tint = DesktopSecondary,
                 modifier = Modifier.size(38.dp),

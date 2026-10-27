@@ -6,23 +6,32 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
-import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 /**
  * The icon set, taken from the reference web player's own geometry.
  *
- * Two families, exactly as the web app has them. Most glyphs are Lucide: a 24-unit
- * box, a 2-unit round-capped pen, no fill — [lucide]. The player's transport, its
- * star, its queue and its lyric marks are the filled Apple shapes the web app
- * ships alongside Lucide: one silhouette in a box of its own, tinted flat —
- * [glyph].
+ * Three families, exactly as the web app ships them.
  *
- * [Home] and the phone tab bar are the exception and say why they are one.
+ * Apple's chrome glyphs — the sidebar's rows, its library shelves, the transport,
+ * the star, the queue and the lyric marks — are filled silhouettes with no pen at
+ * all, in a box of Apple's choosing: [apple] for the 24-unit ones, [glyph] for the
+ * transport's 28, the queue's 18 and the star's 64. Apple sizes each shape *inside*
+ * the shared box by eye, and the marks it publishes differ by a fifth of the box —
+ * its loupe stands 13.9 in the 24 the album box fills — so [apple] scales its family
+ * back onto one band, which is what makes a column of them read as one row of marks
+ * rather than as a row of squares. That even weight is the only way a set this mixed
+ * holds together, and the reason nothing here is drawn with both a fill and a stroke.
+ *
+ * Everything else — chevrons, menus, settings rows — is Lucide: a 24-unit box, a
+ * 2-unit round-capped pen, never filled — [lucide]. The web app does the same, and
+ * draws those marks a step smaller than Apple's, since a pen spreads past its
+ * geometry where a silhouette cannot.
+ *
+ * The phone tab bar is the one exception, in [TabExplore]; it says why.
  */
 object BitChordIcons {
 
-    private const val STROKE = 2.2f
     private val stroke = SolidColor(Color.Black)
 
     /** A Lucide glyph: one or more round-pen strokes in the 24-unit box, never filled. */
@@ -58,6 +67,49 @@ object BitChordIcons {
             viewportWidth = viewport, viewportHeight = viewport,
         ).apply {
             for (d in pathData) addPath(pathData = addPathNodes(d), fill = stroke)
+        }.build()
+
+    /**
+     * How tall an Apple chrome glyph stands in its box once the family is drawn as
+     * one column — 15 of the 24 units the sidebar's box is given.
+     */
+    private const val AppleBand = 0.625f
+
+    /**
+     * One of Apple Music's chrome glyphs: a filled silhouette in a square box.
+     *
+     * These carry no pen at all, which is what lets a whole column of them stay
+     * optically even. [alpha] is the web player's own 95%, the softness that
+     * keeps a solid shape from shouting against 14sp of text.
+     *
+     * [fill] is how tall this glyph's own path stands in its box, measured from the
+     * published coordinates; give it and the silhouette is scaled about the centre
+     * of the box to [AppleBand], so that the nine marks a sidebar column draws all
+     * measure the same. Leave it out and the glyph draws exactly as published.
+     */
+    private fun apple(
+        name: String,
+        vararg pathData: String,
+        viewport: Float = 24f,
+        alpha: Float = 1f,
+        fill: Float = 0f,
+    ): ImageVector =
+        ImageVector.Builder(
+            name = name,
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = viewport, viewportHeight = viewport,
+        ).apply {
+            // A group carries the scale. `addPath` takes fill, stroke and trim but no
+            // transform, and widening the box instead would shrink a glyph *and*
+            // slide it off its centre, since the path data is not symmetric about the
+            // box the wider viewport would put in the middle.
+            if (fill > 0f) {
+                val scale = AppleBand / fill
+                addGroup(pivotX = viewport / 2f, pivotY = viewport / 2f, scaleX = scale, scaleY = scale)
+            }
+            for (d in pathData) {
+                addPath(pathData = addPathNodes(d), fill = stroke, fillAlpha = alpha)
+            }
         }.build()
 
     /**
@@ -284,38 +336,24 @@ object BitChordIcons {
         lucide("bc_arrow_down", "M12 5v14", "m19 12-7 7-7-7")
     }
 
+    /** Apple's own magnifier, the mark the web player puts on its Search row. */
     val Search: ImageVector by lazy {
-        lucide(
+        apple(
             "bc_search",
-            "m21 21-4.34-4.34",
-            "M11 3a8 8 0 1 0 0 16a8 8 0 1 0 0 -16z",
+            "M17.979 18.553c.476 0 .813-.366.813-.835a.8.8 0 0 0-.235-.586l-3.45-3.457a5.6 5.6 0 0 0 1.158-3.413c0-3.098-2.535-5.633-5.633-5.633C7.542 4.63 5 7.156 5 10.262c0 3.098 2.534 5.632 5.632 5.632a5.6 5.6 0 0 0 3.274-1.055l3.472 3.472a.84.84 0 0 0 .6.242m-7.347-3.875c-2.417 0-4.416-2-4.416-4.416s2-4.417 4.416-4.417 4.417 2 4.417 4.417-2 4.416-4.417 4.416",
+            alpha = 0.95f,
+            fill = 0.580f,
         )
     }
 
+    /** Apple's four-square browse mark, the one the web player puts on its browsing rows. */
     val Explore: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_explore",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Compass dial
-                moveTo(3.4f, 12f)
-                arcToRelative(8.6f, 8.6f, 0f, isMoreThanHalf = true, isPositiveArc = true, 17.2f, 0f)
-                arcToRelative(8.6f, 8.6f, 0f, isMoreThanHalf = true, isPositiveArc = true, -17.2f, 0f)
-                // Needle
-                moveTo(15.4f, 8.6f)
-                lineTo(13.6f, 13.6f)
-                lineTo(8.6f, 15.4f)
-                lineTo(10.4f, 10.4f)
-                close()
-            }
-        }.build()
+        apple(
+            "bc_explore",
+            "M9.92 11.354c.966 0 1.453-.487 1.453-1.49v-3.4c0-1.004-.487-1.483-1.453-1.483H6.452C5.487 4.981 5 5.46 5 6.464v3.4c0 1.003.487 1.49 1.452 1.49zm7.628 0c.965 0 1.452-.487 1.452-1.49v-3.4c0-1.004-.487-1.483-1.452-1.483h-3.46c-.974 0-1.46.479-1.46 1.483v3.4c0 1.003.486 1.49 1.46 1.49zm-7.65-1.073h-3.43q-.397.002-.396-.418v-3.4q-.002-.41.396-.41h3.43c.265 0 .402.137.402.41v3.4c0 .281-.137.418-.403.418m7.634 0h-3.43c-.273 0-.402-.137-.402-.418v-3.4c0-.273.129-.41.403-.41h3.43q.396 0 .395.41v3.4q.002.42-.396.418m-7.612 8.7c.966 0 1.453-.48 1.453-1.483v-3.407c0-.996-.487-1.483-1.453-1.483H6.452c-.965 0-1.452.487-1.452 1.483v3.407c0 1.004.487 1.483 1.452 1.483zm7.628 0c.965 0 1.452-.48 1.452-1.483v-3.407c0-.996-.487-1.483-1.452-1.483h-3.46c-.974 0-1.46.487-1.46 1.483v3.407c0 1.004.486 1.483 1.46 1.483zm-7.65-1.072h-3.43q-.397 0-.396-.41v-3.4c0-.282.13-.418.396-.418h3.43c.265 0 .402.136.402.418v3.4c0 .273-.137.41-.403.41m7.634 0h-3.43c-.273 0-.402-.137-.402-.41v-3.4c0-.282.129-.418.403-.418h3.43c.265 0 .395.136.395.418v3.4q.002.41-.396.41",
+            alpha = 0.95f,
+            fill = 0.583f,
+        )
     }
 
     val Menu: ImageVector by lazy {
@@ -444,111 +482,38 @@ object BitChordIcons {
         lucide("bc_infinity", "M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8")
     }
 
+    /** Lucide's own quotation marks — the lyrics row in a menu. */
     val LyricsQuote: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_lyrics_quote", defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke, strokeLineWidth = 2f,
-                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
-            ) {
-                moveTo(6f, 3.5f)
-                lineTo(18f, 3.5f)
-                quadTo(21f, 3.5f, 21f, 6.5f)
-                lineTo(21f, 15f)
-                quadTo(21f, 18f, 18f, 18f)
-                lineTo(10f, 18f)
-                lineTo(6f, 21f)
-                lineTo(6f, 18f)
-                quadTo(3f, 18f, 3f, 15f)
-                lineTo(3f, 6.5f)
-                quadTo(3f, 3.5f, 6f, 3.5f)
-                close()
-            }
-            path(fill = stroke) {
-                for (x in listOf(7.6f, 12.8f)) {
-                    moveTo(x, 8f)
-                    lineTo(x + 3f, 8f)
-                    lineTo(x + 3f, 11.1f)
-                    quadTo(x + 3f, 13.2f, x + 0.5f, 13.7f)
-                    lineTo(x + 0.5f, 12.3f)
-                    quadTo(x + 1.7f, 12f, x + 1.7f, 11f)
-                    lineTo(x, 11f)
-                    close()
-                }
-            }
-        }.build()
+        lucide(
+            "bc_lyrics_quote",
+            "M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z",
+            "M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z",
+        )
     }
 
+    /** Lucide's own play: a rounded triangle in outline, for menu rows. */
     val Play: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_play",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-                fill = stroke,
-            ) {
-                moveTo(6.8f, 4.8f)
-                lineTo(19.2f, 12f)
-                lineTo(6.8f, 19.2f)
-                close()
-            }
-        }.build()
+        lucide(
+            "bc_play",
+            "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",
+        )
     }
 
     /**
-     * The one solid icon in the set, and the tab bar is why.
+     * Apple's own house, the mark the web player puts on its Listen Now row.
      *
-     * Selection here is carried by tint alone — see `GlassNavBar`, where the
-     * unselected tabs are the same glyph at 65% — so the home tab is the anchor
-     * of the bar rather than a state of it, and a filled silhouette reads as
-     * that anchor at 24dp where a four-stroke outline reads as detail.
-     *
-     * Filled *and* stroked, with the same path. The outline of a house is all
-     * corners — an apex, two shoulders, two door jambs — and stroking the fill
-     * with a round-joined pen is what rounds every one of them at once, for a
-     * geometry that stays nine straight lines. The numbers below are therefore
-     * inset by half the stroke: the pen puts back what they give up, and the
-     * door notch is drawn oversized for the same reason, since the pen closes
-     * in on it from both jambs.
+     * Three subpaths under one non-zero fill: the outer silhouette, the wall
+     * that is hollowed out of it, and the door left solid. That is how Apple
+     * draws an outline without a pen, and it is why this glyph keeps its weight
+     * when the row is tinted at any size — nothing about it depends on stroke
+     * width.
      */
     val Home: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_home",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                fill = stroke,
-                stroke = stroke,
-                strokeLineWidth = 1.7f,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Roof, flush with the walls rather than overhanging them: an
-                // eave narrower than the pen it is drawn with comes out as a
-                // blob on the corner instead of a ledge.
-                moveTo(12f, 4.05f)
-                lineTo(19.75f, 11.35f)
-                // Right wall, down to the floor
-                lineTo(19.75f, 19.65f)
-                // Door, cut up out of the bottom edge
-                lineTo(14.95f, 19.65f)
-                lineTo(14.95f, 15.6f)
-                lineTo(9.05f, 15.6f)
-                lineTo(9.05f, 19.65f)
-                // Left wall, back up to the apex
-                lineTo(4.25f, 19.65f)
-                lineTo(4.25f, 11.35f)
-                close()
-            }
-        }.build()
+        apple(
+            "bc_home",
+            "M5.93 20.16a1.94 1.94 0 0 1-1.43-.502c-.334-.335-.502-.794-.502-1.393v-7.142c0-.362.062-.688.177-.953.123-.264.326-.529.6-.75l6.145-5.157c.176-.141.344-.247.52-.318q.263-.105.564-.105c.194 0 .388.035.565.105s.352.177.52.318l6.146 5.158c.273.23.467.476.59.75.124.264.177.59.177.96v7.134c0 .59-.159 1.058-.503 1.393q-.503.503-1.428.503zm12.14-1.172q.334 0 .547-.212a.69.69 0 0 0 .22-.511v-7.142c0-.177-.026-.344-.087-.459a1 1 0 0 0-.265-.353l-6.154-5.149a.8.8 0 0 0-.177-.115.4.4 0 0 0-.15-.035.4.4 0 0 0-.158.035l-.177.115-6.145 5.15a1 1 0 0 0-.274.352 1.1 1.1 0 0 0-.088.468v7.133c0 .203.08.379.23.511a.74.74 0 0 0 .546.212zm-8.323-4.7c0-.176.062-.326.177-.432a.6.6 0 0 1 .423-.159h3.315c.176 0 .326.053.432.16s.159.255.159.431v4.973H9.756v-4.973Z",
+            fill = 0.680f,
+        )
     }
 
     /**
@@ -605,277 +570,538 @@ object BitChordIcons {
             viewportWidth = 512f, viewportHeight = 512f,
         ).addPath(pathData = addPathNodes(pathData), fill = stroke).build()
 
-    /** Beamed pair of notes, for instrumental stretches in the lyrics. */
+    /** Apple's own single note, the mark the web player puts on its Songs row. */
     val MusicNote: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_music_note",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            // Heads are solid; stems and beam keep the family's stroke weight.
-            path(fill = stroke) {
-                moveTo(4.2f, 17.7f)
-                arcToRelative(2.9f, 2.5f, 0f, isMoreThanHalf = true, isPositiveArc = true, 5.8f, 0f)
-                arcToRelative(2.9f, 2.5f, 0f, isMoreThanHalf = true, isPositiveArc = true, -5.8f, 0f)
-                close()
-                moveTo(14.2f, 15.9f)
-                arcToRelative(2.9f, 2.5f, 0f, isMoreThanHalf = true, isPositiveArc = true, 5.8f, 0f)
-                arcToRelative(2.9f, 2.5f, 0f, isMoreThanHalf = true, isPositiveArc = true, -5.8f, 0f)
-                close()
-            }
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                moveTo(10f, 17.7f); lineTo(10f, 6.7f)
-                moveTo(20f, 15.9f); lineTo(20f, 4.9f)
-                moveTo(10f, 6.7f); lineTo(20f, 4.9f)
-            }
-        }.build()
+        apple(
+            "bc_music_note",
+            "M9.732 19.241c1.077 0 2.688-.79 2.688-2.922V9.617c0-.388.074-.469.418-.542l3.347-.732a.48.48 0 0 0 .403-.484V5.105c0-.388-.315-.637-.689-.563l-3.764.82c-.47.102-.725.359-.725.769l.014 8.144c.037.36-.132.594-.454.66l-1.164.241c-1.465.308-2.154 1.055-2.154 2.16 0 1.122.864 1.905 2.08 1.905",
+            fill = 0.613f,
+        )
     }
 
-    /** Arrow pointing down into a tray — offline download. */
+    /** Lucide's own download: a stem, a chevron, and the tray it falls into. */
     val Download: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_download",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Vertical stem
-                moveTo(12f, 4.5f); lineTo(12f, 15.5f)
-                // Arrow head
-                moveTo(7.5f, 11f); lineTo(12f, 15.5f); lineTo(16.5f, 11f)
-                // Tray base
-                moveTo(4.5f, 18f); lineTo(19.5f, 18f)
-            }
-        }.build()
+        lucide(
+            "bc_download",
+            "M12 15V3",
+            "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",
+            "m7 10 5 5 5-5",
+        )
     }
 
     /**
-     * Clock face with two hands — a download asked for but not yet on disk.
-     *
-     * The dial is the same 8.6 radius as [Explore]'s, so the two sit at the same
-     * optical weight when they appear in the same row of header buttons. The
-     * hands are one polyline through the centre rather than two strokes: the
-     * round join is then the pivot, which is what stops the middle reading as a
-     * pair of lines that happen to cross.
+     * Apple's own clock — the dial and hands as one silhouette with the middle
+     * hollowed out, so the mark the web player puts on its Recently Played row
+     * carries no pen and stays even beside the other chrome glyphs.
      */
     val Clock: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_clock",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Dial (full circle from two arcs)
-                moveTo(3.4f, 12f)
-                arcToRelative(8.6f, 8.6f, 0f, isMoreThanHalf = true, isPositiveArc = true, 17.2f, 0f)
-                arcToRelative(8.6f, 8.6f, 0f, isMoreThanHalf = true, isPositiveArc = true, -17.2f, 0f)
-                // Minute hand up, hour hand down to the right
-                moveTo(12f, 7.4f); lineTo(12f, 12f); lineTo(15.4f, 13.8f)
-            }
-        }.build()
+        apple(
+            "bc_clock",
+            "M12 20c4.376 0 8-3.631 8-8 0-4.376-3.631-8-8.008-8C7.624 4 4 7.624 4 12c0 4.369 3.631 8 8 8m0-1.333A6.634 6.634 0 0 1 5.341 12a6.63 6.63 0 0 1 6.651-6.667A6.653 6.653 0 0 1 18.667 12 6.636 6.636 0 0 1 12 18.667m-.008-5.82a.54.54 0 0 0 .55-.549V7.012a.54.54 0 0 0-.55-.541.53.53 0 0 0-.541.54v4.746H7.898a.534.534 0 0 0-.549.541c0 .314.235.55.549.55h4.094z",
+            fill = 0.667f,
+        )
     }
 
-    /**
-     * A pushpin, not a map marker: a round head with a straight needle
-     * kicked out to one side, the way it sits once it's stuck into something.
-     * A teardrop reads as "location" the moment it's this small — the two
-     * disjoint strokes here are what keep it read as "pinned" instead.
-     */
+    /** Lucide's own pushpin: the head, the shoulder it sits on, the needle. */
     val Pin: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_pin",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Round head.
-                moveTo(9.6f, 8.4f)
-                arcToRelative(3.4f, 3.4f, 0f, isMoreThanHalf = true, isPositiveArc = true, 6.8f, 0f)
-                arcToRelative(3.4f, 3.4f, 0f, isMoreThanHalf = true, isPositiveArc = true, -6.8f, 0f)
-                // Needle, kicked out from the underside of the head to a point.
-                moveTo(10.8f, 10.8f)
-                lineTo(5.6f, 19.6f)
-            }
-        }.build()
+        lucide(
+            "bc_pin",
+            "M12 17v5",
+            "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z",
+        )
     }
 
-    /** Speed gauge used by high-performance display settings. */
+    /** Lucide's own gauge — the arc the needle sweeps, and the needle. */
     val Performance: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_performance",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Open gauge, leaving room for the base line.
-                moveTo(4.1f, 16.8f)
-                arcToRelative(8.4f, 8.4f, 0f, isMoreThanHalf = true, isPositiveArc = true, 15.8f, 0f)
-                // Needle and hub.
-                moveTo(12f, 15.8f)
-                lineTo(16.7f, 9.3f)
-                moveTo(10.9f, 16.9f)
-                arcToRelative(1.1f, 1.1f, 0f, isMoreThanHalf = true, isPositiveArc = true, 2.2f, 0f)
-                arcToRelative(1.1f, 1.1f, 0f, isMoreThanHalf = true, isPositiveArc = true, -2.2f, 0f)
-                // Stable baseline.
-                moveTo(5.4f, 19.5f)
-                lineTo(18.6f, 19.5f)
-            }
-        }.build()
+        lucide("bc_performance", "m12 14 4-4", "M3.34 19a10 10 0 1 1 17.32 0")
     }
 
     /** Four frame-time bars, used by refresh-rate selection. */
     val FrameRate: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_frame_rate",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-            ) {
-                moveTo(5f, 15.5f); lineTo(5f, 8.5f)
-                moveTo(9.7f, 18.5f); lineTo(9.7f, 5.5f)
-                moveTo(14.3f, 16.5f); lineTo(14.3f, 7.5f)
-                moveTo(19f, 14.5f); lineTo(19f, 9.5f)
-            }
-        }.build()
+        lucide("bc_frame_rate", "M5 15.5V8.5", "M9.7 18.5V5.5", "M14.3 16.5V7.5", "M19 14.5V9.5")
     }
 
+    /**
+     * Apple's own library grid: nine rounded tiles, each drawn as a wall with
+     * the middle taken out of it.
+     *
+     * The web player sets this glyph inside a `translate(.7 .94) scale(.92237)` to
+     * bring its nine-tile block down to the size of the rest of its sidebar. The
+     * [fill][apple] below does the same job by the book: the block is published
+     * taller than the loupe, so both end up on the band rather than the grid being
+     * the odd one out, and the hand-set offset only ever nudged it a unit.
+     */
     val Library: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_library",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Three upright spines + one leaning — Apple Music's library glyph, thickened
-                moveTo(4.6f, 4.8f); lineTo(4.6f, 19.2f)
-                moveTo(9.2f, 4.8f); lineTo(9.2f, 19.2f)
-                moveTo(13.8f, 4.8f); lineTo(13.8f, 19.2f)
-                moveTo(17.2f, 5.6f); lineTo(20.6f, 18.9f)
-            }
-        }.build()
+        apple(
+            "bc_library",
+            "M5.55 8.73H7.4c.45 0 .8-.13 1.06-.38.25-.26.37-.62.37-1.1V5.5c0-.46-.12-.83-.37-1.08-.26-.26-.6-.39-1.06-.39H5.55c-.45 0-.8.13-1.06.39-.25.25-.37.62-.37 1.08v1.77c0 .47.12.83.37 1.09.26.25.6.38 1.06.38Zm.16-1.14c-.15 0-.26-.04-.34-.12-.07-.07-.1-.2-.1-.35V5.63c0-.15.03-.27.1-.35.08-.07.2-.11.34-.11h1.52c.14 0 .25.04.34.11.08.08.12.2.12.35v1.49c0 .16-.04.28-.12.35a.46.46 0 0 1-.34.12H5.7Zm5.62 1.14h1.84c.46 0 .8-.13 1.06-.38.25-.26.37-.62.37-1.1V5.5c0-.46-.12-.83-.37-1.08a1.4 1.4 0 0 0-1.06-.39h-1.84q-.675 0-1.05.39A1.5 1.5 0 0 0 9.9 5.5v1.77c0 .47.13.83.38 1.09.25.25.6.38 1.05.38Zm.16-1.14c-.15 0-.26-.04-.34-.12-.07-.07-.11-.2-.11-.35V5.63c0-.15.04-.27.11-.35.08-.07.19-.11.34-.11h1.53c.14 0 .25.04.33.11.08.08.11.2.11.35v1.49c0 .16-.04.28-.11.35-.08.08-.2.12-.33.12zm5.63 1.14h1.84c.45 0 .8-.13 1.06-.38.25-.26.38-.62.38-1.1V5.5c0-.46-.13-.83-.38-1.08-.25-.26-.6-.39-1.06-.39h-1.84q-.675 0-1.05.39c-.26.25-.38.62-.38 1.08v1.77c0 .47.12.83.38 1.09.25.25.6.38 1.05.38Zm.16-1.14c-.15 0-.26-.04-.34-.12-.08-.07-.12-.2-.12-.35V5.63c0-.15.04-.27.12-.35.08-.07.2-.11.34-.11h1.52c.14 0 .25.04.33.11.08.08.12.2.12.35v1.49c0 .16-.04.28-.12.35q-.105.12-.33.12zM5.55 14.35H7.4c.45 0 .8-.13 1.06-.38.25-.26.37-.62.37-1.08V11.1c0-.47-.12-.83-.37-1.09-.26-.25-.6-.38-1.06-.38H5.55c-.45 0-.8.13-1.06.38-.25.26-.37.62-.37 1.09v1.78c0 .46.12.82.37 1.08.26.25.6.38 1.06.38Zm.16-1.14c-.15 0-.26-.04-.34-.12-.07-.08-.1-.2-.1-.35v-1.5c0-.15.03-.26.1-.34.08-.08.2-.12.34-.12h1.52c.14 0 .25.04.34.12.08.08.12.2.12.34v1.5c0 .15-.04.27-.12.35a.45.45 0 0 1-.34.12H5.7Zm5.62 1.14h1.84c.46 0 .8-.13 1.06-.38.25-.26.37-.62.37-1.08V11.1c0-.47-.12-.83-.37-1.09a1.4 1.4 0 0 0-1.06-.38h-1.84c-.45 0-.8.13-1.05.38-.25.26-.38.62-.38 1.09v1.78c0 .46.13.82.38 1.08.25.25.6.38 1.05.38Zm.16-1.14c-.15 0-.26-.04-.34-.12a.52.52 0 0 1-.11-.35v-1.5c0-.15.04-.26.11-.34.08-.08.19-.12.34-.12h1.53q.21 0 .33.12c.08.08.11.2.11.34v1.5c0 .15-.04.27-.11.35-.08.08-.2.12-.33.12zm5.63 1.14h1.84c.45 0 .8-.13 1.06-.38.25-.26.38-.62.38-1.08V11.1c0-.47-.13-.83-.38-1.09-.25-.25-.6-.38-1.06-.38h-1.84c-.45 0-.8.13-1.05.38-.26.26-.38.62-.38 1.09v1.78c0 .46.12.82.38 1.08.25.25.6.38 1.05.38Zm.16-1.14c-.15 0-.26-.04-.34-.12s-.12-.2-.12-.35v-1.5c0-.15.04-.26.12-.34s.2-.12.34-.12h1.52q.21 0 .33.12c.08.08.12.2.12.34v1.5c0 .15-.04.27-.12.35q-.105.12-.33.12zM5.55 19.97H7.4c.45 0 .8-.13 1.06-.38.25-.26.37-.62.37-1.1v-1.76c0-.47-.12-.83-.37-1.09-.26-.25-.6-.38-1.06-.38H5.55c-.45 0-.8.13-1.06.38-.25.26-.37.62-.37 1.09v1.77c0 .47.12.83.37 1.09.26.25.6.38 1.06.38m.16-1.15c-.15 0-.26-.04-.34-.11-.07-.08-.1-.2-.1-.35v-1.49c0-.16.03-.28.1-.36.08-.07.2-.11.34-.11h1.52c.14 0 .25.04.34.11q.12.12.12.36v1.49c0 .15-.04.27-.12.35a.46.46 0 0 1-.34.11H5.7Zm5.62 1.15h1.84c.46 0 .8-.13 1.06-.38.25-.26.37-.62.37-1.1v-1.76c0-.47-.12-.83-.37-1.09a1.4 1.4 0 0 0-1.06-.38h-1.84c-.45 0-.8.13-1.05.38-.25.26-.38.62-.38 1.09v1.77c0 .47.13.83.38 1.09.25.25.6.38 1.05.38m.16-1.15c-.15 0-.26-.04-.34-.11a.52.52 0 0 1-.11-.35v-1.49c0-.16.04-.28.11-.36.08-.07.19-.11.34-.11h1.53c.14 0 .25.04.33.11.08.08.11.2.11.36v1.49c0 .15-.04.27-.11.35-.08.07-.2.11-.33.11zm5.63 1.15h1.84c.45 0 .8-.13 1.06-.38.25-.26.38-.62.38-1.1v-1.76c0-.47-.13-.83-.38-1.09-.25-.25-.6-.38-1.06-.38h-1.84c-.45 0-.8.13-1.05.38-.26.26-.38.62-.38 1.09v1.77c0 .47.12.83.38 1.09.25.25.6.38 1.05.38m.16-1.15c-.15 0-.26-.04-.34-.11-.08-.08-.12-.2-.12-.35v-1.49q0-.24.12-.36c.08-.07.2-.11.34-.11h1.52c.14 0 .25.04.33.11q.12.12.12.36v1.49c0 .15-.04.27-.12.35-.07.07-.18.11-.33.11z",
+            fill = 0.664f,
+        )
     }
 
-    /** 2x2 grid icon (4 rounded squares) for switching layout to grid view. */
+    /** Lucide's own layout grid — four rounded tiles, for switching to tile view. */
     val GridView: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_grid_view",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Top-left
-                moveTo(6.5f, 4.5f)
-                lineTo(8.5f, 4.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, 2f)
-                lineTo(10.5f, 8.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, 2f)
-                lineTo(6.5f, 10.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, -2f)
-                lineTo(4.5f, 6.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, -2f)
-                close()
-
-                // Top-right
-                moveTo(15.5f, 4.5f)
-                lineTo(17.5f, 4.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, 2f)
-                lineTo(19.5f, 8.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, 2f)
-                lineTo(15.5f, 10.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, -2f)
-                lineTo(13.5f, 6.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, -2f)
-                close()
-
-                // Bottom-left
-                moveTo(6.5f, 13.5f)
-                lineTo(8.5f, 13.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, 2f)
-                lineTo(10.5f, 17.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, 2f)
-                lineTo(6.5f, 19.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, -2f)
-                lineTo(4.5f, 15.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, -2f)
-                close()
-
-                // Bottom-right
-                moveTo(15.5f, 13.5f)
-                lineTo(17.5f, 13.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, 2f)
-                lineTo(19.5f, 17.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, 2f)
-                lineTo(15.5f, 19.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, -2f)
-                lineTo(13.5f, 15.5f)
-                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, -2f)
-                close()
-            }
-        }.build()
+        lucide(
+            "bc_grid_view",
+            "M4 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
+            "M15 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
+            "M15 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z",
+            "M4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z",
+        )
     }
 
-    /** List view icon (horizontal rows) for switching layout to list view. */
+    /** Lucide's own list — three bulleted rows, for switching to list view. */
     val ListView: ImageVector by lazy {
-        ImageVector.Builder(
-            name = "bc_list_view",
-            defaultWidth = 24.dp, defaultHeight = 24.dp,
-            viewportWidth = 24f, viewportHeight = 24f,
-        ).apply {
-            path(
-                stroke = stroke,
-                strokeLineWidth = STROKE,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                // Three horizontal lines with bullet markers
-                moveTo(4.5f, 6.5f); lineTo(5.5f, 6.5f)
-                moveTo(9.5f, 6.5f); lineTo(19.5f, 6.5f)
-
-                moveTo(4.5f, 12f); lineTo(5.5f, 12f)
-                moveTo(9.5f, 12f); lineTo(19.5f, 12f)
-
-                moveTo(4.5f, 17.5f); lineTo(5.5f, 17.5f)
-                moveTo(9.5f, 17.5f); lineTo(19.5f, 17.5f)
-            }
-        }.build()
+        lucide(
+            "bc_list_view",
+            "M3 5h.01", "M3 12h.01", "M3 19h.01",
+            "M8 5h13", "M8 12h13", "M8 19h13",
+        )
     }
+
+    // ---- Settings, sidebar and menu glyphs, at Lucide's own weight ----
+
+    val Moon: ImageVector by lazy {
+        lucide("bc_moon",
+            "M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401",
+        )
+    }
+
+    val FastForward: ImageVector by lazy {
+        lucide("bc_fast_forward",
+            "M12 6a2 2 0 0 1 3.414-1.414l6 6a2 2 0 0 1 0 2.828l-6 6A2 2 0 0 1 12 18z",
+            "M2 6a2 2 0 0 1 3.414-1.414l6 6a2 2 0 0 1 0 2.828l-6 6A2 2 0 0 1 2 18z",
+        )
+    }
+
+    val Ban: ImageVector by lazy {
+        lucide("bc_ban",
+            "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0z",
+            "M4.929 4.929 19.07 19.071",
+        )
+    }
+
+    val Blur: ImageVector by lazy {
+        lucide("bc_blur",
+            "M12 3v18",
+            "M5.5 6a10 10 0 0 1 0 12",
+            "M18.5 6a10 10 0 0 0 0 12",
+            "M8.5 9a5 5 0 0 1 0 6",
+            "M15.5 9a5 5 0 0 0 0 6",
+        )
+    }
+
+    val Languages: ImageVector by lazy {
+        lucide("bc_languages",
+            "m5 8 6 6",
+            "m4 14 6-6 2-3",
+            "M2 5h12",
+            "M7 2h1",
+            "m22 22-5-10-5 10",
+            "M14 18h6",
+        )
+    }
+
+    val HardDrive: ImageVector by lazy {
+        lucide("bc_hard_drive",
+            "M10 16h.01",
+            "M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
+            "M21.946 12.013H2.054",
+            "M6 16h.01",
+        )
+    }
+
+    val Trash: ImageVector by lazy {
+        lucide("bc_trash",
+            "M3 6h18",
+            "M19 6v14a2 2 0 0 1 -2 2H7a2 2 0 0 1 -2 -2V6",
+            "M8 6V4a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v2",
+            "M10 11v6",
+            "M14 11v6",
+        )
+    }
+
+    val Picture: ImageVector by lazy {
+        lucide("bc_image",
+            "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z",
+            "M7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0z",
+            "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21",
+        )
+    }
+
+    val Folder: ImageVector by lazy {
+        lucide("bc_folder",
+            "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
+        )
+    }
+
+    val Funnel: ImageVector by lazy {
+        lucide("bc_funnel",
+            "M3 4h18l-7 8v6l-4 2v-8z",
+        )
+    }
+
+    val EyeOff: ImageVector by lazy {
+        lucide("bc_eye_off",
+            "M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49",
+            "M14.084 14.158a3 3 0 0 1-4.242-4.242",
+            "M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143",
+            "m2 2 20 20",
+        )
+    }
+
+    val Monitor: ImageVector by lazy {
+        lucide("bc_monitor",
+            "M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2z",
+            "M8 21h8",
+            "M12 17v4",
+        )
+    }
+
+    val Brush: ImageVector by lazy {
+        lucide("bc_brush",
+            "m11 10 3 3",
+            "M6.5 21A3.5 3.5 0 1 0 3 17.5a2.62 2.62 0 0 1-.708 1.792A1 1 0 0 0 3 21z",
+            "M9.969 17.031 21.378 5.624a1 1 0 0 0-3.002-3.002L6.967 14.031",
+        )
+    }
+
+    val Wallpaper: ImageVector by lazy {
+        lucide("bc_wallpaper",
+            "M12 17v4",
+            "M8 21h8",
+            "m9 17 6.1-6.1a2 2 0 0 1 2.81.01L22 15",
+            "M6 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0z",
+            "M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2z",
+        )
+    }
+
+    val Sun: ImageVector by lazy {
+        lucide("bc_sun",
+            "M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0z",
+            "M12 2v2",
+            "M12 20v2",
+            "m4.93 4.93 1.41 1.41",
+            "m17.66 17.66 1.41 1.41",
+            "M2 12h2",
+            "M20 12h2",
+            "m6.34 17.66-1.41 1.41",
+            "m19.07 4.93-1.41 1.41",
+        )
+    }
+
+    val Disc: ImageVector by lazy {
+        lucide("bc_disc_3",
+            "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0z",
+            "M6 12c0-1.7.7-3.2 1.8-4.2",
+            "M10 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0z",
+            "M18 12c0 1.7-.7 3.2-1.8 4.2",
+        )
+    }
+
+    val Palette: ImageVector by lazy {
+        lucide("bc_palette",
+            "M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z",
+            "M13 6.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0 -1 0z",
+            "M17 10.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0 -1 0z",
+            "M6 12.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0 -1 0z",
+            "M8 7.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0 -1 0z",
+        )
+    }
+
+    val Film: ImageVector by lazy {
+        lucide("bc_film",
+            "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z",
+            "M7 3v18",
+            "M3 7.5h4",
+            "M3 12h18",
+            "M3 16.5h4",
+            "M17 3v18",
+            "M17 7.5h4",
+            "M17 16.5h4",
+        )
+    }
+
+    val VolumeMute: ImageVector by lazy {
+        lucide("bc_volume_x",
+            "M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z",
+            "m16.5 14.5 5-5",
+            "m16.5 9.5 5 5",
+        )
+    }
+
+    val BarChart: ImageVector by lazy {
+        lucide("bc_chart_column",
+            "M3 3v16a2 2 0 0 0 2 2h16",
+            "M18 17V9",
+            "M13 17V5",
+            "M8 17v-3",
+        )
+    }
+
+    val Pencil: ImageVector by lazy {
+        lucide("bc_pencil",
+            "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+            "m15 5 4 4",
+        )
+    }
+
+    val Archive: ImageVector by lazy {
+        lucide("bc_archive",
+            "M3 3h18a1 1 0 0 1 1 1v3a1 1 0 0 1 -1 1h-18a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1z",
+            "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8",
+            "M10 12h4",
+        )
+    }
+
+    val AudioLines: ImageVector by lazy {
+        lucide("bc_audio_lines",
+            "M2 10v3",
+            "M6 6v11",
+            "M10 3v18",
+            "M14 8v7",
+            "M18 5v13",
+            "M22 10v3",
+        )
+    }
+
+    val AudioWaveform: ImageVector by lazy {
+        lucide("bc_audio_waveform",
+            "M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2",
+        )
+    }
+
+    val SlidersVertical: ImageVector by lazy {
+        lucide("bc_sliders_vertical",
+            "M10 8h4",
+            "M12 21v-9",
+            "M12 8V3",
+            "M17 16h4",
+            "M19 12V3",
+            "M19 21v-5",
+            "M3 14h4",
+            "M5 10V3",
+            "M5 21v-7",
+        )
+    }
+
+    val Speaker: ImageVector by lazy {
+        lucide("bc_speaker",
+            "M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-16a2 2 0 0 1 2 -2z",
+            "M12 6h.01",
+            "M8 14a4 4 0 1 0 8 0a4 4 0 1 0 -8 0z",
+            "M12 14h.01",
+        )
+    }
+
+    val Activity: ImageVector by lazy {
+        lucide("bc_activity",
+            "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2",
+        )
+    }
+
+    val Puzzle: ImageVector by lazy {
+        lucide("bc_puzzle",
+            "M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z",
+        )
+    }
+
+    val CirclePlay: ImageVector by lazy {
+        lucide("bc_circle_play",
+            "M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z",
+            "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0z",
+        )
+    }
+
+    val ChevronUp: ImageVector by lazy {
+        lucide("bc_chevron_up",
+            "m18 15-6-6-6 6",
+        )
+    }
+
+    val Calendar: ImageVector by lazy {
+        lucide("bc_calendar",
+            "M8 2v3",
+            "M16 2v3",
+            "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z",
+            "M3 9h18",
+        )
+    }
+
+    val Radio: ImageVector by lazy {
+        lucide("bc_radio",
+            "M16.247 7.761a6 6 0 0 1 0 8.478",
+            "M19.075 4.933a10 10 0 0 1 0 14.134",
+            "M4.925 19.067a10 10 0 0 1 0-14.134",
+            "M7.753 16.239a6 6 0 0 1 0-8.478",
+            "M10 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0z",
+        )
+    }
+
+    /** Apple's own microphone, the mark the web player puts on its Artists row. */
+    val Mic: ImageVector by lazy {
+        apple(
+            "bc_mic",
+            "M18.39 9.42c1.289-1.282 1.34-2.908.102-4.139-1.23-1.216-2.85-1.186-4.138.103zm-6.08 9.858a.66.66 0 0 0 .667-.667v-4.328l-.051-1.048 2.234-2.072c.842.11 1.728-.235 2.49-1.004l-4.03-4.035c-.776.761-1.098 1.633-.988 2.475l-6.805 7.332c-.278.3-.322.717.022 1.062L4.913 18.2a.31.31 0 0 0 .037.418l.212.22a.31.31 0 0 0 .425.029l1.208-.945c.33.344.755.3 1.048.022l3.8-3.516v4.182a.66.66 0 0 0 .667.667zm-5.053-2.073-.674-.674 6.453-6.84q.186.307.461.593.274.276.571.476z",
+            fill = 0.620f,
+        )
+    }
+
+    /** Apple's own album box, the mark the web player puts on its Albums row. */
+    val Album: ImageVector by lazy {
+        apple(
+            "bc_album",
+            "M15.477 3.937c-.044-.61-.396-.937-1.07-.937H9.431c-.675 0-1.027.327-1.07.937h7.115zm1.24 2.013c-.11-.654-.425-1.025-1.159-1.025H8.222c-.741 0-1.057.37-1.167 1.025zm-.3 14.05c1.313 0 2.083-.756 2.083-2.252v-8.37c0-1.496-.778-2.252-2.304-2.252H7.804Q5.502 7.124 5.5 9.38v8.369C5.5 19.244 6.27 20 7.804 20h8.612zm-.023-1.17H7.818c-.733 0-1.137-.392-1.137-1.148V9.437c0-.756.404-1.14 1.137-1.14h8.356c.727 0 1.145.384 1.145 1.14v8.245c0 .756-.418 1.148-.925 1.148",
+            fill = 0.708f,
+        )
+    }
+
+    /** Apple's own made-for-you card, the mark the web player puts on that shelf. */
+    val Person: ImageVector by lazy {
+        apple(
+            "bc_person",
+            "M6.729 20.011H17.27c1.825 0 2.729-.903 2.729-2.694V6.706c0-1.79-.904-2.695-2.729-2.695H6.73C4.913 4.011 4 4.906 4 6.706v10.611c0 1.8.913 2.694 2.729 2.694m5.275-5.101c-3.085 0-5.31 1.486-6.24 3.372-.243-.235-.365-.574-.365-1.034V6.775c0-.904.478-1.365 1.347-1.365h10.508c.86 0 1.347.461 1.347 1.365v10.473c0 .451-.122.8-.356 1.025-.93-1.886-3.086-3.363-6.24-3.363zm0-1.452c1.66.018 2.964-1.399 2.964-3.259 0-1.747-1.304-3.19-2.964-3.19s-2.98 1.443-2.972 3.19c.009 1.86 1.312 3.233 2.972 3.26z",
+            fill = 0.667f,
+        )
+    }
+
+    val PersonCircle: ImageVector by lazy {
+        lucide("bc_circle_user",
+            "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0z",
+            "M9 10a3 3 0 1 0 6 0a3 3 0 1 0 -6 0z",
+            "M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662",
+        )
+    }
+
+    val Ratio: ImageVector by lazy {
+        lucide("bc_ratio",
+            "M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-16a2 2 0 0 1 2 -2z",
+            "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2z",
+        )
+    }
+
+    val ListVideo: ImageVector by lazy {
+        lucide("bc_list_video",
+            "M21 5H3",
+            "M10 12H3",
+            "M10 19H3",
+            "M15 12.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997a1 1 0 0 1-1.517-.86z",
+        )
+    }
+
+    val Clapperboard: ImageVector by lazy {
+        lucide("bc_clapperboard",
+            "m12.296 3.464 3.02 3.956",
+            "M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z",
+            "M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+            "m6.18 5.276 3.1 3.899",
+        )
+    }
+
+    val Sparkles: ImageVector by lazy {
+        lucide("bc_sparkles",
+            "M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z",
+            "M20 2v4",
+            "M22 4h-4",
+            "M2 20a2 2 0 1 0 4 0a2 2 0 1 0 -4 0z",
+        )
+    }
+
+
+    val Equalizer: ImageVector by lazy {
+        lucide("bc_equalizer",
+            "M10 5H3",
+            "M12 19H3",
+            "M14 3v4",
+            "M16 17v4",
+            "M21 12h-9",
+            "M21 19h-5",
+            "M21 5h-7",
+            "M8 10v4",
+            "M8 12H3",
+        )
+    }
+
+    val Grip: ImageVector by lazy {
+        lucide("bc_grip",
+            "M8 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0z",
+            "M8 5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0z",
+            "M8 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0z",
+            "M14 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0z",
+            "M14 5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0z",
+            "M14 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0z",
+        )
+    }
+
+    /**
+     * Stop, as the transport draws it: a filled block, not an outline.
+     *
+     * Nothing else in the row is hollow, and an outline of that size reads as a
+     * frame rather than as a control — so the block is set inside the box, at
+     * the measure the transport's own marks reach.
+     */
+    val Stop: ImageVector by lazy {
+        glyph("bc_stop", 24f,
+            "M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2z",
+        )
+    }
+
+    val Headphones: ImageVector by lazy {
+        lucide("bc_headphones",
+            "M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3",
+        )
+    }
+
+    val Undo: ImageVector by lazy {
+        lucide("bc_undo",
+            "M9 14 4 9l5-5",
+            "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11",
+        )
+    }
+
+    val ThumbDown: ImageVector by lazy {
+        lucide("bc_thumbdown",
+            "M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z",
+            "M17 14V2",
+        )
+    }
+
+
+    val Lock: ImageVector by lazy {
+        lucide("bc_lock",
+            "M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-7a2 2 0 0 1 2 -2z",
+            "M7 11V7a5 5 0 0 1 10 0v4",
+        )
+    }
+
+    val Link: ImageVector by lazy {
+        lucide("bc_link",
+            "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
+            "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+        )
+    }
+
+    val Globe: ImageVector by lazy {
+        lucide("bc_globe",
+            "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0z",
+            "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20",
+            "M2 12h20",
+        )
+    }
+
+
+    val Copy: ImageVector by lazy {
+        lucide("bc_copy",
+            "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2z",
+            "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
+        )
+    }
+
+    val LockOpen: ImageVector by lazy {
+        lucide("bc_lock-open",
+            "M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-7a2 2 0 0 1 2 -2z",
+            "M7 11V7a5 5 0 0 1 9.9-1",
+        )
+    }
+
 }

@@ -49,6 +49,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.music.bitchord.ui.icons.BitChordIcons
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -106,7 +107,7 @@ internal fun DesktopListenTogetherDialog(autoplayEnabled: Boolean, onDismiss: ()
                 }
                 // A page is left by the window's back, as every other page is.
                 if (!LocalDesktopPanelIsPage.current) {
-                    IconButton(onClick = onDismiss) { Icon(Icons.Rounded.Close, "Close") }
+                    IconButton(onClick = onDismiss) { Icon(BitChordIcons.Close, "Close") }
                 }
             }
             if (!LocalDesktopPanelIsPage.current) HorizontalDivider(color = DesktopCardEdge)
@@ -146,6 +147,7 @@ internal fun DesktopListenTogetherDialog(autoplayEnabled: Boolean, onDismiss: ()
                 )
                 else -> PartyLanding(
                     signedIn = DesktopListenTogether.canJoin(),
+                    hasServer = DesktopListenTogether.hasServer,
                     enabled = DesktopListenTogether.canJoin() && DesktopListenTogether.hasServer,
                     avatarUrl = DesktopListenTogether.myAvatarUrl(),
                     nickname = nickname,
@@ -205,6 +207,7 @@ internal fun DesktopListenTogetherDialog(autoplayEnabled: Boolean, onDismiss: ()
 @Composable
 private fun PartyLanding(
     signedIn: Boolean,
+    hasServer: Boolean,
     enabled: Boolean,
     avatarUrl: String?,
     nickname: String,
@@ -285,11 +288,13 @@ private fun PartyLanding(
             }
         }
         if (!signedIn) item { Notice("Sign in to YouTube Music before creating or joining a party.", true) }
+        // A party-less build used to show nothing but two greyed buttons and no reason for them.
+        if (signedIn && !hasServer) item { Notice("No party server is set. Enter one under Party server and press Save.", true) }
         error?.takeIf(String::isNotBlank)?.let { item { Notice(it, true) } }
         item {
             Column(Modifier.desktopCardInset(RoundedCornerShape(14.dp)).padding(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Settings, null, tint = DesktopSecondary, modifier = Modifier.size(20.dp))
+                    Icon(BitChordIcons.CogIcon, null, tint = DesktopSecondary, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text("Party server", fontWeight = FontWeight.Medium)
@@ -352,7 +357,7 @@ private fun JoinConfirmation(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(Icons.Rounded.Groups, null, tint = DesktopAccent, modifier = Modifier.size(54.dp))
+        Icon(BitChordIcons.Users, null, tint = DesktopAccent, modifier = Modifier.size(54.dp))
         Spacer(Modifier.height(14.dp))
         Text(
             if (preview.hostName.isBlank()) "Join this party?" else "Join ${preview.hostName}’s party?",
@@ -418,7 +423,7 @@ private fun RoomHero(state: DesktopListenTogether.State) {
         Spacer(Modifier.width(10.dp))
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             TextButton(onClick = { DesktopExternalLinks.copy(invite) }) {
-                Icon(Icons.Rounded.ContentCopy, null, modifier = Modifier.size(17.dp))
+                Icon(BitChordIcons.Copy, null, modifier = Modifier.size(17.dp))
                 Spacer(Modifier.width(7.dp))
                 Text("Copy invite")
             }
@@ -492,7 +497,7 @@ private fun HostControls(state: DesktopListenTogether.State) {
         Text("HOST CONTROLS", color = DesktopSecondary, style = MaterialTheme.typography.labelSmall)
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (state.hostOnlyControl) Icons.Rounded.Lock else Icons.Rounded.LockOpen, null, modifier = Modifier.size(20.dp))
+            Icon(if (state.hostOnlyControl) BitChordIcons.Lock else BitChordIcons.LockOpen, null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("Only I can control playback")
@@ -549,7 +554,7 @@ private fun MemberRow(member: PartyMember, isYou: Boolean, canKick: Boolean, onK
             )
         }
         if (canKick) IconButton(onClick = onKick, modifier = Modifier.size(30.dp)) {
-            Icon(Icons.Rounded.RemoveCircleOutline, "Remove", tint = DesktopDestructive, modifier = Modifier.size(18.dp))
+            Icon(BitChordIcons.Minus, "Remove", tint = DesktopDestructive, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -564,7 +569,7 @@ private fun PartyAvatar(url: String?, size: Int, fallback: String = "") {
             contentAlignment = Alignment.Center,
         ) {
             if (fallback.isNotBlank()) Text(fallback.take(1).uppercase(), fontWeight = FontWeight.Bold)
-            else Icon(Icons.Rounded.Person, null, tint = DesktopSecondary, modifier = Modifier.size((size * .55f).dp))
+            else Icon(BitChordIcons.Person, null, tint = DesktopSecondary, modifier = Modifier.size((size * .55f).dp))
         }
     }
 }

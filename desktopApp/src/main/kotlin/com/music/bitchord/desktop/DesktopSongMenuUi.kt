@@ -381,7 +381,7 @@ internal fun DesktopSongMenu(
         // The two are never both offered.
         (onRevertToOriginal ?: onUpgradeQuality)?.let { action ->
             DesktopMenuRow(
-                icon = if (onRevertToOriginal != null) Icons.AutoMirrored.Rounded.Undo else Icons.Rounded.HighQuality,
+                icon = if (onRevertToOriginal != null) BitChordIcons.Undo else BitChordIcons.AudioLines,
                 label = if (onRevertToOriginal != null) "Revert to original" else "Upgrade quality",
                 onClick = action,
             )
@@ -396,7 +396,7 @@ internal fun DesktopSongMenu(
                 onClick = onToggleLike,
             )
             DesktopMenuRow(
-                icon = if (disliked) Icons.Rounded.ThumbDown else Icons.Rounded.ThumbDownOffAlt,
+                icon = if (disliked) BitChordIcons.ThumbDown else BitChordIcons.ThumbDown,
                 label = if (disliked) "Undo dislike" else "Dislike",
                 tint = if (disliked) DesktopAccent else null,
                 onClick = onToggleDislike,
@@ -430,7 +430,7 @@ internal fun DesktopSongMenu(
                 onClick = onDownload,
             )
         }
-        DesktopMenuRow(Icons.Rounded.Radio, DesktopStrings["start_radio", "Start radio"], onClick = onStartRadio)
+        DesktopMenuRow(BitChordIcons.Radio, DesktopStrings["start_radio", "Start radio"], onClick = onStartRadio)
         // The player's menu is raised over the track already playing, so it has
         // nothing to put it next to: the queue it would join is the one the
         // player is showing. A list row keeps both.
@@ -455,11 +455,11 @@ internal fun DesktopSongMenu(
         ) {
             DesktopMenuDivider()
             onShowLyrics?.let {
-                DesktopMenuRow(BitChordIcons.LyricsQuote, DesktopStrings["d_view_lyrics", "View lyrics"], onClick = it)
+                DesktopMenuRow(BitChordIcons.Lyrics, DesktopStrings["d_view_lyrics", "View lyrics"], onClick = it)
             }
             onTranslate?.let {
                 DesktopMenuRow(
-                    icon = Icons.Rounded.Translate,
+                    icon = BitChordIcons.Languages,
                     label = DesktopStrings["d_translate", "Translate"],
                     enabled = translateEnabled,
                     selected = showingTranslation,
@@ -468,7 +468,7 @@ internal fun DesktopSongMenu(
             }
             onRomanize?.let {
                 DesktopMenuRow(
-                    icon = Icons.Rounded.Language,
+                    icon = BitChordIcons.Globe,
                     label = DesktopStrings["d_romanize", "Romanize"],
                     enabled = romanizeEnabled,
                     selected = showingRomanization,
@@ -496,10 +496,10 @@ internal fun DesktopSongMenu(
         if ((albumId != null && onOpenAlbum != null) || (artistId != null && onOpenArtist != null)) {
             DesktopMenuDivider()
             if (albumId != null && onOpenAlbum != null) {
-                DesktopMenuRow(Icons.Rounded.Album, DesktopStrings["open_album", "Open album"]) { onOpenAlbum(albumId) }
+                DesktopMenuRow(BitChordIcons.Album, DesktopStrings["open_album", "Open album"]) { onOpenAlbum(albumId) }
             }
             if (artistId != null && onOpenArtist != null) {
-                DesktopMenuRow(Icons.Rounded.Person, DesktopStrings["open_artist", "Open artist"]) { onOpenArtist(artistId) }
+                DesktopMenuRow(BitChordIcons.Person, DesktopStrings["open_artist", "Open artist"]) { onOpenArtist(artistId) }
             }
         }
 
@@ -648,7 +648,7 @@ internal fun DesktopAppleCollectionMenu(
         DesktopMenuRow(BitChordIcons.Play, "Play") { onDismiss(); onPlay() }
         DesktopMenuRow(BitChordIcons.Shuffle, "Shuffle") { onDismiss(); onShuffle() }
         DesktopMenuDivider()
-        DesktopMenuRow(Icons.Rounded.Album, if (playlist) "Go to Playlist" else "Go to Album") { onDismiss(); onFind() }
+        DesktopMenuRow(BitChordIcons.Album, if (playlist) "Go to Playlist" else "Go to Album") { onDismiss(); onFind() }
         DesktopMenuRow(BitChordIcons.ListMusic, "Open") { onDismiss(); onOpen() }
     }
 }

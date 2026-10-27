@@ -342,7 +342,7 @@ internal fun DesktopPlayPill(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            BitChordIcons.Play,
+            BitChordIcons.TransportPlay,
             contentDescription = if (iconOnly) label else null,
             tint = Color.Black,
             modifier = Modifier.size(if (iconOnly) size * 0.44f else 18.dp),

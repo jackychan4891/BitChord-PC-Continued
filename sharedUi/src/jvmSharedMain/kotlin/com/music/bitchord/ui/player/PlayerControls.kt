@@ -10,7 +10,6 @@ import com.music.bitchord.data.model.CreditSegment
 import com.music.bitchord.data.model.creditSegments
 import com.music.bitchord.sharedui.resources.*
 
-import org.jetbrains.compose.resources.DrawableResource
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedContent
@@ -479,9 +478,13 @@ internal fun TransportRow(
     onNext: () -> Unit,
     compact: Boolean = false,
 ) {
-    val playSize = if (compact) 58.dp else 74.dp
+    // Apple drew each transport shape inside its own 28-unit box, and the boxes
+    // are equal while the ink is not: the play triangle fills 0.55 × 0.71 of it,
+    // a skip 0.74 × 0.48. A box size for each is what makes the three read as a
+    // matched row rather than as three shapes of three different weights.
+    val playSize = if (compact) 43.dp else 56.dp
     val playTouch = if (compact) 76.dp else 92.dp
-    val skipSize = if (compact) 44.dp else PLAYER_SKIP_ICON_SIZE
+    val skipSize = if (compact) 46.dp else PLAYER_SKIP_ICON_SIZE
     Row(
         modifier = Modifier.fillMaxWidth(),
         // SpaceAround, not SpaceEvenly: the outer margins take half a gap, so
@@ -490,11 +493,10 @@ internal fun TransportRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TransportGlyph(
-            icon = Res.drawable.ic_player_previous,
+            icon = BitChordIcons.TransportPrevious,
             contentDescription = stringResource(Res.string.widget_previous),
             size = skipSize,
             touchSize = PLAYER_SKIP_TOUCH_SIZE,
-            heightScale = PLAYER_SKIP_HEIGHT_SCALE,
             onClick = onPrevious,
             enabled = previousEnabled,
             haptic = Haptic.SkipPrevious,
@@ -511,7 +513,7 @@ internal fun TransportRow(
             }
         } else {
             TransportGlyph(
-                icon = if (isPlaying) Res.drawable.ic_player_pause else Res.drawable.ic_player_play,
+                icon = if (isPlaying) BitChordIcons.TransportPause else BitChordIcons.TransportPlay,
                 contentDescription = stringResource(if (isPlaying) Res.string.pause else Res.string.play),
                 size = playSize,
                 touchSize = playTouch,
@@ -520,11 +522,10 @@ internal fun TransportRow(
             )
         }
         TransportGlyph(
-            icon = Res.drawable.ic_player_next,
+            icon = BitChordIcons.TransportNext,
             contentDescription = stringResource(Res.string.widget_next),
             size = skipSize,
             touchSize = PLAYER_SKIP_TOUCH_SIZE,
-            heightScale = PLAYER_SKIP_HEIGHT_SCALE,
             onClick = onNext,
             enabled = nextEnabled,
             haptic = Haptic.SkipNext,
@@ -621,12 +622,15 @@ internal fun PlayerActionRow(
         ) {
             if (showLyricsAndQueue) {
                 BottomGlyph(
-                    icon = BitChordIcons.LyricsQuote,
+                    // Apple's own lyric bubble, in whichever state the sheet is in:
+                    // outlined while the words are down, filled while they are up.
+                    icon = if (lyricsOpen) BitChordIcons.Lyrics else BitChordIcons.LyricsOff,
                     contentDescription = stringResource(if (lyricsOpen) Res.string.close_lyrics else Res.string.open_lyrics),
                     // Lyrics and the queue are two things to show in one place, so
                     // opening either closes the other; lit to say which is up.
                     onClick = onToggleLyrics,
                     highlighted = lyricsOpen,
+                    iconSize = 20.dp,
                 )
             }
             AnimatedContent(
@@ -777,15 +781,13 @@ private const val CIRCLE_GLYPH_SHARE = 0.56f
  */
 @Composable
 private fun TransportGlyph(
-    icon: DrawableResource,
+    icon: ImageVector,
     contentDescription: String,
     size: androidx.compose.ui.unit.Dp,
     touchSize: androidx.compose.ui.unit.Dp = size,
     onClick: () -> Unit,
     enabled: Boolean = true,
     haptic: Haptic = Haptic.Tap,
-    /** Vertical squash of the glyph alone; its width and touch box are untouched. */
-    heightScale: Float = 1f,
 ) {
     val haptics = rememberHaptics()
     // Faded rather than hidden: the row keeps its shape at the ends of a queue.
@@ -807,12 +809,10 @@ private fun TransportGlyph(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            painter = painterResource(icon),
+            imageVector = icon,
             contentDescription = contentDescription,
             tint = Color.White.copy(alpha = alpha),
-            modifier = Modifier
-                .size(size)
-                .then(if (heightScale != 1f) Modifier.graphicsLayer { scaleY = heightScale } else Modifier),
+            modifier = Modifier.size(size),
         )
     }
 }
@@ -820,12 +820,6 @@ private fun TransportGlyph(
 /** The skip glyphs' width, and their touch box, beside the larger play button. */
 private val PLAYER_SKIP_ICON_SIZE = 53.dp
 private val PLAYER_SKIP_TOUCH_SIZE = 53.dp
-
-/**
- * The skip glyphs are drawn a little flatter than they are wide, so the pair
- * reads lower and longer next to the play button without losing any width.
- */
-private const val PLAYER_SKIP_HEIGHT_SCALE = 0.85f
 
 private val BOTTOM_ACTION_SIZE = 44.dp
 
@@ -1189,6 +1183,12 @@ private fun BottomGlyph(
     haptic: Haptic = Haptic.Tap,
     label: String? = null,
     /**
+     * The glyph's box. A pen glyph stops short of its box where a silhouette fills
+     * it, so the two families drawn in one row cannot share one measure — Apple's
+     * lyric bubble asks for a step smaller than the queue mark beside it.
+     */
+    iconSize: Dp = 26.dp,
+    /**
      * Shortest gap between taps that both reach [onClick]. A tap inside the
      * window of the last one is dropped whole — haptic included, so a swallowed
      * tap doesn't buzz as though something happened. The default lets every tap
@@ -1229,7 +1229,7 @@ private fun BottomGlyph(
                 imageVector = icon,
                 contentDescription = null,
                 tint = tint,
-                modifier = Modifier.size(26.dp),
+                modifier = Modifier.size(iconSize),
             )
         } else if (label != null) {
             Text(

@@ -29,10 +29,10 @@ class DesktopPersistence {
 
     /** Every lyric database, in the order they are asked. */
     fun lyricsSourceOrder(): List<String> =
-        // The phone's rule for a saved order meeting a newer build: hidden sources drop out, a new
-        // one slots in beside its declared neighbour.
-        LyricsSource.ordered(readNames(DesktopLyricsClient.KEY_LYRICS_ORDER).mapNotNull(::lyricsSourceNamed))
-            .map { it.label }
+        // The phone's rule for a saved order meeting a newer build — hidden sources drop out, a new
+        // one slots in beside its declared neighbour — over the desktop's full list, which has two
+        // providers the shared enum has no name for.
+        DesktopLyricsClient.orderFor(readNames(DesktopLyricsClient.KEY_LYRICS_ORDER))
 
     fun saveLyricsSourceOrder(names: List<String>) =
         saveString(DesktopLyricsClient.KEY_LYRICS_ORDER, names.joinToString(","))

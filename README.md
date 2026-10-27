@@ -47,11 +47,11 @@ with Apple Music's layout, lossless sources, beat-matched Automix and word-synce
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/lyrics.png" alt="Full-screen player with synced lyrics" /></td>
-    <td width="50%"><img src="docs/screenshots/charts.png" alt="Apple Music-style charts page" /></td>
+    <td width="50%"><img src="docs/screenshots/deck.png" alt="Turntable player deck with the tonearm on the record" /></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Full-screen player</b> — artwork, live lyrics, lossless badge</sub></td>
-    <td align="center"><sub><b>Browse</b> — daily charts, city charts, set lists</sub></td>
+    <td align="center"><sub><b>Turntable deck</b> — the label is the cover, the arm tracks the song</sub></td>
   </tr>
 </table>
 

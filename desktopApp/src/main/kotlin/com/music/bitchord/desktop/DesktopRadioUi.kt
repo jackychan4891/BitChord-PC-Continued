@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +24,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -43,6 +46,19 @@ private val RadioRowGap = 24.dp
  */
 private val MinRadioTile = 140.dp
 private val MaxRadioTile = 420.dp
+
+/**
+ * The words under a square, held to one height so the grid can count them.
+ *
+ * A station name is one line and what it is carrying is two, and without a fixed box the row height
+ * follows whichever the stream happens to be reporting — which is how the page came to scroll by a
+ * few pixels at some window sizes and not others.
+ */
+private val RadioCaption = 66.dp
+
+/** What the grid shares the window with: the page title over its rule, the grid's own paddings, the
+ * row gap, and the inset the mini player reserves at the foot of every page. */
+private val RadioChrome = 236.dp
 
 /** One station on the radio page, with whatever is known about what it is carrying. */
 internal data class DesktopRadioTile(
@@ -74,7 +90,14 @@ internal fun DesktopRadioTileGrid(
         heading?.let { DesktopAppleHeading(it, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)) }
         BoxWithConstraints(Modifier.padding(horizontal = DesktopPageGutter)) {
             val columns = if (maxWidth < 620.dp) 2 else 3
-            val tile = ((maxWidth - RadioTileGap * (columns - 1)) / columns).coerceIn(MinRadioTile, MaxRadioTile)
+            val rows = tiles.chunked(columns).size.coerceAtLeast(1)
+            val byWidth = (maxWidth - RadioTileGap * (columns - 1)) / columns
+            // Height gets the last word. Measured from the width alone, a wide window grew the
+            // squares until the last caption hung past the bottom and the page scrolled a few pixels
+            // to reach it — not something a page of six stations should ever need to do.
+            val viewport = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
+            val byHeight = (viewport - RadioChrome - RadioRowGap * (rows - 1) - RadioCaption * rows) / rows
+            val tile = minOf(byWidth, byHeight).coerceIn(MinRadioTile, MaxRadioTile)
             Column(verticalArrangement = Arrangement.spacedBy(RadioRowGap)) {
                 tiles.chunked(columns).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(RadioTileGap)) {
@@ -112,7 +135,7 @@ private fun DesktopRadioTileView(
             ) {
                 DesktopArtwork(tile.artworkUrl, Modifier.fillMaxSize(), px = 600)
             }
-            Column(Modifier.desktopQuietClick(onClick = onOpen)) {
+            Column(Modifier.width(size).height(RadioCaption).desktopQuietClick(onClick = onOpen)) {
                 Text(
                     tile.title,
                     fontSize = 15.sp,

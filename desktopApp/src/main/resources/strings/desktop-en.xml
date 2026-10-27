@@ -106,6 +106,7 @@
     <string name="d_monthly_listeners">MONTHLY LISTENERS</string>
     <string name="d_music">MUSIC</string>
     <string name="d_my_music_source">My music source</string>
+    <string name="d_n_rows_tucked_away">%1$d rows tucked away from the sidebar</string>
     <string name="d_name_optional">Name (optional)</string>
     <string name="d_new">New</string>
     <string name="d_new_music_moods_and_discoveries">New music, moods, and discoveries</string>
@@ -114,6 +115,7 @@
     <string name="d_nobody_is_signed_in">Nobody is signed in. Your library, playlists and history need a YouTube Music account.</string>
     <string name="d_not_found">Not found</string>
     <string name="d_not_playing">Not Playing</string>
+    <string name="d_nothing_hidden_yet">Nothing is hidden yet</string>
     <string name="d_nothing_is_fetched_until_you_add_a_link">Nothing is fetched until you add a link</string>
     <string name="d_off">Off</string>
     <string name="d_ok">OK</string>
@@ -215,6 +217,7 @@
     <string name="d_your_year_in_music">Your year in music</string>
     <string name="discord_show_audio_quality">Show audio quality</string>
     <string name="hide_from_sidebar">Hide from sidebar</string>
+    <string name="hidden_items">Hidden items</string>
     <string name="lastfm_api_key">API key</string>
     <string name="lastfm_shared_secret">Shared secret</string>
     <string name="lyrics">Lyrics</string>

@@ -28,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import com.music.bitchord.ui.icons.BitChordIcons
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -170,7 +171,7 @@ private fun DownloadRow(item: DesktopDownloadItem) {
             }
         }
         IconButton(onClick = { DesktopDownloadQueue.cancel(item.song.videoId) }) {
-            Icon(Icons.Rounded.Close, DesktopStrings["cancel", "Cancel"], tint = DesktopSecondary, modifier = Modifier.size(18.dp))
+            Icon(BitChordIcons.Close, DesktopStrings["cancel", "Cancel"], tint = DesktopSecondary, modifier = Modifier.size(18.dp))
         }
     }
 }

@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -101,8 +102,12 @@ fun LibraryScreen(
     deviceItems: List<ShelfItem>,
     /** The big "Library" heading; the desktop's pages carry the smaller one. */
     showTitle: Boolean = true,
-    /** Drawn in front of that heading — the desktop puts its mark there. */
-    titleLeading: (@Composable () -> Unit)? = null,
+    /**
+     * Replaces the whole heading row. The desktop passes its own page title with
+     * it, so Library lands under the same line as every other page instead of in
+     * a typography of the phone's.
+     */
+    titleRow: (@Composable () -> Unit)? = null,
 ) {
     val pinnedPlaylists by AppUi.host.pinnedPlaylists.collectAsStateWithLifecycle()
     val librarySort by AppUi.host.librarySort.collectAsStateWithLifecycle()
@@ -125,22 +130,24 @@ fun LibraryScreen(
                 contentPadding = contentPadding,
             ) {
             item(key = "header") {
-                Row(
-                    modifier = Modifier.padding(start = PAGE_GUTTER, end = PAGE_GUTTER, bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    titleLeading?.let { leading ->
-                        Box(Modifier.padding(end = 12.dp)) { leading() }
+                val header = titleRow
+                if (header != null) {
+                    header()
+                } else {
+                    Row(
+                        modifier = Modifier.padding(start = PAGE_GUTTER, end = PAGE_GUTTER, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.library),
+                            style = if (showTitle) {
+                                MaterialTheme.typography.displayLarge
+                            } else {
+                                MaterialTheme.typography.headlineSmall
+                            },
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
                     }
-                    Text(
-                        text = stringResource(Res.string.library),
-                        style = if (showTitle) {
-                            MaterialTheme.typography.displayLarge
-                        } else {
-                            MaterialTheme.typography.headlineSmall
-                        },
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
                 }
             }
             if (!signedIn) {
@@ -535,7 +542,12 @@ fun LibraryGridPage(
                     )
                 }
             }
-            items(sortedShelf.items, key = { it.browseId ?: it.title }) { item ->
+            // A shelf of songs arrives with no browse id, and a library can hold two tracks with
+            // the same title — keying on the title alone repeats keys and crashes the grid.
+            itemsIndexed(
+                sortedShelf.items,
+                key = { index, item -> "${item.videoId ?: item.browseId ?: item.title}#$index" },
+            ) { _, item ->
                 ShelfCard(
                     item = item,
                     onClick = { onItemClick(item) },

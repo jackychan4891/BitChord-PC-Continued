@@ -2450,10 +2450,12 @@ class DesktopPlaybackEngine(
 
         /**
          * How long a manual skip waits for the deck it armed for a lossless track. The outgoing song
-         * keeps playing through it, so the wait is only felt as a skip that has not landed yet — and
-         * a source slower than this is not going to be ready in time for a mix of any length.
+         * keeps playing through it, so every millisecond here is a button press that has not visibly
+         * answered, and a press earns exactly one of those: past this the skip cuts, because a source
+         * that has not opened a deck this quickly would not be ready in time to blend into anything.
+         * Six seconds read as a dead first click that only worked the second time.
          */
-        private const val SKIP_MIX_ARM_TIMEOUT_MS = 6_000L
+        private const val SKIP_MIX_ARM_TIMEOUT_MS = 1_200L
         private const val SKIP_MIX_ARM_POLL_MS = 60L
 
         /** How long a better copy waits for the blend into its track to finish: up to a minute. */

@@ -39,10 +39,42 @@ object DesktopLyricsClient {
     internal const val KEY_LYRICS_ORDER = "lyrics_source_order"
 
     /** One lyric database, as the settings screen needs to describe it. */
-    internal data class Source(val name: String, val detail: String, val wordSynced: Boolean)
+    internal data class Source(
+        val name: String,
+        val detail: String,
+        val wordSynced: Boolean,
+        /** The source this one is a variant of; only the desktop's own set it. */
+        val after: String? = null,
+    )
 
-    /** Every provider the phone has, in the order it asks them out of the box. */
-    internal val sources: List<Source> = LyricsSource.offered.map { Source(it.label, it.detail, it.wordSynced) }
+    /**
+     * Every provider out of the box: the phone's, with the two the desktop reaches itself
+     * slotted beside the source each of them is a variant of.
+     */
+    internal val sources: List<Source> = run {
+        val out = LyricsSource.offered.map { Source(it.label, it.detail, it.wordSynced) }.toMutableList()
+        DesktopExtraLyrics.sources.forEach { extra ->
+            val anchor = extra.after?.let { wanted -> out.indexOfFirst { it.name == wanted } } ?: -1
+            out.add(anchor + 1, extra)
+        }
+        out
+    }
+
+    /**
+     * A saved order brought up to date with this build's list: anything gone drops out, anything
+     * new lands beside the source it was declared after. The phone's rule for the same job,
+     * widened to cover providers a [LyricsSource] has no name for.
+     */
+    internal fun orderFor(saved: List<String>): List<String> {
+        val known = sources.map { it.name }
+        val out = saved.filter { it in known }.distinct().toMutableList()
+        known.forEachIndexed { index, name ->
+            if (name in out) return@forEachIndexed
+            val before = known.subList(0, index).lastOrNull { it in out }
+            out.add(before?.let { out.indexOf(it) + 1 } ?: 0, name)
+        }
+        return out
+    }
 
     /** The sources that will actually be asked, in the order they are asked. */
     internal fun enabledSources(order: List<String>, enabled: Set<String>): List<String> =
@@ -85,11 +117,11 @@ object DesktopLyricsClient {
             return Result.failure(IllegalStateException("Synced lyrics are switched off"))
         }
         val configured = enabledSources(persistence.lyricsSourceOrder(), persistence.lyricsEnabledSources())
-            .mapNotNull(::lyricsSourceNamed)
-        val asked = only?.let(::lyricsSourceNamed)?.let(::listOf) ?: configured
+        val asked = only?.let { listOf(it) } ?: configured
         // Every source unticked is a state the listener can reach, and it means the same thing as
         // the feature being off.
         if (asked.isEmpty()) return Result.failure(IllegalStateException("No lyrics sources are enabled"))
+        val sharedAsked = asked.mapNotNull(::lyricsSourceNamed)
 
         // The title and artist are part of the key, not just the video id: the
         // player's manual search asks the same track's providers under a typed
@@ -106,23 +138,33 @@ object DesktopLyricsClient {
         val result = if (embedded != null) {
             Result.success(DesktopLyrics("Downloaded", embedded))
         } else {
-            val found = LyricsRepository.lyrics(
+            val found = if (sharedAsked.isEmpty()) null else LyricsRepository.lyrics(
                 videoId = song.videoId,
                 title = song.title,
                 artist = song.artist,
                 durationMs = durationMs,
                 album = song.albumName,
-                sources = asked.toSet(),
-                order = asked,
+                sources = sharedAsked.toSet(),
+                order = sharedAsked,
                 prioritizeSyllableSync = persistence.boolean(KEY_PRIORITIZE_SYLLABLES, false),
                 onSourceStarted = onSourceStarted,
                 onSourceResult = { source, result -> onSourceResult?.invoke(source, result != null) },
             )
-            if (found == null) {
-                Result.failure(IllegalStateException("Lyrics unavailable"))
-            } else {
-                Result.success(DesktopLyrics(found.source.label, found.lines))
+            var answer = found?.let { DesktopLyrics(it.source.label, it.lines) }
+            // The desktop's own providers are asked only when one of them sits ahead of whatever
+            // the shared race settled on. Asking them always would put two more round trips in
+            // front of every track change to win a song the top of the list already had.
+            var beat = answer?.let { asked.indexOf(it.source) }?.takeIf { it >= 0 } ?: asked.size
+            for (index in 0 until beat) {
+                val name = asked[index]
+                if (name !in DesktopExtraLyrics.names) continue
+                val lines = DesktopExtraLyrics.lyrics(name, song.title, song.artist, durationMs, song.albumName)
+                if (lines != null) {
+                    answer = DesktopLyrics(name, lines)
+                    break
+                }
             }
+            answer?.let { Result.success(it) } ?: Result.failure(IllegalStateException("Lyrics unavailable"))
         }
         synchronized(cache) { cache[cacheKey] = Cached(System.currentTimeMillis(), result) }
         return result

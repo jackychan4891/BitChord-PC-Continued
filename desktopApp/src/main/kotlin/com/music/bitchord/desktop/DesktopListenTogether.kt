@@ -463,18 +463,20 @@ internal object DesktopListenTogether {
 
     private suspend fun runSocketLoop() {
         var backoffMs = 1_000L
+        var failures = 0
         while (currentCoroutineContext().isActive) {
             val code = _state.value.code ?: return
             val held = token ?: return
+            val server = activePartyServerBase ?: return
             try {
                 _state.update { it.copy(connection = Connection.CONNECTING) }
-                val server = activePartyServerBase ?: return
                 http.webSocket(
                     urlString = "${wsBase(server)}/ws/parties/$code",
                     request = { header("Authorization", "Bearer $held") },
                 ) {
                     session = this
                     backoffMs = 1_000L
+                    failures = 0
                     _state.update { it.copy(connection = Connection.LIVE, error = null) }
                     launch { pingLoop() }
                     launch { reportLoop() }
@@ -486,6 +488,12 @@ internal object DesktopListenTogether {
                 throw cancelled
             } catch (failure: Exception) {
                 DesktopTrackLog.log("listen together: socket dropped: ${redact(failure.message)}")
+                failures++
+                // Backoff alone can run for minutes with only "Reconnecting…" on screen. The room
+                // already renders state.error, so hand it the reason once retrying looks futile.
+                if (failures >= 3) {
+                    _state.update { it.copy(error = "Lost the party at ${server}. Retrying every ${backoffMs / 1000}s.") }
+                }
             } finally {
                 session = null
             }

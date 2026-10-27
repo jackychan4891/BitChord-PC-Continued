@@ -49,9 +49,14 @@ private fun localProperty(name: String): String = rootProject.file("local.proper
 
 val desktopModuleIndexUrl = localProperty("MODULE_INDEX_URL")
 
+// Android falls back to the deployed party server when the key is missing (app/build.gradle.kts).
+// Desktop had no fallback, so every build without LISTEN_TOGETHER_SERVER shipped with both party
+// buttons greyed out and nothing on screen saying why.
+val listenTogetherServer = localProperty("LISTEN_TOGETHER_SERVER")
+    .ifBlank { "https://api.bitchord.kushagrasingh.in" }
+
 // Last.fm signs every request with these, so signing in from inside the app
 // needs them at hand. Supplied locally and never committed, as on Android.
-val listenTogetherServer = localProperty("LISTEN_TOGETHER_SERVER")
 val lastfmApiKey = localProperty("LASTFM_API_KEY")
 val lastfmSecret = localProperty("LASTFM_SECRET")
 
@@ -401,6 +406,7 @@ val windowsPortableAssemble by tasks.registering {
     inputs.files(runtime)
     inputs.property("version", version)
     inputs.property("moduleIndex", moduleIndex)
+    inputs.property("listenTogether", listenTogetherServer)
     inputs.property("lastfm", lastfmKey.isNotBlank())
     inputs.property("mainClass", mainClass)
     outputs.dir(stage)
@@ -431,6 +437,7 @@ val windowsPortableAssemble by tasks.registering {
                 appendLine("if defined JAVA_HOME set \"RUNNER=%JAVA_HOME%\\bin\\java\"")
                 append("\"%RUNNER%\" -Dbitchord.version=$version")
                 if (moduleIndex.isNotBlank()) append(" -Dbitchord.module.index=$moduleIndex")
+                if (listenTogetherServer.isNotBlank()) append(" -Dbitchord.listentogether.server=$listenTogetherServer")
                 if (lastfmKey.isNotBlank() && lastfmSharedSecret.isNotBlank()) {
                     append(" -Dbitchord.lastfm.key=$lastfmKey -Dbitchord.lastfm.secret=$lastfmSharedSecret")
                 }

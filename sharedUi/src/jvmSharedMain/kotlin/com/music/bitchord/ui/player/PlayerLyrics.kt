@@ -27,8 +27,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +43,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -82,7 +85,6 @@ import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
@@ -226,9 +228,6 @@ private const val BACKING_OPEN_MS = 400
 private const val PHASE_BEFORE = 0
 private const val PHASE_MOVING = 1
 private const val PHASE_AFTER = 2
-
-/** An instrumental break that is playing, so its fill is read off the clock. */
-private const val GAP_RUNNING = -1f
 
 /**
  * How far ahead of its first word the answering voice starts to open: far
@@ -399,10 +398,12 @@ private const val BROWSING_ALPHA = 0.8f
 
 /**
  * How long a hand-scrolled panel stays the reader's before the song gets it
- * back. Long enough to run ahead to the end of a verse or look over what was
- * just sung; the old half second ended a read before it started.
+ * back. The reference takes the panel home within half a second of the wheel
+ * settling, so it never sits showing words the song left several lines ago. The
+ * old half second ended a read before it started, and twelve held the panel away
+ * from the song through a whole chorus.
  */
-private const val BROWSE_RESUME_IDLE_MS = 12_000L
+private const val BROWSE_RESUME_IDLE_MS = 500L
 
 /**
  * Every line keeps its full size; only the line being sung is sharp and the rest
@@ -423,18 +424,69 @@ private const val ACTIVE_SCALE = 1.05f
 private const val PRESSED_SCALE = 0.96f
 
 /**
- * The break between verses, counted out rather than marked.
+ * The break between verses, counted down.
  *
- * Sized off the same 34sp the lines are set in, so a break sits in the list at
- * the weight of the words either side of it. [GAP_DOT_REST] is what an unlit
- * dot still shows: enough to say how many are coming, not enough to be read as
- * already counted.
+ * The dots are a meter, not a spinner, and the meter and the exit are cut from
+ * the same ruler. The row spends one third of its run-up on each bead and hands
+ * over to the exit the instant the third is lit, so the count is never finished
+ * early and never overruns — and because the run-up is measured from the end of
+ * the silence backwards, the gesture is *scheduled* rather than waited for. The
+ * previous model started the exit when the row lost focus, which is a thing that
+ * happens after the words are already back: whenever the handover ran its course
+ * off-screen, or a line took the focus a little early, the break simply stopped
+ * without ever animating.
+ *
+ * The reference's dots are .4em of a 34px line with .08em of margin either side,
+ * so the size and spacing already matched it. [GAP_DOT_REST] is what an unlit dot
+ * still shows, and the reference shows a lot: the dots about to be counted are
+ * already over half-lit, so the row reads as three beads with one of them going
+ * bright rather than as two marks that could be anything.
+ *
+ * Over the count the row breathes: one draw inward and back per bead lit, all
+ * three beads on the same phase, so the breathing is the count rather than a
+ * period the row runs on the side. A cycle unrelated to the fill (the first
+ * model) was read as a random wobble, and one bead going over and over while its
+ * third runs out (the second) never let the other two join in.
  */
 private const val GAP_DOTS = 3
 private val GAP_DOT_SIZE = 13.dp
 private val GAP_DOT_GAP = 5.dp
-private const val GAP_DOT_REST = 0.25f
+private const val GAP_DOT_REST = 0.55f
+
+/** How small the row is when it opens, before it condenses to full size. */
 private const val GAP_REST_SCALE = 0.76f
+
+/**
+ * How far the row draws inward on each beat of the count, and how far it pushes
+ * out on its way. The fill pulls the beads together and lets them open back out
+ * — it does not swell them, which reads as the row inflating rather than
+ * breathing — and the depth is enough to see on a thirteen-point bead at the
+ * sizes this panel draws at.
+ */
+private const val GAP_BREATH = 0.20f
+private const val GAP_PUFF = 0.35f
+
+/** How long the row takes to come in. */
+private const val GAP_ENTER_MS = 400
+
+/**
+ * The exit: a push and a pull. [GAP_SPLIT] of it is the beads swelling outward
+ * about their own middle, bright all the way through, and the rest draws them
+ * back into the point they grew from as they go out — to scale zero rather than
+ * fading, which is why no easing sits under it. The shape of the exit *is* that
+ * two-phase curve; bending either half against the other only makes the row
+ * hesitate.
+ */
+private const val GAP_EXIT_MS = 350L
+private const val GAP_SPLIT = 0.35f
+
+/**
+ * How long the space the row sat in takes to close. The exit is spent this far
+ * ahead of the next line, so the silence is over before the words arrive, and
+ * the beads keep their place through it instead of riding up out of the frame
+ * with the closing row.
+ */
+private const val GAP_COLLAPSE_MS = 500L
 
 /** How long the panel takes to settle on a new line, and how far ahead it starts. */
 private const val SCROLL_LEAD_MIN_MS = 350L
@@ -1729,6 +1781,13 @@ internal fun LyricsPanel(
     // The room each row gives its halo, in the pixels the placement below measures
     // against — the same number the list's leading inset is cut by.
     val glowRoomPx = with(LocalDensity.current) { GLOW_ROOM.toPx() }
+    // Whether the panel is travelling back to the sung line by itself, after a
+    // hand scroll. The follow effect stands down for as long as it is: a line
+    // landing halfway down the travel would otherwise arrange the stack around
+    // where the list was before the glide started. Nothing else reads it as a
+    // browse — the flag that does that comes from a drag or a wheel, and this
+    // scroll is neither.
+    var returningHome by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect(onScrollingChange)
     }
@@ -1813,6 +1872,13 @@ internal fun LyricsPanel(
     // Paused, there is no song to follow back to, so a hand scroll sits wherever
     // it was left. Playing, the panel takes itself back once the reader comes
     // home to the sung line, or after a long enough pause.
+    //
+    // The pause path does the travel itself rather than handing it to the follow
+    // effect. That effect runs on the sung line, and a line handing over halfway
+    // down a glide would cancel it and place the new one at once — a jump that
+    // starts from wherever the panel had got to, which is the least legible place
+    // to arrive. Gliding from here, the movement is one ramped scroll to wherever
+    // the words were when it began, and the follow effect picks up from there.
     LaunchedEffect(
         browsingByDrag,
         sungLineAtAnchor,
@@ -1824,7 +1890,27 @@ internal fun LyricsPanel(
             browsingByDrag = false
         } else {
             delay(BROWSE_RESUME_IDLE_MS)
+            // Both flags in one snapshot: the follow effect restarts on the browse
+            // clearing and has to find the travel already marked, or it places the
+            // line itself before this run gets a frame.
+            returningHome = true
             browsingByDrag = false
+            try {
+                val info = listState.layoutInfo
+                val viewport = info.viewportSize.height
+                val line = currentLine
+                if (line >= 0 && viewport > 0) {
+                    val centre = viewport / 2f - viewport * centreRaise
+                    val offset = (centre + info.viewportStartOffset).toInt()
+                    if (reduceAnimation) {
+                        listState.scrollToItem(line, scrollOffset = offset)
+                    } else {
+                        listState.animateScrollToItem(line, scrollOffset = offset)
+                    }
+                }
+            } finally {
+                returningHome = false
+            }
         }
     }
 
@@ -1853,9 +1939,12 @@ internal fun LyricsPanel(
     // from the line they had gone looking for. The rules on [browsingByDrag]
     // above end a browse on their own terms.
     // A newer line replaces an unfinished automatic scroll. Only a user's
-    // browsing gesture should suspend following, not our own animation.
-    LaunchedEffect(trackKey, focusLine, browsing, controlsOpen, active) {
-        if (!active || !isSynced || browsing || lines.isEmpty()) return@LaunchedEffect
+    // browsing gesture should suspend following, not our own animation — except
+    // the scroll that comes back from a browse, which is ours and runs longer
+    // than a handover: a line landing halfway down it would put the panel at the
+    // anchor in one jump and leave the rest of the travel nowhere to go.
+    LaunchedEffect(trackKey, focusLine, browsing, controlsOpen, active, returningHome) {
+        if (!active || !isSynced || browsing || returningHome || lines.isEmpty()) return@LaunchedEffect
         // Before the song reaches its first line nothing is being sung, but the
         // panel still owes the reader its place: that first line, held at the
         // anchor, rather than parked at the top of an empty panel.
@@ -1964,6 +2053,7 @@ internal fun LyricsPanel(
             // below takes taps at the initial pass, so while a pick is open it
             // would swallow every choice before the row ever saw it.
             .revealLyricsControlsOnTap(!controlsOpen && !picking, onBottomHalfTap)
+            .browseLyricsOnWheel { browsingByDrag = true }
             .fadingEdges(),
         // Each row carries GLOW_ROOM of its own inset for the halo, so the
         // list hands that much back — otherwise the lines would sit a glow's
@@ -2041,8 +2131,14 @@ internal fun LyricsPanel(
             // Pixels, capped short — the depth of field the animation is known for,
             // minus the double-defocus a dp radius incurred on a HiDPI panel. The
             // line being sung (and a hand-scrolled stack) drop to none at all.
+            //
+            // Apple's own rule for the pointer: whichever line it is sitting on is
+            // never out of focus, however far it is from the one being sung. That is
+            // the only way to read a line two verses off without waiting your turn.
+            val hoverSource = remember { MutableInteractionSource() }
+            val hovered by hoverSource.collectIsHoveredAsState()
             val blurTargetPx = when {
-                !isSynced || reduceDynamicBlur || !lyricsBlur || browsing || isActive -> 0f
+                !isSynced || reduceDynamicBlur || !lyricsBlur || browsing || isActive || hovered -> 0f
                 else -> (distance * LYRIC_BLUR_PX_PER_LINE).coerceAtMost(LYRIC_BLUR_MAX_PX)
             }
             val blurPx by animateFloatAsState(
@@ -2070,45 +2166,127 @@ internal fun LyricsPanel(
                 label = "lyricAlpha",
             )
             if (line.isGap) {
-                // A break counts itself out rather than being marked: three
-                // dots lighting in turn across the interlude, so a long one
-                // reads as time running down instead of a symbol parked on
-                // screen waiting for the singing to come back.
-                val until = lines.getOrNull(index + 1)?.timeMs ?: line.endMs
-                // How far through the break the song is, held at 0 before it and
-                // 1 after: the dots read the clock only while it is running, so
-                // a break that is not playing never redraws — see SweptLyricLine.
-                val gapFill = remember(line, until, clock) {
+                // A break keeps its own time rather than being marked: three dots
+                // filled one after another as the interlude runs out, so the row
+                // says how much silence is left rather than that something is
+                // happening. Never earlier than a millisecond after the break
+                // opens, so everything below can divide by what it spans.
+                val until = maxOf(
+                    lines.getOrNull(index + 1)?.timeMs ?: line.endMs,
+                    line.timeMs + 1L,
+                )
+                // The exit, cut out of the end of the silence and working
+                // backwards: it runs for [GAP_EXIT_MS] and finishes
+                // [GAP_COLLAPSE_MS] before the next line, and the count spends
+                // everything ahead of it. Nothing here waits for the row to be
+                // handed over, which is why the gesture always plays.
+                val exitStart = line.timeMs + maxOf(
+                    GAP_ENTER_MS.toLong(),
+                    until - line.timeMs - GAP_COLLAPSE_MS - GAP_EXIT_MS,
+                )
+                val exitLen = maxOf(1L, minOf(until, exitStart + GAP_EXIT_MS) - exitStart)
+                // Where the song is inside this break, clamped to the break. A
+                // row whose silence has not started, or has already run out,
+                // reads a constant — so the breaks either side of the one playing
+                // never redraw, and this is the only clock the row costs.
+                val gapClock = remember(line, until, clock) {
                     derivedStateOf(structuralEqualityPolicy()) {
-                        val now = clock.longValue
-                        when {
-                            now <= line.timeMs -> 0f
-                            now >= until -> 1f
-                            else -> GAP_RUNNING
-                        }
+                        clock.longValue.coerceIn(line.timeMs, until)
                     }
                 }
-                // The row itself opens and closes with the break, so the list
-                // carries no dead space through the verses either side of it —
-                // which is also what stops the panel scrolling past a hole to
-                // reach the next line that is actually sung.
+                // Only the space the row sits in is animated here; the beads
+                // themselves read the clock above. Opening is a settling, and the
+                // close is the reference's — the gap takes half a second to shut,
+                // after the gesture has already put the beads out of sight.
                 val swell by animateFloatAsState(
                     targetValue = if (isActive) 1f else 0f,
                     animationSpec = tween(
-                        durationMillis = if (isActive) 400 else 350,
+                        durationMillis = if (isActive) GAP_ENTER_MS else GAP_COLLAPSE_MS.toInt(),
                         easing = LYRIC_EASING,
                     ),
                     label = "gapSwell",
                 )
                 val instrumental = stringResource(Res.string.instrumental)
+                // Half the break's own row, at rest — how far the beads hang
+                // below the line the panel anchors rows by. See the hold below.
+                val gapRowHalfPx = with(LocalDensity.current) {
+                    ((GAP_ROW_HEIGHT + GAP_ROW_SPACING) * 0.5f).toPx()
+                }
+                // No clip here on purpose: the row holds its position through the
+                // exit below while the space it sits in closes, and a clip bound
+                // to that shrinking space would slice the beads in half as they
+                // went. The rounded clip further in is what bounds their glow.
                 Box(
                     contentAlignment = Alignment.CenterStart,
                     modifier = Modifier
-                        .height((GAP_ROW_HEIGHT + GAP_ROW_SPACING) * swell)
-                        .clipToBounds(),
+                        .height((GAP_ROW_HEIGHT + GAP_ROW_SPACING) * swell),
                 ) {
                 Box(
                     modifier = Modifier
+                        // Ahead of the blur and the clip, exactly as every sung
+                        // row has it. This layer carries the row to where the
+                        // panel keeps the line being sung; a clip left behind at
+                        // the layout position would slide the beads out through
+                        // its edge and cut them in half on the way.
+                        .graphicsLayer {
+                            // The exit, read off the break's clock rather than off
+                            // the row's focus, so it plays whatever else the panel
+                            // decides to do. Two halves: a push over the first
+                            // [GAP_SPLIT], then a pull back into the point the beads
+                            // grew from and out to nothing.
+                            val now = gapClock.value
+                            val e =
+                                ((now - exitStart).toFloat() / exitLen).coerceIn(0f, 1f)
+                            val half = if (e <= GAP_SPLIT) {
+                                e / GAP_SPLIT
+                            } else {
+                                (e - GAP_SPLIT) / (1f - GAP_SPLIT)
+                            }
+                            val bend = half * half * (3f - 2f * half)
+                            val pull = e > GAP_SPLIT
+                            val grow = when {
+                                e <= 0f -> GAP_REST_SCALE + (1f - GAP_REST_SCALE) * swell
+                                !pull -> 1f + GAP_PUFF * bend
+                                else -> (1f + GAP_PUFF) * (1f - bend)
+                            }
+                            // The beads stay exactly where the panel keeps the
+                            // line being sung until they are done — they are not
+                            // carried off with the list. Two things would move
+                            // them: the space they sit in closing about its top
+                            // edge, and the run-up, which starts the glide to the
+                            // next line a third of a second before that line is
+                            // sung, while this break is still lit. Both are the
+                            // row's own layout position, so reading that back and
+                            // cancelling it holds the row at the anchor through
+                            // the whole of the open and the close.
+                            //
+                            // The anchor is where the panel puts a row's *top*,
+                            // and the beads hang in the middle of the break's own
+                            // box, so the place to hold is half a full row below
+                            // it. Measured against the row at rest rather than
+                            // against its shrinking height, or the correction
+                            // would be the very drift it is here to cancel.
+                            val info = listState.layoutInfo
+                            val here = info.visibleItemsInfo.firstOrNull { it.index == index }
+                            val anchor = info.viewportSize.height * (0.5f - centreRaise) +
+                                info.viewportStartOffset + gapRowHalfPx
+                            val hold = if (here == null) 0f else
+                                anchor - here.offset - here.size / 2f
+                            scaleX = grow
+                            scaleY = grow
+                            translationY = run.shift(index, since.floatValue) *
+                                focusBlurFactor.value + hold
+                            // Bright through the push, gone through the pull: a
+                            // fade that started on the way out would have the
+                            // beads already dimmed by the time they reached the
+                            // width that says the break is over. Before the
+                            // gesture it is the opening that carries them in.
+                            alpha = lineAlpha * when {
+                                e <= 0f -> swell
+                                !pull -> 1f
+                                else -> 1f - bend
+                            }
+                        }
                         .blur(blur, BlurredEdgeTreatment.Unbounded)
                         .clip(RoundedCornerShape(10.dp))
                         // A gap is nothing to pick, so it only ever seeks — and
@@ -2118,37 +2296,65 @@ internal fun LyricsPanel(
                         // Matches the inset every sung line carries, so the
                         // rhythm of the list doesn't break at a break.
                         .padding(GLOW_ROOM)
-                        .size(
+                        // Full height, whatever the closing row above is doing to
+                        // the space: the beads' box holds the row's resting height
+                        // and the gap shuts around it, so a bead is never cut in
+                        // half on its way out.
+                        .requiredSize(
                             width = GAP_DOT_SIZE * 3 + GAP_DOT_GAP * 2,
                             height = GAP_DOT_SIZE,
                         )
-                        .graphicsLayer {
-                            val grow = GAP_REST_SCALE + (1f - GAP_REST_SCALE) * swell
-                            scaleX = grow
-                            scaleY = grow
-                            translationY = run.shift(index, since.floatValue) * focusBlurFactor.value
-                            transformOrigin = TransformOrigin(0f, 0.5f)
-                            alpha = lineAlpha * swell
-                        }
                         .drawBehind {
-                            // Read here rather than in composition: the fill
-                            // moves every frame, and this way a break costs a
-                            // redraw of three circles, not a recomposition.
-                            val span = (until - line.timeMs).coerceAtLeast(1L)
-                            val through = gapFill.value.takeUnless { it == GAP_RUNNING }
-                                ?: ((clock.longValue - line.timeMs).toFloat() / span).coerceIn(0f, 1f)
-                            val radius = GAP_DOT_SIZE.toPx() / 2f
+                            // Read here rather than in composition: the fill moves
+                            // every frame, and this way a break costs a redraw of
+                            // three circles, not a recomposition.
+                            val now = gapClock.value
+                            // Each bead takes one third of the run-up to the exit,
+                            // so the count is whole exactly as the gesture starts —
+                            // the row finishes saying how much silence is left at
+                            // the moment it begins to say the silence is over.
+                            val step = maxOf(1L, (exitStart - line.timeMs) / GAP_DOTS)
+                            // The row breathes once to each bead it lights, all
+                            // three rising and falling on the same phase, so the
+                            // count and the breathing are one clock rather than two
+                            // periods that happen to overlap. Once the three are lit
+                            // the row holds still and waits for the exit.
+                            val into = (now - line.timeMs).coerceAtLeast(0L)
+                            val beat = if (into < step * GAP_DOTS) {
+                                (into % step).toFloat() / step
+                            } else {
+                                1f
+                            }
+                            // Inward, and a raised cosine rather than a half-sine:
+                            // the row draws together to [GAP_BREATH] at the middle of
+                            // a third and opens back out at the end of it. The shape
+                            // matters as much as the direction — a half-sine on a
+                            // clock that wraps reaches the boundary still moving and
+                            // leaves it moving the other way, so the row stops dead
+                            // and then jumps. This one is flat at both ends, so every
+                            // turn round is the same movement as the last.
+                            val pulse = 1f - GAP_BREATH * 0.5f *
+                                (1f - cos(2.0 * PI * beat).toFloat())
+                            val rest = GAP_DOT_SIZE.toPx() / 2f
                             val stride = (GAP_DOT_SIZE + GAP_DOT_GAP).toPx()
+                            val mid = size.width / 2f
                             repeat(GAP_DOTS) { dot ->
-                                // Each dot owns its share of the break and
-                                // fills across it, so they light left to right.
-                                val lit = (through * GAP_DOTS - dot).coerceIn(0f, 1f)
+                                // Brightness alone is per bead: the count has to
+                                // read as three arrivals, and only one of them can
+                                // be happening at a time.
+                                val t = ((now - line.timeMs - dot * step)
+                                    .toFloat() / step).coerceIn(0f, 1f)
+                                // Beads and gaps scale together about the middle of
+                                // the row, which is what the reference measures: the
+                                // outer dots drift apart as they fill.
+                                val x = rest + dot * stride
                                 drawCircle(
                                     color = Color.White.copy(
-                                        alpha = GAP_DOT_REST + (1f - GAP_DOT_REST) * lit,
+                                        alpha = GAP_DOT_REST +
+                                            (1f - GAP_DOT_REST) * t * t * (3f - 2f * t),
                                     ),
-                                    radius = radius,
-                                    center = Offset(radius + dot * stride, size.height / 2f),
+                                    radius = rest * pulse,
+                                    center = Offset(mid + (x - mid) * pulse, size.height / 2f),
                                 )
                             }
                         }
@@ -2218,6 +2424,7 @@ internal fun LyricsPanel(
                 // text gets the full column and wraps where the panel does.
                 val shape = Modifier
                     .fillMaxWidth()
+                    .hoverable(hoverSource)
                     // The lane the other voice sings in, kept clear. Applied
                     // before the layer below so the row scales about the edge
                     // it is actually written from.
