@@ -35,7 +35,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -332,12 +331,12 @@ private fun AppleBrowseHeroShelf(
             items(shelf.items) { item ->
                 val interaction = remember { MutableInteractionSource() }
                 val hovered by interaction.collectIsHoveredAsState()
-                // These panels are pictures before they are buttons, so the pointer
-                // lifts them a step in brightness rather than laying a scrim on them.
-                val glow by animateFloatAsState(
+                // The pointer drops a half-black scrim over the picture — the same
+                // shade every sleeve in the app takes under the pointer.
+                val shade by animateFloatAsState(
                     targetValue = if (hovered) 1f else 0f,
-                    animationSpec = tween(HERO_GLOW_MS),
-                    label = "heroGlow",
+                    animationSpec = tween(ART_HOVER_MS),
+                    label = "heroShade",
                 )
                 val menu = { onItemMenu(item) }
                 Column(
@@ -383,13 +382,8 @@ private fun AppleBrowseHeroShelf(
                         Modifier.width(457.dp).height(261.dp).clip(RoundedCornerShape(8.dp))
                             .drawWithContent {
                                 drawContent()
-                                if (glow > 0.001f) {
-                                    // Added light rather than white paint: midtones lift and
-                                    // the blacks stay black, the way a brighter print reads.
-                                    drawRect(
-                                        Color.White.copy(alpha = HERO_GLOW_ALPHA * glow),
-                                        blendMode = BlendMode.Plus,
-                                    )
+                                if (shade > 0.001f) {
+                                    drawRect(Color.Black.copy(alpha = ART_HOVER_ALPHA * shade))
                                 }
                             },
                     ) {
@@ -400,9 +394,6 @@ private fun AppleBrowseHeroShelf(
         }
     }
 }
-
-private const val HERO_GLOW_ALPHA = 0.1f
-private const val HERO_GLOW_MS = 140
 
 @Composable
 private fun AppleBrowseRecentShelf(

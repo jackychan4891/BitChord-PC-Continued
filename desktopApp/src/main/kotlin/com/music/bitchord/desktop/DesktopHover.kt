@@ -150,8 +150,8 @@ internal fun Modifier.desktopArtHoverShade(): Modifier = composed {
 }
 
 /** The site's own artwork scrim: half black. */
-private const val ART_HOVER_ALPHA = 0.5f
-private const val ART_HOVER_MS = 140
+internal const val ART_HOVER_ALPHA = 0.5f
+internal const val ART_HOVER_MS = 140
 
 /**
  * A click that reaches the whole tile but lights none of it.
