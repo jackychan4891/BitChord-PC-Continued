@@ -34,6 +34,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -309,13 +311,16 @@ private fun AppleBrowseHeroShelf(
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
 ) {
-    Column(Modifier.padding(top = 22.dp, bottom = 6.dp)) {
+    val quiet = shelf.title.isQuietShelfTitle()
+    // Without its heading the row has no line of its own to sit under, so it
+    // rides a little closer to the shelf above than a titled one would.
+    Column(Modifier.padding(top = if (quiet) 10.dp else 22.dp, bottom = 6.dp)) {
         // The shelf is reached through its heading, like every other one: the
         // corner button on the tile is gone and the chevron that opens the whole
         // page is the only thing beside the title. A tile still answers a right
         // click with its menu.
         val more = shelf.moreBrowseId
-        if (!shelf.title.isQuietShelfTitle()) {
+        if (!quiet) {
             DesktopAppleHeading(
                 shelf.title,
                 Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
@@ -327,6 +332,13 @@ private fun AppleBrowseHeroShelf(
             items(shelf.items) { item ->
                 val interaction = remember { MutableInteractionSource() }
                 val hovered by interaction.collectIsHoveredAsState()
+                // These panels are pictures before they are buttons, so the pointer
+                // lifts them a step in brightness rather than laying a scrim on them.
+                val glow by animateFloatAsState(
+                    targetValue = if (hovered) 1f else 0f,
+                    animationSpec = tween(HERO_GLOW_MS),
+                    label = "heroGlow",
+                )
                 val menu = { onItemMenu(item) }
                 Column(
                     Modifier.width(457.dp).hoverable(interaction)
@@ -337,9 +349,9 @@ private fun AppleBrowseHeroShelf(
                         )
                         .contextClick(menu),
                 ) {
-                    // A tile's overline is the shelf's real subtitle; an untitled shelf
-                    // would only echo the title that was just taken away above it.
-                    if (shelf.subtitle.isNotBlank() || !shelf.title.isQuietShelfTitle()) {
+                    // An untitled shelf names nothing on its tiles either, even when
+                    // the source hands over a subtitle that only repeats the title.
+                    if (!quiet) {
                         Text(
                             shelf.subtitle.ifBlank { shelf.title }.uppercase(Locale.ROOT),
                             fontSize = 11.sp,
@@ -367,17 +379,30 @@ private fun AppleBrowseHeroShelf(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 3.dp, bottom = 12.dp),
                     )
-                    Box(Modifier.width(457.dp).height(261.dp).clip(RoundedCornerShape(8.dp))) {
+                    Box(
+                        Modifier.width(457.dp).height(261.dp).clip(RoundedCornerShape(8.dp))
+                            .drawWithContent {
+                                drawContent()
+                                if (glow > 0.001f) {
+                                    // Added light rather than white paint: midtones lift and
+                                    // the blacks stay black, the way a brighter print reads.
+                                    drawRect(
+                                        Color.White.copy(alpha = HERO_GLOW_ALPHA * glow),
+                                        blendMode = BlendMode.Plus,
+                                    )
+                                }
+                            },
+                    ) {
                         DesktopArtwork(item.thumbnailUrl, Modifier.fillMaxSize(), px = 800)
-                        if (hovered) {
-                            Box(Modifier.matchParentSize().background(Color.White.copy(alpha = 0.05f)))
-                        }
                     }
                 }
             }
         }
     }
 }
+
+private const val HERO_GLOW_ALPHA = 0.1f
+private const val HERO_GLOW_MS = 140
 
 @Composable
 private fun AppleBrowseRecentShelf(
@@ -964,12 +989,14 @@ private fun String.isAppleBrowseEditorial(): Boolean {
 
 /**
  * Shelf labels that say nothing the screen has not already said: the backend's generic
- * "Albums & singles", and a "New" that only repeats the page's own title. The rows stay;
- * only the line above them goes.
+ * "Albums & singles" (plural or not, "new" or not), and a "New" that only repeats the
+ * page's own title. The rows stay; only the lines naming them go.
  */
-internal fun String.isQuietShelfTitle(): Boolean = trim().lowercase(Locale.ROOT) in setOf(
-    "new", "albums & singles",
-)
+internal fun String.isQuietShelfTitle(): Boolean {
+    val value = trim().lowercase(Locale.ROOT).replace(" ", "")
+    return value == "new" || value == "albums&singles" ||
+        value == "newalbum&singles" || value == "newalbums&singles"
+}
 
 private fun HomeShelf.isAppleBrowseWide(): Boolean =
     title.contains("interview", ignoreCase = true) || title.contains("video", ignoreCase = true)
