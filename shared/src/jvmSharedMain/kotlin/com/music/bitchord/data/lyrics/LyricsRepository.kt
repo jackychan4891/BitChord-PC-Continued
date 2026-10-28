@@ -83,6 +83,11 @@ object LyricsRepository {
      * was supposed to mean. On, a merely line-synced answer is kept only as a
      * fallback, and the search keeps going through the rest of [order] for a
      * word-synced one, taking the top-priority source that has one.
+     *
+     * [awaitAllSources] is the listener's own typed search, where seeing what
+     * *every* provider makes of those words matters more than the first good
+     * answer: no one is cancelled for losing, every provider is waited for,
+     * and the highest-priority answer on offer still wins.
      */
     suspend fun lyrics(
         videoId: String,
@@ -94,6 +99,7 @@ object LyricsRepository {
         order: List<LyricsSource> = LyricsSource.entries,
         prioritizeSyllableSync: Boolean = false,
         isrc: String? = null,
+        awaitAllSources: Boolean = false,
         /** Called from the provider job itself, including for lazily-started providers. */
         onSourceStarted: ((LyricsSource) -> Unit)? = null,
         /**
@@ -128,8 +134,9 @@ object LyricsRepository {
 
         // Genius is a plain text web scraper. To preserve bandwidth and avoid rate-limiting,
         // it starts lazily and is only contacted if all higher-priority synced sources miss.
+        // A search of every source has no losers to skip, so it starts with the rest.
         val racing: List<Pair<LyricsSource, Deferred<Result?>>> = sequence.map { source ->
-            val startMode = if (source == LyricsSource.GENIUS) kotlinx.coroutines.CoroutineStart.LAZY else kotlinx.coroutines.CoroutineStart.DEFAULT
+            val startMode = if (source == LyricsSource.GENIUS && !awaitAllSources) kotlinx.coroutines.CoroutineStart.LAZY else kotlinx.coroutines.CoroutineStart.DEFAULT
             source to async(Dispatchers.IO, start = startMode) {
                 onSourceStarted?.invoke(source)
                 try {
@@ -157,6 +164,16 @@ object LyricsRepository {
         }
 
         try {
+            if (awaitAllSources) {
+                // Answers are kept as they land rather than cancelled for losing:
+                // the drawer listing every provider needs a verdict from every
+                // provider, and the timeout below only bounds a slow one.
+                val answers = ArrayList<Result?>(racing.size)
+                withTimeoutOrNull(WAIT_ALL_TIMEOUT_MS) {
+                    racing.forEach { (_, job) -> answers += runCatching { job.await() }.getOrNull() }
+                }
+                return@coroutineScope bestAnswered(answers, prioritizeSyllableSync)
+            }
             var lineSynced: Result? = null
             for ((source, job) in racing) {
                 // If we already found a line-synced or better result, skip Genius completely
@@ -176,6 +193,24 @@ object LyricsRepository {
             racing.forEach { it.second.cancel() }
             documents.cancel()
         }
+    }
+
+    /**
+     * Longest a search of every source waits before settling for what it has.
+     *
+     * Generous beside [IDENTIFY_TIMEOUT_MS]: nobody is on stage here, the
+     * listener asked for this search and is watching a spinner, and a source
+     * that answers slowly still deserves its line in the drawer.
+     */
+    private const val WAIT_ALL_TIMEOUT_MS = 15_000L
+
+    /** The winner of an exhaustive search: highest priority in [order], best synced. */
+    private fun bestAnswered(answers: List<Result?>, prioritizeSyllableSync: Boolean): Result? {
+        val found = answers.filterNotNull()
+        if (prioritizeSyllableSync) {
+            found.firstOrNull { it.lines.any(LyricLine::isWordSynced) }?.let { return it }
+        }
+        return found.firstOrNull { result -> result.lines.any { it.timeMs > 0 } } ?: found.firstOrNull()
     }
 
     private suspend fun fetch(

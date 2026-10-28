@@ -146,6 +146,8 @@ interface PlayerSettingsSource {
     val lastPlayerScreen: StateFlow<LastPlayerScreen>
     val legacyMeshGradient: StateFlow<Boolean>
     val lyricsBlur: StateFlow<Boolean>
+    /** Keep the lyric clock running while the window is not the focused app. */
+    val lyricsInBackground: StateFlow<Boolean> get() = NoLyricsInBackground
     /**
      * The lyrics as this app first drew them — a small heavy line, blurred as it leaves the sung
      * one — rather than the large crisp lines that fill the pane. A style only the window offers,
@@ -183,6 +185,7 @@ interface PlayerSettingsSource {
 
 private val NoTurntableArt = MutableStateFlow(false)
 private val NoLyricsClassic = MutableStateFlow(false)
+private val NoLyricsInBackground = MutableStateFlow(false)
 
 /** The player's name for the installed host's settings, read where AppSettings used to be. */
 internal val PlayerSettings: PlayerSettingsSource

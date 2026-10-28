@@ -65,6 +65,7 @@ import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -129,6 +130,7 @@ import com.music.bitchord.data.lyrics.LyricAlignment
 import com.music.bitchord.data.lyrics.LyricLine
 import com.music.bitchord.data.lyrics.LyricsSource
 import com.music.bitchord.data.lyrics.translationLanguageName
+import com.music.bitchord.ui.components.contextClick
 import com.music.bitchord.ui.haptics.Haptic
 import com.music.bitchord.ui.haptics.Haptics
 import com.music.bitchord.ui.haptics.rememberHaptics
@@ -908,8 +910,9 @@ private fun rememberLyricClock(
     // reading instead, every reading restarted it, and each restart spent a
     // frame waiting for its first frame time — a hitch twice a second.
     val foreground = rememberIsForeground()
-    LaunchedEffect(engine, playhead, isPlaying, foreground) {
-        if (!isPlaying || !foreground) return@LaunchedEffect
+    val background by PlayerSettings.lyricsInBackground.collectAsState()
+    LaunchedEffect(engine, playhead, isPlaying, foreground, background) {
+        if (!isPlaying || (!foreground && !background)) return@LaunchedEffect
         engine.restart()
         while (true) {
             withFrameNanos { frameNanos ->
@@ -1832,6 +1835,11 @@ internal fun LyricsPanel(
     /** False while the panel is retained offscreen solely as a warm layout. */
     active: Boolean = true,
     onSeekToLine: (Long) -> Unit,
+    /**
+     * Right-click on a line: what the song's annotated service says that line means. Null where
+     * there is nothing to ask, and the row then keeps the plain tap it has always had.
+     */
+    onLineMeaning: ((String) -> Unit)? = null,
     controlsOpen: Boolean,
     onRevealControls: () -> Unit,
     onHideControls: () -> Unit,
@@ -1941,6 +1949,15 @@ internal fun LyricsPanel(
         if (!picking && !listState.isScrollInProgress) {
             onRevealControls()
         }
+    }
+    // A tap on a line is somebody choosing where the song goes, so it also ends a
+    // hand browse. The seek alone was invisible from a scrolled stack: the panel
+    // flattened every row while reading and stayed where it had been scrolled to,
+    // so the song moved and nothing on screen said so. Following again puts the
+    // chosen line under the anchor and lights it.
+    val seekToLine: (Long) -> Unit = { timeMs ->
+        browsingByDrag = false
+        onSeekToLine(timeMs)
     }
 
     val reduceDynamicBlur by PlayerSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
@@ -2130,12 +2147,12 @@ internal fun LyricsPanel(
         if (!placed) {
             listState.scrollToItem(target, scrollOffset = (centre + start).toInt())
             placed = true
-        // The window's handover is a fade, not a rise — the line the panel is
-        // gliding to comes up to the anchor transparent and brightens as it
-        // arrives, so the sung line is never seen travelling into its spot.
-        // Its scroll is therefore one glide of the whole block, not the
-        // staggered run the filling stack springs back with.
-        } else if (visible != null && !reduceAnimation && !appleLyrics) {
+        // Both stacks hand over the same way: the list jumps to its new place
+        // and every row springs from where it was drawn, each a little behind
+        // the one before it. The windowed stack travels a whole line per
+        // handover rather than a few pixels, so its rise is the largest
+        // movement in the panel and is exactly where the stagger shows.
+        } else if (visible != null && !reduceAnimation) {
             // The list jumps to its new place at once and every row then
             // springs from where it was drawn, each a little behind the one
             // before it, so the stack arrives one line after another.
@@ -2472,7 +2489,7 @@ internal fun LyricsPanel(
                                 anchor - here.offset - here.size / 2f
                             scaleX = grow
                             scaleY = grow
-                            translationY = (if (appleLyrics) 0f else run.shift(index, since.floatValue)) *
+                            translationY = run.shift(index, since.floatValue) *
                                 focusBlurFactor.value + hold
                             // Bright through the push, gone through the pull: a
                             // fade that started on the way out would have the
@@ -2490,7 +2507,7 @@ internal fun LyricsPanel(
                         // A gap is nothing to pick, so it only ever seeks — and
                         // not even that while a pick is open, where a stray tap
                         // in the silence would jump the song.
-                        .clickable(enabled = isSynced && !picking) { onSeekToLine(line.timeMs) }
+                        .clickable(enabled = isSynced && !picking) { seekToLine(line.timeMs) }
                         // Matches the inset every sung line carries, so the
                         // rhythm of the list doesn't break at a break.
                         .padding(GLOW_ROOM)
@@ -2644,7 +2661,7 @@ internal fun LyricsPanel(
                     .graphicsLayer {
                         scaleX = scale
                         scaleY = scale
-                        translationY = (if (appleLyrics) 0f else run.shift(index, since.floatValue)) *
+                        translationY = run.shift(index, since.floatValue) *
                             focusBlurFactor.value
                         // Pinned to the line's own top: the zoom opens downward,
                         // and the size coming back off when a handover lands
@@ -2686,7 +2703,7 @@ internal fun LyricsPanel(
                                     if (picking) {
                                         onTogglePick(index)
                                     } else {
-                                        onSeekToLine(line.timeMs)
+                                        seekToLine(line.timeMs)
                                     }
                                 },
                             )
@@ -2699,9 +2716,12 @@ internal fun LyricsPanel(
                                 enabled = isSynced,
                                 interactionSource = interaction,
                                 indication = LocalIndication.current,
-                            ) { onSeekToLine(line.timeMs) }
+                            ) { seekToLine(line.timeMs) }
                         },
                     )
+                    // Beside the tap rather than in place of it, and taking only the secondary
+                    // button: a reader clicking a line to seek is never answered with a card.
+                    .contextClick(onLineMeaning?.let { ask -> { ask(line.text) } })
                 // Lead and answering vocal are one row: they are one line of
                 // the song, they scale and dim together, and tapping either
                 // seeks to the same place.

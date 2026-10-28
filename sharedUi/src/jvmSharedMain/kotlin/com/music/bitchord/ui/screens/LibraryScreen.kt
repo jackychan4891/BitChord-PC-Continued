@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -28,6 +29,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -44,24 +46,34 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
 import com.music.bitchord.data.YtMusicRepository
+import com.music.bitchord.data.model.CARD_ART_PX
 import com.music.bitchord.data.model.HomeShelf
 import com.music.bitchord.data.model.LibraryPage
 import com.music.bitchord.data.model.ShelfItem
 import com.music.bitchord.data.model.UiState
+import com.music.bitchord.data.model.artworkAt
 import com.music.bitchord.data.settings.LibrarySort
 import com.music.bitchord.ui.AppUi
 import com.music.bitchord.ui.icons.BitChordIcons
 import com.music.bitchord.ui.components.LIBRARY_GRID_SPACING
-import com.music.bitchord.ui.components.LibraryGridSpec
 import com.music.bitchord.ui.components.MessageState
 import com.music.bitchord.ui.components.PAGE_GUTTER
 import com.music.bitchord.ui.components.PullToRefresh
-import com.music.bitchord.ui.components.libraryGrid
+import com.music.bitchord.ui.components.contextClick
 import com.music.bitchord.ui.components.librarySkeleton
+import com.music.bitchord.ui.components.longPressMenuClickable
+import com.music.bitchord.ui.components.thumbnailBorder
+import com.music.bitchord.ui.components.thumbnailPlaceholder
 
 /**
  * The signed-in library, drawn the way macOS Music draws it: a "Library"
@@ -121,9 +133,11 @@ fun LibraryScreen(
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             // The page's own width, less the gutters each grid row carries — the
-            // same arithmetic the "Show all" page runs, so a card lands the same
-            // size wherever it is drawn.
-            val grid = libraryGrid(maxWidth - PAGE_GUTTER * 2)
+            // same measure the "Show all" page runs, so a card lands the same size
+            // wherever it is drawn.
+            val contentWidth = maxWidth - PAGE_GUTTER * 2
+            val columns = siteLibraryColumns(contentWidth)
+            val cardWidth = siteLibraryCardWidth(contentWidth, columns)
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
@@ -168,7 +182,8 @@ fun LibraryScreen(
                 is UiState.Success -> {
                     LibraryPlaylistsContent(
                         page = state.data,
-                        grid = grid,
+                        columns = columns,
+                        cardWidth = cardWidth,
                         pinnedPlaylists = pinnedPlaylists,
                         librarySort = librarySort,
                         onItemClick = onShelfItemClick,
@@ -187,16 +202,17 @@ fun LibraryScreen(
                     Column(Modifier.padding(bottom = 26.dp)) {
                         SectionHeader(onDeviceShelf.title, onDeviceShelf.subtitle)
                         BoxWithConstraints(Modifier.padding(horizontal = PAGE_GUTTER)) {
-                            val spec = libraryGrid(maxWidth)
-                            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                                onDeviceShelf.items.chunked(spec.columns).forEach { rowItems ->
+                            val deviceColumns = siteLibraryColumns(maxWidth)
+                            val deviceWidth = siteLibraryCardWidth(maxWidth, deviceColumns)
+                            Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                                onDeviceShelf.items.chunked(deviceColumns).forEach { rowItems ->
                                     Row(horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING)) {
                                         rowItems.forEach { item ->
-                                            ShelfCard(
+                                            LibraryShelfCard(
                                                 item = item,
+                                                modifier = Modifier.width(deviceWidth),
                                                 onClick = { onShelfItemClick(item) },
                                                 onLongPress = { onShelfItemLongPress(item) },
-                                                modifier = Modifier.width(spec.cardWidth),
                                             )
                                         }
                                     }
@@ -361,7 +377,9 @@ private fun PlaylistsHeader(
     ) {
         Text(
             text = stringResource(Res.string.playlists),
-            style = MaterialTheme.typography.headlineMedium,
+            fontSize = 17.sp,
+            lineHeight = 22.sp,
+            fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -420,7 +438,8 @@ private const val PLAYLISTS = YtMusicRepository.PLAYLISTS_SHELF
  */
 private fun LazyListScope.LibraryPlaylistsContent(
     page: LibraryPage,
-    grid: LibraryGridSpec,
+    columns: Int,
+    cardWidth: Dp,
     pinnedPlaylists: List<String>,
     librarySort: LibrarySort,
     onItemClick: (ShelfItem) -> Unit,
@@ -444,7 +463,8 @@ private fun LazyListScope.LibraryPlaylistsContent(
             libraryGridItems(
                 keyPrefix = PLAYLISTS,
                 shelf = shelf.copy(items = user),
-                grid = grid,
+                columns = columns,
+                cardWidth = cardWidth,
                 pinnedPlaylists = pinnedPlaylists,
                 librarySort = librarySort,
                 onItemClick = onItemClick,
@@ -469,7 +489,8 @@ private fun LazyListScope.LibraryPlaylistsContent(
 private fun LazyListScope.libraryGridItems(
     keyPrefix: String,
     shelf: HomeShelf,
-    grid: LibraryGridSpec,
+    columns: Int,
+    cardWidth: Dp,
     pinnedPlaylists: List<String>,
     librarySort: LibrarySort,
     onItemClick: (ShelfItem) -> Unit,
@@ -478,19 +499,19 @@ private fun LazyListScope.libraryGridItems(
     // Pinning wins over the default order, but an explicit sort is a stronger,
     // more deliberate signal than a pin and is left to reorder the whole grid.
     val sorted = shelf.pinnedFirst(pinnedPlaylists).sortedForLibrary(librarySort)
-    val rows = sorted.items.chunked(grid.columns)
+    val rows = sorted.items.chunked(columns)
     items(rows.size, key = { "$keyPrefix:row:$it" }) { rowIndex ->
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = PAGE_GUTTER).padding(bottom = 20.dp),
+            Modifier.fillMaxWidth().padding(horizontal = PAGE_GUTTER).padding(bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING),
         ) {
             rows[rowIndex].forEach { item ->
-                ShelfCard(
+                LibraryShelfCard(
                     item = item,
+                    modifier = Modifier.width(cardWidth),
+                    isPinned = item.browseId != null && item.browseId in pinnedPlaylists,
                     onClick = { onItemClick(item) },
                     onLongPress = { onItemLongPress(item) },
-                    modifier = Modifier.width(grid.cardWidth),
-                    isPinned = item.browseId != null && item.browseId in pinnedPlaylists,
                 )
             }
         }
@@ -499,7 +520,8 @@ private fun LazyListScope.libraryGridItems(
 
 /**
  * Everything a Library shelf's "Show all" opened onto — the same cards, at the
- * same [libraryGrid] width, run down the screen instead of stopping at one row.
+ * same measure as the Library's own grid, run down the screen instead of
+ * stopping at one row.
  */
 @Composable
 fun LibraryGridPage(
@@ -522,24 +544,21 @@ fun LibraryGridPage(
     // pinned cards included.
     val sortedShelf = shelf.pinnedFirst(pinnedPlaylists).sortedForLibrary(librarySort)
     BoxWithConstraints(modifier.fillMaxSize()) {
-        val grid = libraryGrid(maxWidth - PAGE_GUTTER * 2)
+        val contentWidth = maxWidth - PAGE_GUTTER * 2
+        val columns = siteLibraryColumns(contentWidth)
+        val circles = sortedShelf.items.isNotEmpty() &&
+            sortedShelf.items.all { it.browseId?.startsWith("UC") == true }
         LazyVerticalGrid(
-            columns = GridCells.Fixed(grid.columns),
+            columns = GridCells.Fixed(columns),
             state = gridState,
             contentPadding = contentPadding,
             horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
             modifier = Modifier.padding(horizontal = PAGE_GUTTER),
         ) {
             if (onNewPlaylist != null) {
                 item(key = "leading") {
-                    NewShelfCard(
-                        icon = BitChordIcons.Plus,
-                        label = stringResource(Res.string.new_playlist),
-                        subtitle = stringResource(Res.string.saved_to_youtube_music),
-                        onClick = onNewPlaylist,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    LibraryNewCard(onClick = onNewPlaylist)
                 }
             }
             // A shelf of songs arrives with no browse id, and a library can hold two tracks with
@@ -548,15 +567,154 @@ fun LibraryGridPage(
                 sortedShelf.items,
                 key = { index, item -> "${item.videoId ?: item.browseId ?: item.title}#$index" },
             ) { _, item ->
-                ShelfCard(
+                LibraryShelfCard(
                     item = item,
-                    onClick = { onItemClick(item) },
-                    onLongPress = { onItemLongPress(item) },
                     modifier = Modifier.fillMaxWidth(),
                     isPinned = item.browseId != null && item.browseId in pinnedPlaylists,
+                    asCircle = circles,
+                    onClick = { onItemClick(item) },
+                    onLongPress = { onItemLongPress(item) },
                 )
             }
         }
+    }
+}
+
+/**
+ * The site's Library measure. Its breakpoints count the whole window — the 260dp navigation
+ * column this page is drawn beside included — and force five columns from 1260dp and six from
+ * 1580dp; below that the grid fits as many 170dp cards as the page allows.
+ */
+private fun siteLibraryColumns(contentWidth: Dp): Int {
+    val viewport = contentWidth.value + LIBRARY_SIDEBAR_WIDTH
+    return when {
+        viewport >= 1580f -> 6
+        viewport >= 1260f -> 5
+        else -> (((contentWidth.value + LIBRARY_GRID_SPACING.value) /
+            (170f + LIBRARY_GRID_SPACING.value)).toInt()).coerceIn(2, 6)
+    }
+}
+
+private fun siteLibraryCardWidth(contentWidth: Dp, columns: Int): Dp =
+    (contentWidth - LIBRARY_GRID_SPACING * (columns - 1)) / columns
+
+/** The window's navigation column, which the site's library breakpoints count as part of the page. */
+private const val LIBRARY_SIDEBAR_WIDTH = 260f
+
+/**
+ * A Library cover in the site's shape: artwork in a 7dp square (a circle for an artist) and
+ * two caption lines 8px under it at 12/15.
+ */
+@Composable
+private fun LibraryShelfCard(
+    item: ShelfItem,
+    modifier: Modifier = Modifier,
+    isPinned: Boolean = false,
+    asCircle: Boolean = false,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    val shape = if (asCircle) CircleShape else RoundedCornerShape(7.dp)
+    Column(modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(shape)
+                .thumbnailBorder(shape)
+                .thumbnailPlaceholder(shape)
+                .longPressMenuClickable(onClick = onClick, onLongClick = onLongPress)
+                .contextClick(onLongPress),
+        ) {
+            AsyncImage(
+                model = item.thumbnailUrl.artworkAt(CARD_ART_PX),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        if (asCircle) {
+            Text(
+                text = item.title,
+                fontSize = 13.sp,
+                lineHeight = 16.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            )
+            return@Column
+        }
+        Column(Modifier.padding(top = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isPinned) {
+                    Icon(
+                        imageVector = BitChordIcons.Pin,
+                        contentDescription = stringResource(Res.string.pinned),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(end = 4.dp).size(12.dp),
+                    )
+                }
+                Text(
+                    text = item.title,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (item.subtitle.isNotBlank()) {
+                Text(
+                    text = item.subtitle,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** The "new playlist" tile at the head of that grid, drawn at the site's card size. */
+@Composable
+private fun LibraryNewCard(onClick: () -> Unit) {
+    Column(Modifier.clickable(onClick = onClick)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(7.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = BitChordIcons.Plus,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(30.dp),
+            )
+        }
+        Text(
+            text = stringResource(Res.string.new_playlist),
+            fontSize = 12.sp,
+            lineHeight = 15.sp,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Text(
+            text = stringResource(Res.string.saved_to_youtube_music),
+            fontSize = 12.sp,
+            lineHeight = 15.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

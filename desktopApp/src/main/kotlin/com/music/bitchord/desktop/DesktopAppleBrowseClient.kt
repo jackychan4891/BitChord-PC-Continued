@@ -6,10 +6,7 @@ import com.music.bitchord.data.model.SearchResult
 import com.music.bitchord.data.model.ShelfItem
 import com.music.bitchord.data.model.Song
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -40,10 +37,15 @@ internal object DesktopAppleBrowseClient {
      */
     private const val ARTWORK_PX = 400
     private const val NEW_URL = "https://music.apple.com/gb/new"
-    private const val CACHE_MILLIS = 30 * 60 * 1000L
 
-    /** How long a page kept from an earlier visit is worth painting before it is refetched. */
-    private const val STALE_CACHE_MILLIS = 12 * 60 * 60 * 1000L
+    /**
+     * Apple republishes its charts, playlists and new releases on the day boundary, so a kept page
+     * is worth reading only until the next midnight GMT — and is fetched again, once, past it.
+     */
+    private const val DAY_MILLIS = 24 * 60 * 60 * 1000L
+
+    private fun dayStartUtc(now: Long): Long = now - now % DAY_MILLIS
+
     private val json = Json { ignoreUnknownKeys = true }
     private val cache = object : LinkedHashMap<String, Pair<Long, List<HomeShelf>>>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, List<HomeShelf>>>) = size > 32
@@ -76,29 +78,16 @@ internal object DesktopAppleBrowseClient {
     private fun absolutePageUrl(url: String): String? =
         (if (url.startsWith("/")) "https://music.apple.com$url" else url).takeIf(::validPageUrl)
 
-    /** Revalidating a kept page happens behind the page the user is already reading. */
-    private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     suspend fun newPage(): Result<List<HomeShelf>> = page(NEW_URL, "New")
 
     suspend fun page(url: String, title: String): Result<List<HomeShelf>> = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val kept = synchronized(cache) { cache[url] } ?: readDisk(url)?.also { entry ->
+            synchronized(cache) { cache[url] = entry }
+        }
+        if (kept != null && kept.first >= dayStartUtc(now)) return@withContext Result.success(kept.second)
         try {
             check(validPageUrl(url)) { "Invalid Apple Music page" }
-            val now = System.currentTimeMillis()
-            val kept = synchronized(cache) { cache[url] } ?: readDisk(url)?.also { entry ->
-                synchronized(cache) { cache[url] = entry }
-            }
-            if (kept != null) {
-                val age = now - kept.first
-                if (age < CACHE_MILLIS) return@withContext Result.success(kept.second)
-                // Older than the session cache but younger than a working day: paint what was kept
-                // and bring it up to date on the side. The page fills straight away, and the next
-                // visit within the session shows what the refresh found.
-                if (age < STALE_CACHE_MILLIS) {
-                    refresh(url, title)
-                    return@withContext Result.success(kept.second)
-                }
-            }
             val html = canvasGet(url) ?: error("Could not load Apple Music")
             val shelves = parse(html, title)
             check(shelves.isNotEmpty()) { "No music found on this Apple Music page" }
@@ -108,17 +97,9 @@ internal object DesktopAppleBrowseClient {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            Result.failure(failure)
-        }
-    }
-
-    private fun refresh(url: String, title: String) {
-        refreshScope.launch {
-            val html = canvasGet(url) ?: return@launch
-            val shelves = parse(html, title)
-            if (shelves.isEmpty()) return@launch
-            synchronized(cache) { cache[url] = System.currentTimeMillis() to shelves }
-            writeDisk(url, shelves)
+            // Yesterday's page still plays; a fetch that fails on the day boundary is not worth
+            // an error screen in front of it.
+            if (kept != null) Result.success(kept.second) else Result.failure(failure)
         }
     }
 
@@ -138,7 +119,9 @@ internal object DesktopAppleBrowseClient {
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(url.toByteArray(StandardCharsets.UTF_8))
             .joinToString(separator = "") { byte -> "%02x".format(byte) }
-        pagesDirectory.resolve("$digest.json")
+        // v3: the shelf's own row count joined the cache format. A file from before it would draw
+        // today's two-row shelves in yesterday's single row until the day's page was fetched again.
+        pagesDirectory.resolve("$digest.v3.json")
     }.getOrNull()
 
     private fun readDisk(url: String): Pair<Long, List<HomeShelf>>? = runCatching {
@@ -170,6 +153,8 @@ internal object DesktopAppleBrowseClient {
                 items = items,
                 subtitle = shelf.text("subtitle").orEmpty(),
                 moreBrowseId = shelf.text("moreBrowseId"),
+                layout = shelf.text("layout").orEmpty(),
+                rows = shelf.text("rows")?.toIntOrNull() ?: 1,
             )
         }
         if (shelves.isEmpty()) null else stamp to shelves
@@ -184,7 +169,9 @@ internal object DesktopAppleBrowseClient {
                         buildJsonObject {
                             put("title", shelf.title)
                             put("subtitle", shelf.subtitle)
+                            put("rows", shelf.rows)
                             shelf.moreBrowseId?.let { put("moreBrowseId", it) }
+                            if (shelf.layout.isNotBlank()) put("layout", shelf.layout)
                             putJsonArray("items") {
                                 shelf.items.forEach { item ->
                                     addJsonObject {
@@ -263,6 +250,10 @@ internal object DesktopAppleBrowseClient {
                 title = title,
                 items = items,
                 moreBrowseId = heading?.text("url")?.takeIf(::validPageUrl)?.let { PAGE_PREFIX + it },
+                layout = layout.orEmpty(),
+                // The shelf's own depth, which Apple states per section: a run of songs is four
+                // rows, "Updated Playlists" two, most cover rows one.
+                rows = section.obj("presentation")?.obj("layout")?.text("numberOfRows")?.toIntOrNull() ?: 1,
             )
         }
     }
@@ -326,6 +317,11 @@ internal object DesktopAppleBrowseClient {
 }
 
 internal fun ShelfItem.isAppleSong(): Boolean = browseId?.startsWith(DesktopAppleBrowseClient.SONG_PREFIX) == true
+
+/** Apple's live-radio grid. The Radio page is where a station belongs, not the New one. */
+internal fun HomeShelf.isAppleRadioShelf(): Boolean =
+    items.isNotEmpty() &&
+        items.all { it.browseId?.startsWith(DesktopAppleBrowseClient.RADIO_PREFIX) == true }
 
 /** A song either way it arrives: Apple's own chart track, or the music source's. */
 internal fun ShelfItem.isSongLine(): Boolean = isAppleSong() || (!videoId.isNullOrBlank() && browseId.isNullOrBlank())

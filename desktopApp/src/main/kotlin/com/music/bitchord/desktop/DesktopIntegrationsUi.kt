@@ -47,19 +47,20 @@ import com.music.bitchord.ui.icons.BitChordIcons
 import kotlinx.coroutines.launch
 
 /**
- * Signing in to Last.fm — the whole setup in one dialog.
+ * Signing in to Last.fm — a username and a password.
  *
- * Last.fm signs every request with the *app's* API key and shared secret, so a
- * build that shipped without them baked in (no `local.properties`) still needs
- * them before the account password means anything. Android lets the listener
- * enter those two under AppSettings; here they join the username and password on
- * one screen so there is a single, obvious way in rather than a switch that is
- * greyed out until a key turns up from somewhere. The key and secret are kept so
- * later scrobbles can sign themselves; the password is sent to
- * `auth.getMobileSession` once and only the returned session key is stored.
+ * Last.fm signs every request with the *app's* API key and shared secret. A build
+ * that has them — baked in at package time, in the environment, or entered once
+ * before — asks for nothing else, and the two fields stay hidden. A build without
+ * them has no way to sign, so the dialog grows an "App credentials" disclosure
+ * rather than leading with two keys the listener has no reason to expect. The key
+ * and secret are kept so later scrobbles can sign themselves; the password is sent
+ * to `auth.getMobileSession` once and only the returned session key is stored.
  */
 @Composable
 internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
+    val hasAppKey = DesktopScrobbling.canSignInToLastFm
+    var showAppKey by remember { mutableStateOf(false) }
     var apiKey by remember { mutableStateOf(DesktopScrobbleSettings.lastfmApiKey.value) }
     var apiSecret by remember { mutableStateOf(DesktopScrobbleSettings.lastfmApiSecret.value) }
     var username by remember { mutableStateOf(DesktopScrobbleSettings.lastfmUsername.value) }
@@ -70,7 +71,8 @@ internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 
-    val ready = apiKey.isNotBlank() && apiSecret.isNotBlank() && username.isNotBlank() && password.isNotBlank()
+    val ready = username.isNotBlank() && password.isNotBlank() &&
+        (hasAppKey || (apiKey.isNotBlank() && apiSecret.isNotBlank()))
 
     fun submit() {
         if (busy || !ready) return
@@ -78,8 +80,10 @@ internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
         error = null
         // Save the app credentials first: the sign-in request is signed with them,
         // and every scrobble afterwards reads them back from here.
-        DesktopScrobbleSettings.setLastfmApiKey(apiKey.trim())
-        DesktopScrobbleSettings.setLastfmApiSecret(apiSecret.trim())
+        if (!hasAppKey) {
+            DesktopScrobbleSettings.setLastfmApiKey(apiKey.trim())
+            DesktopScrobbleSettings.setLastfmApiSecret(apiSecret.trim())
+        }
         scope.launch {
             DesktopScrobbling.signInToLastFm(username.trim(), password)
                 .onSuccess { onDismiss() }
@@ -92,34 +96,19 @@ internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
         DialogHeading(
             title = DesktopStrings["d_sign_in_to_last_fm", "Sign in to Last.fm"],
             message = error
-                ?: "Your password is sent to Last.fm once and never stored. The API key " +
-                "and shared secret are your app's, from last.fm/api.",
+                ?: DesktopStrings[
+                    "d_lastfm_password_once",
+                    "Your password is sent to Last.fm once and never stored.",
+                ],
             isError = error != null,
         )
-        DialogField(
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            placeholder = DesktopStrings["lastfm_api_key", "API key"],
-            enabled = !busy,
-            imeAction = ImeAction.Next,
-            modifier = Modifier.focusRequester(focus),
-        )
-        Spacer(Modifier.height(8.dp))
-        DialogField(
-            value = apiSecret,
-            onValueChange = { apiSecret = it },
-            placeholder = DesktopStrings["lastfm_shared_secret", "Shared secret"],
-            enabled = !busy,
-            isPassword = true,
-            imeAction = ImeAction.Next,
-        )
-        Spacer(Modifier.height(8.dp))
         DialogField(
             value = username,
             onValueChange = { username = it },
             placeholder = DesktopStrings["username", "Username"],
             enabled = !busy,
             imeAction = ImeAction.Next,
+            modifier = Modifier.focusRequester(focus),
         )
         Spacer(Modifier.height(8.dp))
         DialogField(
@@ -128,17 +117,53 @@ internal fun DesktopLastfmLoginDialog(onDismiss: () -> Unit) {
             placeholder = DesktopStrings["password", "Password"],
             enabled = !busy,
             isPassword = true,
+            imeAction = if (hasAppKey) ImeAction.Done else ImeAction.Next,
             onSubmit = ::submit,
         )
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = panelInset(22.dp)),
-            horizontalArrangement = Arrangement.Start,
-        ) {
-            TextButton(onClick = { DesktopExternalLinks.open("https://www.last.fm/api/account/create") }) {
-                Text(
-                    DesktopStrings["d_get_an_api_key", "Get an API key"],
-                    color = DesktopSecondary,
-                    style = MaterialTheme.typography.bodySmall,
+        if (!hasAppKey) {
+            // Last.fm signs the request with an app key of its own, and this build
+            // has none. One disclosure keeps that out of the way of the two fields
+            // that actually belong to the listener.
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = panelInset(22.dp)),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = { showAppKey = !showAppKey }) {
+                    Text(
+                        if (showAppKey) {
+                            DesktopStrings["d_hide_app_credentials", "Hide app credentials"]
+                        } else {
+                            DesktopStrings["d_add_app_credentials", "This build has no app credentials"]
+                        },
+                        color = DesktopSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                TextButton(onClick = { DesktopExternalLinks.open("https://www.last.fm/api/account/create") }) {
+                    Text(
+                        DesktopStrings["d_get_an_api_key", "Get an API key"],
+                        color = DesktopSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            if (showAppKey) {
+                DialogField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    placeholder = DesktopStrings["lastfm_api_key", "API key"],
+                    enabled = !busy,
+                    imeAction = ImeAction.Next,
+                )
+                Spacer(Modifier.height(8.dp))
+                DialogField(
+                    value = apiSecret,
+                    onValueChange = { apiSecret = it },
+                    placeholder = DesktopStrings["lastfm_shared_secret", "Shared secret"],
+                    enabled = !busy,
+                    isPassword = true,
+                    onSubmit = ::submit,
                 )
             }
         }

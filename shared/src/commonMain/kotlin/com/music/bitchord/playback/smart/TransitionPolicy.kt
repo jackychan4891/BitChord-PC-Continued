@@ -331,6 +331,42 @@ fun audibleSecondsBetween(analysis: TrackAnalysis, start: Double, end: Double): 
 }
 
 /**
+ * The moment a track's sound actually stops, as near as its own envelope can say.
+ *
+ * [TrackAnalysis.contentEndTime] is the analyzer's own answer and is kept wherever it
+ * already sits before [end]. This is the guard for when it does not: an ending whose last
+ * seconds are a decay too quiet to register as trailing silence, or a pair carrying no
+ * stored analysis at all. A blend exists to overlap two songs, not two silences, and
+ * ending one past the point the outgoing track stops making sound is precisely the
+ * "Automix arrived after the music had gone" report.
+ *
+ * The line is [AUDIBLE_ENERGY_FRACTION] of the track's own loud-end reference — the same
+ * one [audibleSecondsBetween] draws between music and silence — so a deliberately quiet
+ * outro that still holds its level is never trimmed, while a fade to nothing is.
+ */
+fun audibleTailEnd(analysis: TrackAnalysis, end: Double): Double {
+    if (!end.isFinite() || end <= 0) return end
+    val curve = analysis.energyCurve
+    if (curve.size < 3) return end
+    val energies = curve.map { it.energy }.filter { it.isFinite() && it >= 0 }.sorted()
+    if (energies.isEmpty()) return end
+    val reference = energies[floor((energies.size - 1) * 0.85).toInt()]
+    if (reference <= 0) return end
+    val threshold = reference * AUDIBLE_ENERGY_FRACTION
+    val last = curve.lastOrNull { point ->
+        point.time.isFinite() && point.time <= end && point.energy.isFinite() && point.energy >= threshold
+    } ?: return end
+    val span = curve.last().time - curve.first().time
+    if (!span.isFinite() || span <= 0) return end
+    val step = span / (curve.size - 1)
+    // A fade crosses the line at its foot; one sample past that crossing is the last
+    // instant the curve can still call audible.
+    val cut = min(end, last.time + step)
+    // A move this small is the curve's own resolution, not a discovery.
+    return if (end - cut < 0.5) end else max(0.0, cut)
+}
+
+/**
  * The earliest point the analysis claims the track makes sound.
  *
  * [TrackAnalysis.firstBeat] is not nullable the way the other two are, and

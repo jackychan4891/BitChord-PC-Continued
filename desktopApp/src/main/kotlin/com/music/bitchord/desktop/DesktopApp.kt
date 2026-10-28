@@ -196,6 +196,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -243,11 +244,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
@@ -387,7 +392,7 @@ internal fun DesktopPageGround(): Color {
 private val DesktopBarGlass = Color(0xF0242428)
 
 /** The backdrop the floating bars blur. */
-private val LocalDesktopHaze = staticCompositionLocalOf<HazeState?> { null }
+internal val LocalDesktopHaze = staticCompositionLocalOf<HazeState?> { null }
 
 /** How much a page's scrollable should keep clear of the floating bars. */
 private val LocalDesktopBottomInset = staticCompositionLocalOf { 0.dp }
@@ -1972,13 +1977,17 @@ fun BitChordDesktopApp() {
     var lyricsQuery by remember(selectedSong?.videoId) { mutableStateOf<Pair<String, String>?>(null) }
     // Bumped on every search so re-running the same query still refetches.
     var lyricsSearchTick by remember(selectedSong?.videoId) { mutableStateOf(0) }
+    // The tick the lookup below last ran with, so a re-run caused by a provider
+    // switch or a settings change is not taken for a new search of its own.
+    var ranSearchTick by remember(selectedSong?.videoId) { mutableStateOf(-1) }
     // What each provider's most recent race turned up, so the song menu's
     // provider drawer can say "Found" or "Not found" per source, not just name
-    // the winner. It is keyed on the track and is only ever added to, never
-    // cleared mid-track: a repeat search a cache answers straight away fires no
-    // callbacks, so clearing on start would blank the very states it should hold.
+    // the winner. Keyed on the provider's label — the name every list here uses,
+    // and the only one the desktop's own providers have. A new typed search
+    // clears it, since a forced lookup asks every provider again and the last
+    // query's answers no longer describe this one.
     val lyricsProviderResults = remember(selectedSong?.videoId) {
-        mutableStateOf<Map<LyricsSource, LyricsProviderState>>(emptyMap())
+        mutableStateOf<Map<String, LyricsProviderState>>(emptyMap())
     }
     var lyricsLoading by remember { mutableStateOf(false) }
     var lyricsError by remember { mutableStateOf<String?>(null) }
@@ -2009,6 +2018,7 @@ fun BitChordDesktopApp() {
         lyricsSearchTick,
     ) {
         val current = selectedSong
+        val searched = lyricsSearchTick != ranSearchTick
         lyrics = null
         lyricsError = null
         if (current == null) {
@@ -2032,15 +2042,20 @@ fun BitChordDesktopApp() {
         // The manual search asks the same providers under the typed words rather
         // than the track's own credits; a provider switch keeps that query.
         val probe = lyricsQuery?.let { (title, artist) -> current.copy(title = title, artist = artist) } ?: current
+        ranSearchTick = lyricsSearchTick
         DesktopLyricsClient.lookup(
             probe,
             length,
             only = lyricsOnly,
+            // A search of the listener's own making asks everything again: no
+            // cached answer, and no provider skipped because the last race
+            // already had a winner.
+            force = searched,
             // Each provider reports itself as the race runs; the callback is on
             // the IO thread, so the map is updated back on the composition's own.
-            onSourceResult = { source, found ->
+            onSourceResult = { label, found ->
                 scope.launch {
-                    lyricsProviderResults.value += source to
+                    lyricsProviderResults.value += label to
                         if (found) LyricsProviderState.FOUND else LyricsProviderState.NOT_FOUND
                 }
             },
@@ -2053,11 +2068,15 @@ fun BitChordDesktopApp() {
 
     // A manual ask from the song menu's lyrics drawer, for a track whose automatic
     // lookup came up empty and whose real title or artist the listener knows
-    // better than the tag. It just sets the query and nudges the effect above,
-    // which owns the loading state and the result — so the drawer's provider
-    // list updates through the same path as the automatic lookup.
+    // better than the tag. It sets the query and nudges the effect above, which
+    // owns the loading state and the result — so the drawer's provider list
+    // updates through the same path as the automatic lookup. The pinned provider
+    // and the last query's per-provider answers go first: this is a different
+    // question, so every source is asked it again from nothing.
     fun searchLyrics(title: String, artist: String) {
         lyricsQuery = title to artist
+        lyricsOnly = null
+        lyricsProviderResults.value = emptyMap()
         lyricsSearchTick++
     }
 
@@ -3208,6 +3227,9 @@ fun BitChordDesktopApp() {
 
     // The player's song menu, raised by a right-click on the player itself.
     var playerMenuOpen by remember(selectedSong?.videoId) { mutableStateOf(false) }
+    // A lyric line the reader right-clicked, waiting on Genius. Kept at the window rather than
+    // in either lyric pane: the same card answers from the page's column and from the player's.
+    var lyricMeaningRequest by remember { mutableStateOf<DesktopLyricMeaningRequest?>(null) }
     // The lyric sheet and the queue, toggled from rows on the song menu rather
     // than glyphs in the overflow. Flipped here, consumed and cleared by the
     // shared player.
@@ -3348,13 +3370,20 @@ fun BitChordDesktopApp() {
     val sharedLyrics = lyrics?.lines
     val sharedLyricsSource = remember(lyrics) { lyrics?.source?.let(::lyricsSourceNamed) }
     val sharedLyricsUnavailable = !lyricsLoading && sharedLyrics.isNullOrEmpty()
-    val providerStates = remember(lyricsOrder, lyricsOn, sharedLyricsSource, lyricsLoading) {
+    val providerStates = remember(
+        lyricsOrder,
+        lyricsOn,
+        sharedLyricsSource,
+        lyricsLoading,
+        lyricsProviderResults.value,
+    ) {
+        val results = lyricsProviderResults.value
         DesktopLyricsClient.enabledSources(lyricsOrder, lyricsOn)
             .mapNotNull(::lyricsSourceNamed)
             .associateWith { source ->
                 when {
                     source == sharedLyricsSource -> LyricsProviderState.FOUND
-                    lyricsProviderResults.value[source] != null -> lyricsProviderResults.value.getValue(source)
+                    results[source.label] != null -> results.getValue(source.label)
                     lyricsLoading -> LyricsProviderState.FETCHING
                     else -> LyricsProviderState.NOT_FETCHED
                 }
@@ -3375,11 +3404,11 @@ fun BitChordDesktopApp() {
     ) {
         val currentLabel = lyrics?.source
         val asked = lyricsOnly?.let { listOf(it) } ?: DesktopLyricsClient.enabledSources(lyricsOrder, lyricsOn)
+        val results = lyricsProviderResults.value
         lyricsOrder.map { label ->
-            val source = lyricsSourceNamed(label)
             val state = when {
                 label == currentLabel -> LyricsProviderState.FOUND
-                source != null && lyricsProviderResults.value[source] != null -> lyricsProviderResults.value.getValue(source)
+                results[label] != null -> results.getValue(label)
                 lyricsLoading && label in asked -> LyricsProviderState.FETCHING
                 else -> LyricsProviderState.NOT_FETCHED
             }
@@ -3436,12 +3465,16 @@ fun BitChordDesktopApp() {
         val ambientBackdrop by DesktopAppearanceSettings.ambientBackdrop.collectAsState()
         val windowActions = LocalDesktopWindowActions.current
         val lyricsFont = desktopLyricsFont()
+        // The one menu the window can have open. It is drawn in the frame's overlay rather than
+        // in a popup, so the page behind it can be blurred.
+        val menuSlot = remember { DesktopMenuSlot() }
         CompositionLocalProvider(
             LocalContentColor provides Color.White,
             LocalNowPlaying provides selectedSong,
             // Every lyric sheet in the window — the home page's column, the player's own — reads
             // its face from here, because sharedUi cannot reach this module's resources.
             LocalLyricsFontFamily provides lyricsFont,
+            LocalDesktopMenuSlot provides menuSlot,
         ) {
             DesktopFrame(
                 // The phone's page is black, not the near-black of its cards.
@@ -3532,6 +3565,12 @@ fun BitChordDesktopApp() {
                         // One layer at a time, innermost first: the player's own side panel, then
                         // the player.
                         event.key == Key.Escape -> when {
+                            // The menu is drawn over the lot, so it is the first thing Esc puts
+                            // away.
+                            menuSlot.isOpen -> {
+                                menuSlot.onDismiss()
+                                true
+                            }
                             // The palette sits over everything, so it is the first thing Esc puts
                             // away.
                             overlays.quickSearch -> {
@@ -3663,6 +3702,9 @@ fun BitChordDesktopApp() {
                                 onSelectLyricsProvider = { source -> lyricsOnly = source.label },
                                 lyricsUnavailable = sharedLyricsUnavailable,
                                 onSeek = ::seekPlayer,
+                                onLineMeaning = { line ->
+                                    lyricMeaningRequest = DesktopLyricMeaningRequest(current, line)
+                                },
                                 modifier = Modifier.fillMaxSize(),
                             )
                             DesktopSidePanel.QUEUE -> QueueSidePanel(
@@ -3736,6 +3778,7 @@ fun BitChordDesktopApp() {
                                 persistence.saveString("volume", it.toString())
                             },
                             onOpenAudioOutput = { overlays.audioOutput = true },
+                            onOpenTrackInfo = { overlays.pipeline = true },
                             onOpenMenu = { playerMenuOpen = true },
                             menu = {
                                 if (playerMenuOpen) {
@@ -3825,6 +3868,9 @@ fun BitChordDesktopApp() {
                             lyricsProviderStates = providerStates,
                             onSelectLyricsProvider = { source -> lyricsOnly = source.label },
                             lyricsUnavailable = sharedLyricsUnavailable,
+                            onLineMeaning = { line ->
+                                lyricMeaningRequest = DesktopLyricMeaningRequest(playerSong, line)
+                            },
                             playerLyricsToggle = playerLyricsToggle,
                             playerQueueToggle = playerQueueToggle,
                             playerTranslateToggle = playerTranslateToggle,
@@ -3836,23 +3882,6 @@ fun BitChordDesktopApp() {
                             onDismiss = {
                                 DesktopWindowMode.exit()
                                 overlays.nowPlaying = false
-                            },
-                            // The window's right-click raises the same song menu the
-                            // player's "…" does, so the two paths cannot disagree
-                            // about where it belongs. Consumed on the initial pass so
-                            // the sheet's own gestures never see it.
-                            modifier = Modifier.pointerInput(Unit) {
-                                awaitPointerEventScope {
-                                    while (true) {
-                                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                                        if (event.type == PointerEventType.Press &&
-                                            event.buttons.isSecondaryPressed
-                                        ) {
-                                            playerMenuOpen = true
-                                            event.changes.forEach { it.consume() }
-                                        }
-                                    }
-                                }
                             },
                         )
                         val message by DesktopPlayerHost.messages.collectAsState()
@@ -4094,6 +4123,13 @@ fun BitChordDesktopApp() {
                     }
                     if (overlays.pipeline) {
                         trackInfoPanel { overlays.pipeline = false }
+                    }
+                    // Last of the overlays, so the menu sits above the page it blurs.
+                    DesktopMenuOverlay(menuSlot)
+                    // Above even the menu: a line's meaning is asked for, and takes the whole
+                    // window until it is dismissed.
+                    lyricMeaningRequest?.let { request ->
+                        DesktopLyricMeaningDialog(request, onDismiss = { lyricMeaningRequest = null })
                     }
                 },
             ) { contentPadding ->
@@ -5193,17 +5229,13 @@ private fun DesktopFrame(
             // floating bottom bar blurs the page scrolling under it.
             if (!glass) Box(Modifier.fillMaxSize().hazeSource(haze)) { backdrop(false) }
             Column(Modifier.fillMaxSize()) {
-                // Above everything, and outside the box the rest of the window is drawn in, because
-                // that is what a title bar is.
-                DesktopTitleBar()
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     BoxWithConstraints(Modifier.fillMaxSize()) {
                         val compact = maxWidth < 900.dp
-                        val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
                         Row(Modifier.fillMaxSize()) {
                             if (!compact) sidebar()
                             Column(Modifier.weight(1f).fillMaxHeight()) {
-                                if (compact && DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled) {
+                                if (compact && DesktopPlatform.drawsOwnWindowFrame) {
                                     DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(40.dp)) {
                                         Box(Modifier.fillMaxSize().padding(start = 10.dp), contentAlignment = Alignment.CenterStart) { DesktopWindowButtons() }
                                     }
@@ -6003,7 +6035,7 @@ private fun DesktopSettingsScreen(
                         }
                         if (settingsRowVisible(instantTitle, instantDetail)) {
                             Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                                SettingsBlockHeading(BitChordIcons.FastForward, instantTitle, instantValue)
+                                SettingsBlockHeading(BitChordIcons.TransportNext, instantTitle, instantValue)
                                 Spacer(Modifier.height(10.dp))
                                 DesktopBareSlider(
                                     value = instantSkipSeconds.toFloat(),
@@ -6026,7 +6058,7 @@ private fun DesktopSettingsScreen(
                             DesktopStrings["d_a_fixed_number_of_bars_beat_aligned", "A fixed number of bars, beat-aligned"]
                         if (settingsRowVisible(phraseTitle, phraseSubtitle)) {
                             Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                                SettingsBlockHeading(BitChordIcons.Ratio, phraseTitle, phraseSubtitle)
+                                SettingsBlockHeading(BitChordIcons.Ruler, phraseTitle, phraseSubtitle)
                                 Spacer(Modifier.height(10.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     listOf(0, 8, 16).forEach { bars ->
@@ -6087,7 +6119,7 @@ private fun DesktopSettingsScreen(
                         { DesktopSponsorBlock.setEnabled(it) },
                     )
                     SettingsToggle(
-                        BitChordIcons.TransportRepeatOne,
+                        BitChordIcons.RepeatOff,
                         DesktopStrings["d_dont_repeat_songs_in_current_session", "Don’t repeat songs in current session"],
                         DesktopStrings["d_autoplay_wont_repeat_a_song_from_this_session", "AutoPlay won’t repeat a song from this session"],
                         dontRepeatSuggestions,
@@ -6113,6 +6145,14 @@ private fun DesktopSettingsScreen(
                             DesktopStrings["d_keeps_the_spotlight_on_the_current_line", "Keeps the spotlight on the current line"],
                             lyricsBlur,
                             onLyricsBlurChange,
+                        )
+                        val lyricsBackground by DesktopLyricsBackgroundSetting.enabled.collectAsState()
+                        SettingsToggle(
+                            BitChordIcons.Clock,
+                            DesktopStrings["d_lyrics_background", "Keep lyrics running in background"],
+                            DesktopStrings["d_lyrics_background_sub", "The words keep moving while another window has focus"],
+                            lyricsBackground,
+                            DesktopLyricsBackgroundSetting::set,
                         )
                         SettingsNavigationRow(
                             BitChordIcons.Queue,
@@ -6220,18 +6260,6 @@ private fun DesktopSettingsScreen(
                         reduceDynamicBlur,
                         DesktopAppearanceSettings::setReduceDynamicBlur,
                     )
-                    // Window furniture belongs beside the visual settings it changes, rather than
-                    // interrupting playback controls. These rows remain Windows-only.
-                    if (DesktopPlatform.drawsOwnWindowFrame) {
-                        val titleBar by DesktopTitleBarSetting.enabled.collectAsState()
-                        SettingsToggle(
-                            BitChordIcons.Monitor,
-                            DesktopStrings["d_title_bar", "Title bar"],
-                            DesktopStrings["d_a_slim_bar_with_the_window_s_own_buttons", "A slim bar with the window's own buttons"],
-                            titleBar,
-                            DesktopTitleBarSetting::set,
-                        )
-                    }
                     if (DesktopWindowBackdrop.available) {
                         val backdropChoice by DesktopWindowBackdrop.selected.collectAsState()
                         val backdropActive by DesktopWindowBackdrop.active.collectAsState()
@@ -7130,18 +7158,22 @@ private fun DesktopCollectionPage(
                         )
                         if (credit.isNotBlank()) {
                             Spacer(Modifier.height(6.dp))
-                            Text(
-                                credit,
-                                Modifier.then(
-                                    if (onArtistClick != null) {
-                                        Modifier.clickable { onArtistClick(credit) }
-                                    } else Modifier,
-                                ),
-                                color = DesktopAccent,
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            if (onArtistClick != null) {
+                                CollectionNameLink(
+                                    credit,
+                                    onClick = { onArtistClick(credit) },
+                                    color = DesktopAccent,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                            } else {
+                                Text(
+                                    credit,
+                                    color = DesktopAccent,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                         if (metadata.isNotBlank()) {
                             Spacer(Modifier.height(8.dp))
@@ -7286,6 +7318,39 @@ private fun DesktopCollectionPage(
 private fun collectionActionsWidth(hasRemove: Boolean): Dp =
     if (hasRemove) 136.dp else 102.dp
 
+/**
+ * How far the pointer lifts a row's ground. Deliberately under the 0.08 state layer it replaces:
+ * the row was asked to stop shouting, not to go dark.
+ */
+private const val ROW_HOVER_ALPHA = 0.045f
+
+/**
+ * A name in a collection row that opens somewhere. Under the pointer it underlines the way the
+ * player's own credit line does, and the row around it keeps its ground.
+ */
+@Composable
+private fun CollectionNameLink(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    color: Color = DesktopSecondary,
+    style: TextStyle = LocalTextStyle.current,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Text(
+        text,
+        modifier
+            .hoverable(interaction)
+            .clickable(interaction, indication = null, onClick = onClick),
+        color = color,
+        style = style,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textDecoration = if (hovered) TextDecoration.Underline else null,
+    )
+}
+
 @Composable
 private fun DesktopCollectionSongRow(
     song: Song,
@@ -7306,14 +7371,23 @@ private fun DesktopCollectionSongRow(
     onAlbumClick: ((String, String) -> Unit)? = null,
 ) {
     val openContextMenu = LocalDesktopContextMenu.current
+    // The row lights up under the pointer, but only just: the name under it underlines, and a
+    // full state layer on top of a striped row read as a second, louder selection.
+    val rowInteraction = remember { MutableInteractionSource() }
+    val hovered by rowInteraction.collectIsHoveredAsState()
+    val hoverWash by animateFloatAsState(
+        targetValue = if (hovered) ROW_HOVER_ALPHA else 0f,
+        animationSpec = tween(140),
+        label = "collectionRowHover",
+    )
     Row(
         Modifier
             .fillMaxWidth()
             .contextClick { openContextMenu(song) }
             .clip(RoundedCornerShape(6.dp))
             .background(if (striped) Color.White.copy(alpha = 0.04f) else Color.Transparent)
-            .desktopHoverFill(corner = 6.dp)
-            .clickable { onClick(song) }
+            .background(Color.White.copy(alpha = hoverWash))
+            .clickable(interactionSource = rowInteraction, indication = null) { onClick(song) }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -7339,32 +7413,39 @@ private fun DesktopCollectionSongRow(
             overflow = TextOverflow.Ellipsis,
             fontWeight = FontWeight.Medium,
         )
-        Text(
-            song.artist,
-            Modifier.weight(0.20f).padding(horizontal = 8.dp)
-                .then(
-                    if (onArtistClick != null && song.artist.isNotBlank()) {
-                        Modifier.clickable { onArtistClick(song.artist) }
-                    } else Modifier,
-                ),
-            color = DesktopSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        // Every row of an album is on that album; the column would only repeat the page's title.
-        if (collectionType != BrowseType.ALBUM) {
+        if (onArtistClick != null && song.artist.isNotBlank()) {
+            CollectionNameLink(
+                song.artist,
+                onClick = { onArtistClick(song.artist) },
+                modifier = Modifier.weight(0.20f).padding(horizontal = 8.dp),
+            )
+        } else {
             Text(
-                song.albumName ?: "—",
-                Modifier.weight(0.25f).padding(horizontal = 8.dp)
-                    .then(
-                        if (onAlbumClick != null && !song.albumName.isNullOrBlank()) {
-                            Modifier.clickable { onAlbumClick(song.albumName.orEmpty(), song.artist) }
-                        } else Modifier,
-                    ),
+                song.artist,
+                Modifier.weight(0.20f).padding(horizontal = 8.dp),
                 color = DesktopSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        // Every row of an album is on that album; the column would only repeat the page's title.
+        if (collectionType != BrowseType.ALBUM) {
+            val album = song.albumName ?: "—"
+            if (onAlbumClick != null && !song.albumName.isNullOrBlank()) {
+                CollectionNameLink(
+                    album,
+                    onClick = { onAlbumClick(song.albumName.orEmpty(), song.artist) },
+                    modifier = Modifier.weight(0.25f).padding(horizontal = 8.dp),
+                )
+            } else {
+                Text(
+                    album,
+                    Modifier.weight(0.25f).padding(horizontal = 8.dp),
+                    color = DesktopSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         Text(
             song.durationText ?: "—",
@@ -7442,17 +7523,27 @@ internal fun Modifier.desktopBarGlass(shape: Shape): Modifier =
     desktopFrosted(DesktopBarGlass, tintAlpha = 0.55f).border(0.5.dp, DesktopBarEdge, shape)
 
 /**
- * A card a floating sheet is made of — a palette, a shortcuts list — with the window behind it
- * blurred rather than the sheet painted solid.
+ * A card a floating sheet is made of — a palette, a shortcuts list, a menu — with the window
+ * behind it blurred rather than the sheet painted solid.
  *
- * Only the two overlays the listener summons over the whole app use it. Every other card stays
- * solid: they sit over a page the reader has already chosen to leave, and a page of rows showing
- * through a menu is noise.
+ * Only what floats over the whole app uses it. Every other card stays solid: they sit over a page
+ * the reader has already chosen to leave, and a page of rows showing through a menu is noise.
  */
 @Composable
 internal fun Modifier.desktopGlassCard(shape: Shape): Modifier =
     clip(shape)
         .desktopFrosted(DesktopCardFill, tintAlpha = GLASS_CARD_TINT)
+        .border(0.5.dp, DesktopCardEdge, shape)
+
+/**
+ * The pane a menu is made of. The same glass as [desktopGlassCard], mixed thinner: a menu hangs
+ * over a page that is still the point of the screen, so the colour of what is behind it has to
+ * come through the blur rather than sit under a near-solid panel.
+ */
+@Composable
+internal fun Modifier.desktopMenuGlass(shape: Shape): Modifier =
+    clip(shape)
+        .desktopFrosted(DesktopCardFill, tintAlpha = MENU_GLASS_TINT)
         .border(0.5.dp, DesktopCardEdge, shape)
 
 /** The dim a sheet sits in, holding a blur of what is behind it rather than plain black. */
@@ -7472,6 +7563,9 @@ internal fun Modifier.desktopFrostedScrim(): Modifier {
 
 /** Dense enough that a column of rows over it stays readable, thin enough that the colour shows. */
 private const val GLASS_CARD_TINT = 0.78f
+
+/** A menu's mix: thinner again, because the row of text it carries is short and the blur is the point. */
+private const val MENU_GLASS_TINT = 0.62f
 
 /** The edge of a chrome pane that meets the page, and so has to dissolve into it. */
 internal enum class DesktopChromeEdge { NONE, BOTTOM, END }
@@ -7493,43 +7587,6 @@ internal fun Modifier.desktopChromeGlass(
     edge = edge,
     fade = fade,
 )
-
-/**
- * The window's own chrome — title bar, top bar, sidebar. Over Windows 11's Mica or Acrylic
- * ([DesktopWindowBackdrop]) it is a light dark tint and nothing else, so DWM's material shows
- * through; the in-app blur would paint the page's backdrop over it. Otherwise the in-app glass.
- *
- * No dissolve over the material: it would fade the tint out into bare material right where the
- * opaque page begins, a lighter stripe along the seam rather than a softer one.
- */
-@Composable
-internal fun Modifier.desktopWindowGlass(
-    edge: DesktopChromeEdge = DesktopChromeEdge.NONE,
-    fade: Float = 0.2f,
-): Modifier {
-    val backdrop by DesktopWindowBackdrop.active.collectAsState()
-    return if (backdrop == DesktopBackdrop.OFF) {
-        desktopChromeGlass(edge, fade)
-    } else {
-        val base = background(Color.Black.copy(alpha = WINDOW_GLASS_TINT))
-        if (DesktopPlatform.isMac && edge == DesktopChromeEdge.BOTTOM) {
-            base.drawBehind {
-                // Subtle liquid glass specular highlight along the top edge
-                drawLine(
-                    color = Color.White.copy(alpha = 0.08f),
-                    start = Offset(0f, 0f),
-                    end = Offset(size.width, 0f),
-                    strokeWidth = 1f,
-                )
-            }
-        } else {
-            base
-        }
-    }
-}
-
-/** Enough to keep white text readable over a bright wallpaper, little enough to let it through. */
-private const val WINDOW_GLASS_TINT = 0.28f
 
 /**
  * The separators in the window's chrome. Acrylic lets the wallpaper through bright, and the solid
@@ -7738,14 +7795,14 @@ internal object DesktopShelfRowChrome : ShelfRowChrome {
             ) { row() }
             DesktopShelfArrow(
                 alignment = Alignment.CenterStart,
-                icon = BitChordIcons.ChevronLeft,
+                forward = false,
                 description = DesktopStrings["d_scroll_left", "Scroll left"],
                 visible = hovered && state.canScrollBackward,
                 onClick = { page(forward = false) },
             )
             DesktopShelfArrow(
                 alignment = Alignment.CenterEnd,
-                icon = BitChordIcons.ChevronRight,
+                forward = true,
                 description = DesktopStrings["d_scroll_right", "Scroll right"],
                 visible = hovered && state.canScrollForward,
                 onClick = { page(forward = true) },
@@ -7763,10 +7820,16 @@ private val SHELF_FADE_WIDTH = 44.dp
 /** How far one notch of a horizontal scroll moves a shelf. */
 internal const val SHELF_WHEEL_STEP = 90f
 
+/**
+ * Apple's pager: a tall, soft capsule that sits on the row's edge, with a thin chevron cut into it.
+ * A filled disc with a heavy glyph reads as a button from another app; this is a quiet affordance
+ * that the artwork shows through.
+ */
 @Composable
 internal fun BoxScope.DesktopShelfArrow(
     alignment: Alignment,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    /** Right-hand arrow when true, left-hand when false. */
+    forward: Boolean,
     description: String,
     visible: Boolean,
     onClick: () -> Unit,
@@ -7775,17 +7838,36 @@ internal fun BoxScope.DesktopShelfArrow(
         visible = visible,
         enter = fadeIn(),
         exit = fadeOut(),
-        modifier = Modifier.align(alignment).padding(horizontal = 6.dp),
+        modifier = Modifier.align(alignment).padding(horizontal = 8.dp),
     ) {
         Box(
             Modifier
-                .size(34.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.55f))
+                .width(26.dp)
+                .height(46.dp)
+                .clip(RoundedCornerShape(percent = 50))
+                .background(Color.Black.copy(alpha = 0.34f))
+                .semantics { contentDescription = description }
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, description, tint = Color.White, modifier = Modifier.size(22.dp))
+            Canvas(Modifier.width(9.dp).height(16.dp)) {
+                val chevron = Path().apply {
+                    if (forward) {
+                        moveTo(0f, 0f)
+                        lineTo(size.width, size.height / 2f)
+                        lineTo(0f, size.height)
+                    } else {
+                        moveTo(size.width, 0f)
+                        lineTo(0f, size.height / 2f)
+                        lineTo(size.width, size.height)
+                    }
+                }
+                drawPath(
+                    chevron,
+                    Color.White.copy(alpha = 0.92f),
+                    style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+                )
+            }
         }
     }
 }

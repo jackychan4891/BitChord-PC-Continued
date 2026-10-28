@@ -245,19 +245,18 @@ data class LibraryGridSpec(val columns: Int, val cardWidth: Dp)
 /**
  * The narrowest a library grid card is let get before another column gives way.
  *
- * Deliberately the same 140.dp minimum the Local Music and Downloads grids pass
- * to `GridCells.Adaptive`, so a cover on a "Show all" page is the same size as
- * the same cover on those pages rather than noticeably smaller.
+ * The reference site's own measure: its library grid fills with 170-wide
+ * covers before it adds a column.
  */
-private val LIBRARY_GRID_MIN_CARD_WIDTH = 140.dp
+private val LIBRARY_GRID_MIN_CARD_WIDTH = 170.dp
 
 /** Gap between cards in a library grid, in both directions. */
-val LIBRARY_GRID_SPACING = 12.dp
+val LIBRARY_GRID_SPACING = 20.dp
 
 private const val LIBRARY_GRID_MIN_COLUMNS = 2
 
 /** Library shelves never grow past this many across, however wide the screen. */
-private const val LIBRARY_GRID_MAX_COLUMNS = 5
+private const val LIBRARY_GRID_MAX_COLUMNS = 6
 
 /**
  * How a Library shelf's full "Show all" page lays out as a grid, in

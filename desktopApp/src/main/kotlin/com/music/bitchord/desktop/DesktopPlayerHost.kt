@@ -176,6 +176,17 @@ internal object DesktopPlayerHost : PlayerHost {
  * The shared player's settings, as flows the desktop window feeds from its own
  * state. What the desktop has no setting for keeps the phone's default.
  */
+/** The lyric clock keeps running while another window has focus, for a lyric read off a second screen. */
+internal object DesktopLyricsBackgroundSetting {
+    private const val KEY = "lyrics_background"
+    private val persistence by lazy { DesktopPersistence() }
+    val enabled: MutableStateFlow<Boolean> = MutableStateFlow(persistence.boolean(KEY, false))
+    fun set(value: Boolean) {
+        persistence.saveBoolean(KEY, value)
+        enabled.value = value
+    }
+}
+
 internal object DesktopPlayerSettings : PlayerSettingsSource {
     private val persistence by lazy { DesktopPersistence() }
 
@@ -192,6 +203,7 @@ internal object DesktopPlayerSettings : PlayerSettingsSource {
     )
     override val legacyMeshGradient = MutableStateFlow(false)
     override val lyricsBlur = MutableStateFlow(true)
+    override val lyricsInBackground = DesktopLyricsBackgroundSetting.enabled
     override val lyricsClassic = DesktopAppearanceSettings.lyricsClassic
     override val lyricsOffsetMs = MutableStateFlow(
         persistence.int(KEY_LYRICS_OFFSET, 0).coerceIn(MIN_LYRICS_OFFSET_MS, MAX_LYRICS_OFFSET_MS),

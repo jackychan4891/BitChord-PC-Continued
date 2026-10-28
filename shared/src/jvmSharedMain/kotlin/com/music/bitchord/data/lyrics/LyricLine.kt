@@ -199,16 +199,14 @@ data class LyricLine(
      */
     fun isLifted(positionMs: Long): Boolean {
         val first = words.firstOrNull() ?: return false
-        if (positionMs <= first.startMs) return false
-        // A word animated letter by letter runs on past the ordinary fall — its
-        // last letter only starts moving as the word ends. Stopping at the fall
-        // would drop that letter back to the line mid-swell.
-        return positionMs < words.last().endMs + RISE_MS || isGrowing(positionMs)
+        // Everything sung stays off the line, so the row is drawn in its risen
+        // form from the first word onwards rather than only while it moves.
+        return positionMs > first.startMs
     }
 
     /**
      * The stretch of the song over which anything drawn for this line moves —
-     * the sweep, the lift and its settle, a held word's letters — from
+     * the sweep, the lift, a held word's letters — from
      * [animatesFromMs] to [animatesUntilMs]. Before it the line is drawn
      * unsung, after it sung and at rest, and either way exactly the same on
      * every frame.
@@ -224,7 +222,7 @@ data class LyricLine(
 
     /** See [animatesFromMs]. */
     val animatesUntilMs: Long by lazy(LazyThreadSafetyMode.NONE) {
-        val settled = words.lastOrNull()?.let { it.endMs + RISE_MS.toLong() } ?: endMs
+        val settled = words.lastOrNull()?.let { lineHoldEndMs + RISE_MS.toLong() } ?: endMs
         val grown = growingWords.maxOfOrNull { it.restsAtMs } ?: Long.MIN_VALUE
         maxOf(endMs, settled, grown)
     }
@@ -232,23 +230,29 @@ data class LyricLine(
     /**
      * How far the word covering [positionMs] has lifted, 0..1.
      *
-     * Apple Music's words don't only light up, they rise as they land and
-     * settle back once they are past — the lift travelling along the line is
-     * most of what separates singing from a bar sliding across the text.
+     * Apple Music's words don't only light up, they rise as they land — the
+     * lift travelling along the line is most of what separates singing from a
+     * bar sliding across the text.
      *
      * How high a word goes is set by how long it is held — see [liftHeight]:
      * patter barely leaves the line and a carried note goes all the way up,
      * the same "a note carried is worth more than a note rattled off" that
      * shapes the glow. It rises over its own length, so a quick word's small
-     * lift is also a quick one, and settles back over [RISE_MS] from its end.
+     * lift is also a quick one.
+     *
+     * A sung word then stays up for good: the line carries all of its risen
+     * words, which is what makes the row read as sung rather than as a bar
+     * sliding across the text. There is no settle back down.
      */
     fun wordLift(index: Int, positionMs: Long): Float {
         val word = words.getOrNull(index) ?: return 0f
         val riseMs = (word.endMs - word.startMs).toFloat().coerceIn(RISE_MIN_MS, RISE_MS)
         val rising = ((positionMs - word.startMs) / riseMs).coerceIn(0f, 1f)
-        val falling = (1f - (positionMs - word.endMs) / RISE_MS).coerceIn(0f, 1f)
-        return liftHeight(word) * smooth(minOf(rising, falling))
+        return liftHeight(word) * smooth(rising)
     }
+
+    /** Slack after [endMs] before the line stops reading the clock at all. */
+    val lineHoldEndMs: Long get() = endMs + LINE_HOLD_MS
 
     /**
      * Whether anything actually told us when the singing stops, rather than
@@ -316,19 +320,16 @@ data class LyricLine(
     }
 
     /**
-     * How much of a word's lift is left at [positionMs] — its full
-     * [liftHeight] while it is being sung, easing to 0 over [RISE_MS] once it
-     * is past. Carries the height so a letter-by-letter word comes to rest at
-     * exactly the lift [wordLift] hands it over to.
+     * The height a word comes to rest at — its full [liftHeight], held for
+     * good once the word is sung, so a letter-by-letter word lands at exactly
+     * the lift [wordLift] hands it over to.
      *
      * Split out of [wordLift] because a word animated letter by letter has its
-     * own way up but settles back down the same way every other word does; the
-     * fall is the half of the movement the two share.
+     * own way up while every word shares the height it finishes at.
      */
     fun wordFall(index: Int, positionMs: Long): Float {
         val word = words.getOrNull(index) ?: return 0f
-        val falling = (1f - (positionMs - word.endMs) / RISE_MS).coerceIn(0f, 1f)
-        return liftHeight(word) * smooth(falling)
+        return liftHeight(word)
     }
 
     /**
@@ -502,11 +503,14 @@ class CharGrowth {
     var bloom: Float = 0f
 }
 
-/** How long a word takes to rise, and to settle back down once it is past. */
+/** How long a word takes to rise. */
 private const val RISE_MS = 700f
 
 /** The quickest a word ever rises: a 90 ms syllable snapping up reads as a twitch. */
 private const val RISE_MIN_MS = 250f
+
+/** Slack the animation window keeps past the singing, so nothing freezes mid-move. */
+private const val LINE_HOLD_MS = 800L
 
 /**
  * How far up a word goes, as a share of the full lift, from how long it is held.

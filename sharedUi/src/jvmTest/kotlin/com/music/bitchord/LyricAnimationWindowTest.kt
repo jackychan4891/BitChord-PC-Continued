@@ -67,7 +67,10 @@ class LyricAnimationWindowTest {
             for (at in listOf(line.animatesUntilMs + 2, line.animatesUntilMs + 5_000, 600_000L)) {
                 assertEquals("'${line.text}' at $at", drawn, line.pictureAt(at))
             }
-            assertFalse(line.isLifted(line.animatesUntilMs + 1))
+            // Sung words stay off the line for good, so the row is still drawn
+            // in its risen form past the window — at a lift that no longer
+            // changes, which is what the stability checks above pin down.
+            assertTrue(line.isLifted(line.animatesUntilMs + 1))
             assertFalse(line.isGrowing(line.animatesUntilMs + 1))
         }
     }

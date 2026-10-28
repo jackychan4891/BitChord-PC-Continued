@@ -100,16 +100,25 @@ object DesktopLyricsClient {
      * which is how the player's provider picker asks for a specific source's answer.
      *
      * [onSourceStarted] and [onSourceResult] report each provider's race as it runs, so the song
-     * menu's provider drawer can show what each one turned up rather than only the winner. They
-     * fire off the IO dispatcher and only for a lookup that actually reaches the network — a cache
-     * hit or a local file's embedded words return at once and report nothing.
+     * menu's provider drawer can show what each one turned up rather than only the winner. The
+     * result callback is keyed by the provider's label — the name the rest of the desktop uses,
+     * and the only one the desktop's own providers have. Both fire off the IO dispatcher and only
+     * for a lookup that actually reaches the network: a cache hit or a local file's embedded words
+     * return at once and report nothing.
+     *
+     * [force] is the listener's own search rather than the track's automatic one. It reads no
+     * cache, asks every provider in the order instead of skipping the desktop's own when the shared
+     * race already won, and waits for a verdict from all of them rather than settling on the first
+     * answer. Writes the answer back over the entry. A typed title and artist is a new question,
+     * and a cached answer to the old one says nothing about it.
      */
     suspend fun lookup(
         song: Song,
         durationMs: Long = song.durationMillis(),
         only: String? = null,
+        force: Boolean = false,
         onSourceStarted: ((LyricsSource) -> Unit)? = null,
-        onSourceResult: ((LyricsSource, Boolean) -> Unit)? = null,
+        onSourceResult: ((String, Boolean) -> Unit)? = null,
     ): Result<DesktopLyrics> {
         val persistence = DesktopPersistence()
         // Off in Settings means no lookup at all rather than a lookup nobody sees.
@@ -129,12 +138,16 @@ object DesktopLyricsClient {
         // automatic answer and look as though the search had done nothing.
         val cacheKey = "${song.videoId}|$durationMs|${song.title}|${song.artist}|${only.orEmpty()}"
         // Reads reorder the map, so the access is guarded rather than the map being concurrent.
-        synchronized(cache) { cache[cacheKey] }
-            ?.takeIf { System.currentTimeMillis() - it.createdAt < CACHE_TTL_MS }?.let { return it.result }
+        if (!force) {
+            synchronized(cache) { cache[cacheKey] }
+                ?.takeIf { System.currentTimeMillis() - it.createdAt < CACHE_TTL_MS }
+                ?.let { return it.result }
+        }
 
         // A downloaded or local file carries its own words; asking servers for a string already
-        // on disk is a round trip, and it is why a download showed nothing offline.
-        val embedded = if (only == null) embedded(song) else null
+        // on disk is a round trip, and it is why a download showed nothing offline. A forced search
+        // skips them: the embedded words are the automatic answer the listener is searching past.
+        val embedded = if (only == null && !force) embedded(song) else null
         val result = if (embedded != null) {
             Result.success(DesktopLyrics("Downloaded", embedded))
         } else {
@@ -147,21 +160,31 @@ object DesktopLyricsClient {
                 sources = sharedAsked.toSet(),
                 order = sharedAsked,
                 prioritizeSyllableSync = persistence.boolean(KEY_PRIORITIZE_SYLLABLES, false),
+                // The listener's own search is the one place every provider has
+                // to answer: the point of typing a title and artist is to see
+                // who has the song under those words, not who got there first.
+                awaitAllSources = force,
                 onSourceStarted = onSourceStarted,
-                onSourceResult = { source, result -> onSourceResult?.invoke(source, result != null) },
+                onSourceResult = { source, result -> onSourceResult?.invoke(source.label, result != null) },
             )
             var answer = found?.let { DesktopLyrics(it.source.label, it.lines) }
             // The desktop's own providers are asked only when one of them sits ahead of whatever
             // the shared race settled on. Asking them always would put two more round trips in
-            // front of every track change to win a song the top of the list already had.
+            // front of every track change to win a song the top of the list already had. A forced
+            // search asks them all, since the point of it is to see what every provider makes of
+            // the typed words.
             var beat = answer?.let { asked.indexOf(it.source) }?.takeIf { it >= 0 } ?: asked.size
+            if (force) beat = asked.size
             for (index in 0 until beat) {
                 val name = asked[index]
                 if (name !in DesktopExtraLyrics.names) continue
                 val lines = DesktopExtraLyrics.lyrics(name, song.title, song.artist, durationMs, song.albumName)
-                if (lines != null) {
+                onSourceResult?.invoke(name, lines != null)
+                // Ahead of the held answer in the order means it wins; behind it means it is
+                // reported and left where it is.
+                val held = answer
+                if (lines != null && (held == null || index < asked.indexOf(held.source))) {
                     answer = DesktopLyrics(name, lines)
-                    break
                 }
             }
             answer?.let { Result.success(it) } ?: Result.failure(IllegalStateException("Lyrics unavailable"))

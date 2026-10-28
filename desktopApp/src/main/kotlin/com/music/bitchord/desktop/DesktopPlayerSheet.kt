@@ -15,7 +15,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.Dp
+import dev.chrisbanes.haze.hazeSource
 
 /**
  * The web overlay's own entrance: the full player fades in over 300ms while it
@@ -49,7 +52,26 @@ internal fun DesktopPlayerSheet(
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // A source of the window's glass as well as a sheet: the player covers the page, so a menu
+    // opened over it has to blur the player, not the page it has hidden. The sheet carries no
+    // effect of its own, so it can be sampled without feeding back into itself.
+    val haze = LocalDesktopHaze.current
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            // The player covers the window, so nothing under it may hear the pointer:
+            // without this node the sheet's empty space is see-through for clicks and
+            // the page beneath navigates from under the player. Children take their
+            // own events first — this only consumes what is left over.
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Main).changes.forEach { it.consume() }
+                    }
+                }
+            }
+            .then(if (haze != null) Modifier.hazeSource(haze) else Modifier),
+    ) {
         val windowWidth = maxWidth
         val windowHeight = maxHeight
         Box(

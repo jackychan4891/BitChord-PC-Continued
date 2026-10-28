@@ -379,6 +379,18 @@ data class HomeShelf(
     val subtitle: String = "",
     val moreBrowseId: String? = null,
     val moreParams: String? = null,
+    /**
+     * The source's own cell kind when it names one — Apple's `itemKind`, which is what decides
+     * whether the row is covers, stills, song lines or editorial tiles. Blank for a source that
+     * has no such notion.
+     */
+    val layout: String = "",
+    /**
+     * How many rows the source itself lays this shelf out in — Apple's
+     * `presentation.layout.numberOfRows`. Four for a run of songs, two for the shelves that stack
+     * two deep, one for a shelf that only runs sideways.
+     */
+    val rows: Int = 1,
 )
 
 /**

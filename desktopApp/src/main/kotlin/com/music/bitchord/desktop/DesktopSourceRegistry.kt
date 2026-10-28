@@ -411,10 +411,22 @@ internal object DesktopSourceRegistry {
         song: Song,
         quality: String?,
     ): Deferred<DesktopStream?>? {
-        if (playing.format.isLossless) return null
+        val chasingAtmos = wantsAtmos() && !playing.format.isDolbyAtmos
+        // A lossless copy settles the quality question, but not the mix one: with Atmos
+        // wanted, a FLAC is still worth a look for the immersive version of the same
+        // recording — see [worthSwapping].
+        if (playing.format.isLossless && !chasingAtmos) return null
         val winnerRank = configs().firstOrNull { it.id == playing.sourceId }?.kind?.rank
             ?: DesktopSourceKind.YOUTUBE.rank
-        val better = candidates.filter { it.config.kind.rank < winnerRank }
+        val better = if (chasingAtmos) {
+            // Atmos is not a rung, so where the winner sits in the walk says nothing
+            // about whether a catalogue holds the mix — a sibling on the same rung was
+            // never asked at all, which is how a FLAC from one module kept the other
+            // module's Atmos copy unheard. Every source except the one now playing.
+            candidates.filter { it.config.id != playing.sourceId }
+        } else {
+            candidates.filter { it.config.kind.rank < winnerRank }
+        }
         if (better.isEmpty()) return null
         DesktopTrackLog.log(
             "still looking for a better copy of '${song.title}' from " +
@@ -436,15 +448,47 @@ internal object DesktopSourceRegistry {
                 async { openBest(source, song, quality) }
             }
             .toMutableList()
+        val atmosWanted = wantsAtmos()
+        var held: DesktopStream? = null
+        var graceEndsAt = 0L
         try {
             while (running.isNotEmpty()) {
-                val done = select<Deferred<DesktopStream?>> {
-                    running.forEach { candidate -> candidate.onAwait { candidate } }
+                val done = if (held == null) {
+                    select<Deferred<DesktopStream?>> {
+                        running.forEach { candidate -> candidate.onAwait { candidate } }
+                    }
+                } else {
+                    // Whoever answered first is a fallback now, not the answer: give the
+                    // remaining sources a moment to mint the immersive copy before handing
+                    // a stereo one back.
+                    val left = graceEndsAt - System.currentTimeMillis()
+                    if (left <= 0L) break
+                    withTimeoutOrNull(left) {
+                        select<Deferred<DesktopStream?>> {
+                            running.forEach { candidate -> candidate.onAwait { candidate } }
+                        }
+                    } ?: break
                 }
                 running -= done
-                done.await()?.let { return@coroutineScope it }
+                val stream = done.await() ?: continue
+                // Atmos is a mix, not a rung: a stereo copy that arrives first — usually a
+                // FLAC from a catalogue that has no immersive version at all — must not shut
+                // out the Atmos answer another source is still preparing for the same track.
+                if (!atmosWanted || stream.isDolbyAtmos || stream.format.isDolbyAtmos) {
+                    return@coroutineScope stream
+                }
+                if (held == null) {
+                    held = stream
+                    graceEndsAt = System.currentTimeMillis() + ATMOS_GRACE_MS
+                    DesktopTrackLog.log(
+                        "holding ${stream.format.summary.ifBlank { "a stereo copy" }} of " +
+                            "'${song.title}' while the other sources look for Dolby Atmos",
+                    )
+                } else {
+                    held = betterOf(held, stream)
+                }
             }
-            null
+            held
         } finally {
             running.forEach { it.cancel() }
         }
@@ -452,6 +496,11 @@ internal object DesktopSourceRegistry {
 
     /** Whether a copy found after the fact is worth interrupting playback for. */
     internal fun worthSwapping(candidate: DesktopStreamFormat, playing: DesktopStreamFormat?): Boolean {
+        // Nothing takes a listener off the mix they asked for, and nothing ever swaps one
+        // lossless copy for a worse one — hunt as often as the sources allow.
+        if (playing?.isDolbyAtmos == true && !candidate.isDolbyAtmos) return false
+        if (candidate.isDolbyAtmos) return true
+        if (playing?.isLossless == true && !candidate.isLossless) return false
         if (candidate.isLossless) return true
         val gain = (candidate.kbps ?: return false) - (playing?.kbps ?: return false)
         return gain >= UPGRADE_MIN_GAIN_KBPS
@@ -472,14 +521,18 @@ internal object DesktopSourceRegistry {
         // This is an explicit second look. Empty catalogue answers and failed/expired stream URLs
         // from the first pass must not make the retry a cache hit.
         DesktopAddonSource.clearCompletedTrackCalls()
+        val chasingAtmos = wantsAtmos() && playing?.format?.isDolbyAtmos != true
         val playingRank = configs().firstOrNull { it.id == playing?.sourceId }?.kind?.rank
             ?: DesktopSourceKind.YOUTUBE.rank
         // A named source is asked for the better copy, and nothing else is: an upgrade that arrives
         // from a source the listener just turned down is not an upgrade they asked for.
         val chosen = DesktopSourcePins.of(song.videoId)
         val better = playbackAdapters(quality).filter {
-            it.config.kind != DesktopSourceKind.YOUTUBE && it.config.kind.rank < playingRank &&
-                (chosen == null || it.config.id == chosen)
+            it.config.kind != DesktopSourceKind.YOUTUBE && it.config.id != playing?.sourceId &&
+                (chosen == null || it.config.id == chosen) &&
+                // The immersive mix is asked of every other source, whatever its rung: the
+                // question is which catalogue holds it, not which one ranks higher.
+                (chasingAtmos || it.config.kind.rank < playingRank)
         }
         if (better.isEmpty()) return null
         DesktopTrackLog.log(
@@ -539,17 +592,28 @@ internal object DesktopSourceRegistry {
     internal fun preferred(matches: List<Song>, target: Song, wantsLossless: Boolean): List<Song> {
         val sameLength = matches.filter { DesktopTrackMatcher.withinSeconds(it, target, SAME_RECORDING_SEC) }
         val eligible = sameLength.ifEmpty { matches }
-        if (!wantsLossless) return eligible
-        // An Atmos row outranks a plain lossless one only while Atmos is actually wanted: with the
-        // switch off, [playableHere] refuses it, and three Atmos rows in front would spend the
-        // whole attempt budget before the FLAC behind them is opened.
-        val atmosFirst = DesktopCodecs.supportsDolbyAtmos && DesktopAddonSettings.dolbyAtmosEnabled
+        // An immersive mix is only ever a row. A catalogue may publish Atmos as its own
+        // entry rather than as an alternate rendition of the stereo one, in which case no
+        // `?atmos=` hint on the stereo row can ever reach it — choosing the row *is* the
+        // way to hear it, which makes it the first question asked, ahead of any rung.
+        val ranked = if (wantsAtmos()) {
+            val immersiveFirst = eligible.sortedByDescending { it.sourceQuality == DesktopModuleSource.DOLBY }
+            if (immersiveFirst.first().sourceQuality == DesktopModuleSource.DOLBY) return immersiveFirst
+            eligible
+        } else {
+            // With the switch off they cannot be played at all, and three of them in front
+            // would spend the whole attempt budget before [playableHere] let the FLAC
+            // behind them through.
+            eligible.sortedBy { it.sourceQuality == DesktopModuleSource.DOLBY }
+        }
+        if (!wantsLossless) return ranked
         // Stable, so the confidence order the matcher produced survives inside each tier.
-        return eligible.sortedWith(
-            compareByDescending<Song> { atmosFirst && it.sourceQuality == DesktopModuleSource.DOLBY }
-                .thenByDescending { it.sourceQuality == DesktopModuleSource.LOSSLESS },
-        )
+        return ranked.sortedByDescending { it.sourceQuality == DesktopModuleSource.LOSSLESS }
     }
+
+    /** Whether an immersive mix should be preferred right now. */
+    internal fun wantsAtmos(): Boolean =
+        DesktopCodecs.supportsDolbyAtmos && DesktopAddonSettings.dolbyAtmosEnabled
 
     /** Which of two renditions of the same recording is the better one. */
     private fun betterOf(current: DesktopStream?, candidate: DesktopStream): DesktopStream {
@@ -564,14 +628,17 @@ internal object DesktopSourceRegistry {
     }
 
     private fun playableHere(source: SourceAdapter, stream: DesktopStream): Boolean {
-        if (stream.isDolbyAtmos && !DesktopCodecs.supportsDolbyAtmos) {
+        // Both flags, because a rendition can announce itself either way: an addon states
+        // `atmos`, while a module's E-AC-3 is only ever visible in the codec it named.
+        val atmos = stream.isDolbyAtmos || stream.format.isDolbyAtmos
+        if (atmos && !DesktopCodecs.supportsDolbyAtmos) {
             DesktopTrackLog.log(
                 "${source.descriptor.name} offered a Dolby Atmos rendition, " +
                     "which this build has no E-AC-3 decoder for",
             )
             return false
         }
-        if (stream.isDolbyAtmos && !DesktopAddonSettings.dolbyAtmosEnabled) {
+        if (atmos && !DesktopAddonSettings.dolbyAtmosEnabled) {
             DesktopTrackLog.log(
                 "${source.descriptor.name} offered a Dolby Atmos rendition, which is switched off",
             )
@@ -610,6 +677,15 @@ internal object DesktopSourceRegistry {
 
     /** The smallest bitrate gain worth a break in the audio for. */
     private const val UPGRADE_MIN_GAIN_KBPS = 96
+
+    /**
+     * How long a stereo copy is held while the other sources still look for the Atmos mix.
+     *
+     * A catalogue that has Atmos answers in about a second once its module is warm, and the
+     * copy held here is only ever a fallback — YouTube is already playing by this point — so
+     * the wait costs nothing a listener can hear, while skipping it costs them the mix.
+     */
+    private const val ATMOS_GRACE_MS = 2_500L
 
     /** The ceiling a call is made under: an explicit override, else the stored rung. */
     internal fun ceiling(qualityOverride: String?): DesktopAudioQuality =

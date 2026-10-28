@@ -60,6 +60,12 @@ fun LyricsSidePanel(
     onSelectLyricsProvider: (LyricsSource) -> Unit,
     lyricsUnavailable: Boolean,
     onSeek: (Long) -> Unit,
+    /**
+     * Right-click on a line: what the annotation service says it means. The window supplies this
+     * because only it can reach the service; a host without one passes null and lines keep their
+     * plain tap.
+     */
+    onLineMeaning: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
     /**
      * How far above the column's middle the sung line rests. The column that
@@ -189,6 +195,7 @@ fun LyricsSidePanel(
                         looking = !lyricsUnavailable,
                         isPlaying = isPlaying && position.advancing,
                         onSeekToLine = seekToLyric,
+                        onLineMeaning = onLineMeaning,
                         controlsOpen = true,
                         onRevealControls = {},
                         onHideControls = {},

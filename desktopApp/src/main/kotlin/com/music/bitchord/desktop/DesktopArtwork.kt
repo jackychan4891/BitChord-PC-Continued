@@ -6,12 +6,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.Image
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
@@ -175,7 +179,15 @@ internal fun String?.desktopArtworkAt(px: Int): String? {
     return artworkAt(px)
 }
 
-/** Artwork, fetched at the size the surface drawing it actually needs. */
+/**
+ * Artwork, fetched at the size the surface drawing it actually needs.
+ *
+ * [px] is a floor, not the answer. A row's tiles are laid out as fractions of the window, so the
+ * same shelf is 180 px wide in one window and 320 in another, and the fixed hint it used to carry
+ * was under the cover it filled whenever the window was wide or the display was scaled — the soft
+ * artwork that shows up on the wide rows. The box now measures itself and asks for at least the
+ * pixels it is drawn at, rounded up to a hundred so a resize by a few pixels does not refetch.
+ */
 @Composable
 fun DesktopArtwork(
     url: String?,
@@ -184,22 +196,33 @@ fun DesktopArtwork(
     contentDescription: String? = null,
     px: Int? = null,
 ) {
-    val sized = if (px != null) url.desktopArtworkAt(px) else url
+    var drawnPx by remember { mutableIntStateOf(0) }
+    val wanted = px?.let { hint -> maxOf(hint, drawnPx) }
+    val sized = if (wanted != null) url.desktopArtworkAt(wanted) else url
     val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = sized) {
         value = withContext(Dispatchers.IO) {
             DesktopArtworkCache.load(sized)
         }
     }
+    val measured = modifier.onSizeChanged { size ->
+        val edge = maxOf(size.width, size.height)
+        val next = (((edge + 99) / 100) * 100).coerceIn(100, MAX_ARTWORK_PX)
+        // Only ever up: a cover that shrinks back keeps the sharp copy it already has.
+        if (next > drawnPx) drawnPx = next
+    }
     if (bitmap == null) {
         // Translucent rather than an opaque dark plate: with the ambient artwork glow on, a filled
         // square waiting for its bytes reads as a black border around nothing.
-        Box(modifier.background(Color.White.copy(alpha = 0.06f)))
+        Box(measured.background(Color.White.copy(alpha = 0.06f)))
     } else {
         Image(
             painter = BitmapPainter(bitmap!!),
             contentDescription = contentDescription,
             contentScale = contentScale,
-            modifier = modifier,
+            modifier = measured,
         )
     }
 }
+
+/** Past this the CDN's own top size stops buying anything a window can show. */
+private const val MAX_ARTWORK_PX = 1_600

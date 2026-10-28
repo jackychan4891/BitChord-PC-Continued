@@ -23,6 +23,7 @@ with Apple Music's layout, lossless sources, beat-matched Automix and word-synce
 <a href="https://github.com/jackychan4891/BitChord-PC-Continued/releases/latest"><img src="https://img.shields.io/badge/Download_for_Windows-Installer-8b5cf6?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download for Windows" height="46" /></a>
 <a href="https://github.com/jackychan4891/BitChord-PC-Continued/releases"><img src="https://img.shields.io/badge/All_Releases-Archive-0d1117?style=for-the-badge&logo=github&logoColor=white" alt="All releases" height="46" /></a>
 <a href="https://github.com/jackychan4891/BitChord-PC-Continued/issues"><img src="https://img.shields.io/badge/Report_an_Issue-Bug_Reports-0d1117?style=for-the-badge&logo=githubissues&logoColor=white" alt="Report an issue" height="46" /></a>
+<a href="https://discord.gg/cWQSGjpXM"><img src="https://img.shields.io/badge/Join_the_Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white&labelColor=0d1117" alt="Join the Discord" height="46" /></a>
 
 <br/>
 
@@ -33,6 +34,10 @@ with Apple Music's layout, lossless sources, beat-matched Automix and word-synce
 > [!IMPORTANT]
 > BitChord is not affiliated with, endorsed by, or connected to YouTube, Google or Apple.
 > Use it at your own discretion.
+
+> [!TIP]
+> Need help, want to hear about new releases first, or say what should come next?
+> [Join the Discord server](https://discord.gg/cWQSGjpXM).
 
 ---
 
@@ -47,11 +52,11 @@ with Apple Music's layout, lossless sources, beat-matched Automix and word-synce
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/lyrics.png" alt="Full-screen player with synced lyrics" /></td>
-    <td width="50%"><img src="docs/screenshots/charts.png" alt="Apple Music-style charts page" /></td>
+    <td width="50%"><img src="docs/screenshots/deck.png" alt="Turntable artwork mode" /></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Full-screen player</b> — artwork, live lyrics, lossless badge</sub></td>
-    <td align="center"><sub><b>Browse</b> — daily charts, city charts, set lists</sub></td>
+    <td align="center"><sub><b>Synced lyrics</b> — the sung line holds the anchor, the rest blurs away</sub></td>
+    <td align="center"><sub><b>Turntable</b> — the sleeve becomes a spinning record</sub></td>
   </tr>
 </table>
 

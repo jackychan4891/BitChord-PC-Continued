@@ -2,12 +2,13 @@ package com.music.bitchord.playback.smart
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The fixed-length phrase mode: when the listener picks 8 or 16 bars, the overlap is exactly that
- * many bars of the outgoing grid with both edges on the beat, and picking nothing (0) leaves the
- * adaptive plan untouched.
+ * The phrase mode: when the listener picks 8 or 16 bars, the overlap is exactly that many bars of
+ * the outgoing grid with both edges on the beat. Picking nothing (0) leaves the length to the
+ * planner, which now tries a phrase of its own before falling back to the adaptive sizes.
  */
 class PhraseBarAutomixTest {
 
@@ -98,20 +99,53 @@ class PhraseBarAutomixTest {
     }
 
     @Test
-    fun choosingNothingLeavesTheAdaptivePlanUntouched() {
+    fun anAutomaticMixTakesTheLongPhraseWhenThePairCanShareOne() {
         val current = track("a", 120.0, "C major", vocal = 0.1)
-        val next = track("b", 110.0, "G major", vocal = 0.1)
-        val adaptive = planTransition(
+        val next = track("b", 120.0, "C major", vocal = 0.1)
+        val plan = plan(current, next, phraseBars = 0)
+
+        assertEquals("before-auto-phrase-16-bar", plan.reason)
+        val bars = plan.fadeSeconds / (4 * (60.0 / 120.0))
+        assertEquals(16.0, bars, 1e-6, "overlap of $bars bars")
+    }
+
+    @Test
+    fun anAutomaticMixDropsToEightBarsWhenSixteenWouldStretchTheTempo() {
+        val current = track("a", 120.0, "C major", vocal = 0.1)
+        val next = track("b", 111.0, "C major", vocal = 0.1)
+        val plan = plan(current, next, phraseBars = 0)
+
+        assertEquals("before-auto-phrase-8-bar", plan.reason)
+        assertEquals(16.0, plan.fadeSeconds, 1e-6, "8 bars of 4/4 at 120 BPM")
+    }
+
+    @Test
+    fun anAutomaticMixKeepsTheAdaptiveShapeAcrossATempoItCannotLock() {
+        val current = track("a", 120.0, "C major", vocal = 0.1)
+        val next = track("b", 97.0, "C major", vocal = 0.1)
+        val plan = plan(current, next, phraseBars = 0)
+
+        assertEquals(1.0, plan.incomingPlaybackRate, "no deck is asked to stretch for a phrase")
+        assertFalse(plan.reason.contains("phrase"), "no phrase across a 24% gap: ${plan.reason}")
+    }
+
+    @Test
+    fun anAutomaticMixFallsThroughOnceThePhraseHasPassed() {
+        val current = track("a", 120.0, "C major", vocal = 0.1)
+        val next = track("b", 120.0, "C major", vocal = 0.1)
+        // The playhead is already past the phrase's whole window, so there is nothing left to land.
+        val plan = planTransition(
             analysis = current,
             nextAnalysis = next,
             currentTrack = TransitionTrackInfo("a", 200_000),
             nextTrack = TransitionTrackInfo("b", 200_000),
-            currentTime = 10.0,
+            currentTime = 198.0,
             duration = 200.0,
             mode = CrossfadeMode.SMART,
             advanced = true,
+            phraseBars = 0,
         )
-        assertEquals(adaptive, plan(current, next, phraseBars = 0))
+        assertFalse(plan.reason.contains("auto-phrase"), "the phrase window is gone: ${plan.reason}")
     }
 
     private companion object {

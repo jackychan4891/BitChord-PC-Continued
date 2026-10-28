@@ -81,8 +81,7 @@ internal fun DesktopAppleSidebar(
     canGoBack: Boolean,
     onBack: () -> Unit,
 ) {
-    val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
-    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled
+    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame
     val hidden by DesktopSidebarVisibility.hidden.collectAsState()
     val collapsed by DesktopSidebarVisibility.collapsed.collectAsState()
     // The copy below comes from DesktopStrings rather than Compose resources, so nothing in this
@@ -153,13 +152,11 @@ internal fun DesktopAppleSidebar(
             AppleScrollbarBox(playlistsState, Modifier.fillMaxWidth().weight(1f)) {
                 LazyColumn(Modifier.fillMaxSize(), state = playlistsState, contentPadding = PaddingValues(bottom = 12.dp)) {
                     items(accountPlaylists.filterNot { "account:${it.browseId}" in hidden }, key = { "account:${it.browseId}" }) { playlist ->
-                        DesktopSidebarItem(BitChordIcons.ListVideo, playlist.title, openedCollectionId == playlist.browseId,
-                            iconSize = DesktopLucideGlyph,
+                        DesktopSidebarItem(BitChordIcons.Playlist, playlist.title, openedCollectionId == playlist.browseId,
                             onHide = { DesktopSidebarVisibility.hide("account:${playlist.browseId}", playlist.title) }) { onOpenAccountPlaylist(playlist) }
                     }
                     items(localPlaylists.filterNot { "local:${it.id}" in hidden }, key = { "local:${it.id}" }) { playlist ->
-                        DesktopSidebarItem(BitChordIcons.ListVideo, playlist.title, openedCollectionId == playlist.id,
-                            iconSize = DesktopLucideGlyph,
+                        DesktopSidebarItem(BitChordIcons.Playlist, playlist.title, openedCollectionId == playlist.id,
                             onHide = { DesktopSidebarVisibility.hide("local:${playlist.id}", playlist.title) }) { onOpenLocalPlaylist(playlist) }
                     }
                 }
@@ -240,8 +237,7 @@ private fun DesktopAppleSidebarRail(
     onOpenSettings: () -> Unit,
     onOpenAccounts: () -> Unit,
 ) {
-    val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
-    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled
+    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame
     DesktopStrings.language.collectAsState()
     Column(
         Modifier.width(72.dp).fillMaxHeight().background(Color(0x99262628))

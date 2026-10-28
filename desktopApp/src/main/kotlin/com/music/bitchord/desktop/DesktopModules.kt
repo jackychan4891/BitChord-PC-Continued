@@ -524,7 +524,13 @@ internal object DesktopModuleSource {
                 bitDepth = meta?.bitDepth,
             )
             check(!malformed(url)) { "Module returned an invalid stream URL" }
-            DesktopStream(url, format, response.headers, sourceId = config.id)
+            DesktopStream(
+                url,
+                format,
+                response.headers,
+                sourceId = config.id,
+                isDolbyAtmos = format.isDolbyAtmos,
+            )
         }
     }
 
@@ -617,6 +623,13 @@ internal object DesktopModuleSource {
             if (quality.isNotBlank()) {
                 put("fallbackMode", buildJsonObject { put("value", if (strict) "strict" else "flexible") })
             }
+            // Which mix, not which rung: `LOSSLESS` says the bytes must be bit-exact and
+            // Atmos is not bit-exact, so a module reading only the tier has to guess — and
+            // guessing FLAC is how an Atmos request came back as a stereo FLAC. Android
+            // sends the same key on every module call.
+            put("dolbyAtmos", buildJsonObject {
+                put("value", DesktopSourceRegistry.wantsAtmos().toString())
+            })
         })
     }.toString())
 
@@ -643,9 +656,20 @@ internal object DesktopModuleSource {
     private fun codecOf(mime: String?, quality: String?, url: String): String? =
         mime?.substringAfterLast('/')?.substringBefore(';')?.lowercase(Locale.ROOT)
             ?.takeIf(String::isNotBlank)
-            ?: if (qualityTier(quality.orEmpty()) == LOSSLESS) "flac"
-            else url.substringBefore('?').substringAfterLast('.')
-                .lowercase(Locale.ROOT).takeIf { it in AUDIO_EXTENSIONS }
+            ?: run {
+                // A module that answers with the immersive rendition names it in the quality
+                // label as often as in a mime type — "Dolby Atmos", "EAC3_JOC", "EC-3" — and
+                // reading only `audio/mp4` there made an Atmos stream look like plain AAC.
+                val qualityText = quality.orEmpty().uppercase(Locale.ROOT)
+                if ("ATMOS" in qualityText || "EAC3_JOC" in qualityText || "EC-3" in qualityText) {
+                    "eac3-joc"
+                } else if (qualityTier(quality.orEmpty()) == LOSSLESS) {
+                    "flac"
+                } else {
+                    url.substringBefore('?').substringAfterLast('.')
+                        .lowercase(Locale.ROOT).takeIf { it in AUDIO_EXTENSIONS }
+                }
+            }
 
     private fun bitrateOf(quality: String?, url: String): Int? {
         val text = "${quality.orEmpty()} $url"

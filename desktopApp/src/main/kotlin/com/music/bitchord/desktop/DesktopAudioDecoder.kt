@@ -226,11 +226,18 @@ internal class DesktopAudioDecoder : DesktopSampleSource {
             parameters.codec_type() == AVMEDIA_TYPE_AUDIO && avcodec_find_decoder(parameters.codec_id()) != null
         }
         if (audio.size < 2) return null
+        // The immersive mix is a different mix, not a rung: when it is wanted and the
+        // manifest lists it, it is the rendition to open — a FLAC beside it is the stereo
+        // answer to a question about Atmos. With the switch off the E-AC-3 ranks like any
+        // other lossy stream and the lossless one wins, as before.
+        val atmosFirst = DesktopCodecs.supportsDolbyAtmos && DesktopAddonSettings.dolbyAtmosEnabled
         return audio.maxWithOrNull(
             compareBy<Int> { i ->
                 val name = avcodec_get_name(container.streams(i).codecpar().codec_id())?.string
-                DesktopStreamFormat(codec = name).isLossless
-            }.thenBy { i -> renditionBitrate(container, i) },
+                val format = DesktopStreamFormat(codec = name)
+                atmosFirst && format.isDolbyAtmos
+            }.thenBy { i -> DesktopStreamFormat(codec = avcodec_get_name(container.streams(i).codecpar().codec_id())?.string).isLossless }
+                .thenBy { i -> renditionBitrate(container, i) },
         )
     }
 

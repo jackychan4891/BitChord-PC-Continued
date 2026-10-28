@@ -400,16 +400,27 @@ class DesktopPlaybackEngine(
                 // trade is that the better copy arrives a few seconds after the blend rather than
                 // being installed mid-fade — which the audio thread defers anyway.
                 awaitMixEnd()
-                if (take(song, runCatching { pending.await() }.getOrNull())) return@launch
+                // The pending copy is taken, but it is not the last word: when Atmos is on, a
+                // lossless stereo copy leaves the mix question open, and the loop below asks
+                // the other sources for the immersive version of the same recording.
+                val pendingStream = runCatching { pending.await() }.getOrNull()
+                val pendingAtmos = pendingStream != null &&
+                    (pendingStream.isDolbyAtmos || pendingStream.format.isDolbyAtmos)
+                take(song, pendingStream)
+                if (pendingAtmos) return@launch
                 // The live race takes the first copy that beats YouTube, so a slower lossless
                 // source can still be searching when a lossy one wins — and a source that failed
                 // that minute may answer properly now. Android asks again; so does this.
                 repeat(LOSSLESS_FOLLOW_UPS) {
                     val current = _state.value
                     if (current.song?.videoId != song.videoId) return@launch
-                    if (current.streamFormat?.isLossless == true) return@launch
                     if (current.streamFormat?.isDolbyAtmos == true) return@launch
-                    if (DesktopMusicSources.ceiling(null) != DesktopAudioQuality.LOSSLESS) return@launch
+                    // A lossless copy settles the quality question but not the mix one: with
+                    // Atmos on, the immersive version of the same recording is still worth
+                    // asking for, and a FLAC is exactly what it replaces.
+                    val atmosWanted = DesktopMusicSources.wantsAtmos()
+                    if (!atmosWanted && current.streamFormat?.isLossless == true) return@launch
+                    if (!atmosWanted && DesktopMusicSources.ceiling(null) != DesktopAudioQuality.LOSSLESS) return@launch
                     awaitMixEnd()
                     if (_state.value.song?.videoId != song.videoId) return@launch
                     val playing = DesktopStream(url = "", format = current.streamFormat ?: DesktopStreamFormat(), sourceId = current.streamSourceId)
@@ -521,6 +532,7 @@ class DesktopPlaybackEngine(
         // the last block's loudness for as long as the music is paused.
         pulseLevel = 0f
         pulseBass = 0f
+        framesSinceAudible = 0
         PlayerAudioPulse.silence()
         _state.update { it.copy(isPlaying = false) }
     }
@@ -1032,6 +1044,13 @@ class DesktopPlaybackEngine(
     private var pulseBass = 0f
 
     /**
+     * Frames the meters have heard nothing over the noise floor, counted on the audio thread
+     * and reset wherever the outgoing deck starts somewhere new. It is what tells
+     * [maybeStartCrossfade] that the song has already finished sounding.
+     */
+    private var framesSinceAudible = 0L
+
+    /**
      * Samples of the incoming track already rendered under the outgoing one.
      *
      * A blend plays the next track for the whole length of the fade before it
@@ -1221,6 +1240,8 @@ class DesktopPlaybackEngine(
         }
         val level = (kotlin.math.sqrt(squares / count) * PULSE_LEVEL_SCALE).coerceIn(0.0, 1.0).toFloat()
         val bass = (kotlin.math.sqrt(lowSquares / count) * PULSE_BASS_SCALE).coerceIn(0.0, 1.0).toFloat()
+        if (level >= SILENT_TAIL_LEVEL) framesSinceAudible = 0
+        else framesSinceAudible += (count / channels).toLong()
         val seconds = count.toDouble() / channels / rate
         val attack = (1.0 - kotlin.math.exp(-seconds / PULSE_ATTACK_SECONDS)).toFloat()
         val release = (1.0 - kotlin.math.exp(-seconds / PULSE_RELEASE_SECONDS)).toFloat()
@@ -1241,6 +1262,7 @@ class DesktopPlaybackEngine(
     /** Starts [playhead] over: what the speakers are playing right now is [positionUs] of [track]. */
     private fun resetPlayhead(track: Track, positionUs: Long) {
         playhead.reset(sink.framesPlayed(), positionUs, usPerFrame(track))
+        framesSinceAudible = 0
     }
 
     /** Mixes the outgoing track with the one coming in, when a crossfade is running. */
@@ -2197,8 +2219,27 @@ class DesktopPlaybackEngine(
         val plan = transitionPlan(track, incoming.song, (incoming.decoder.durationUs ?: 0L) / 1_000, positionMs, duration)
         publishTransitionWindow(track, plan, duration)
 
-        if (!plan.shouldStart || plan.blocked) return
+        if (plan.blocked) return
+        if (!plan.shouldStart && !mustLeaveSilence(plan, positionMs, duration)) return
         armIncomingBlend(incoming, plan)
+    }
+
+    /**
+     * True when the outgoing track has already stopped making sound and the planner is still
+     * waiting for a start that can only land in more of it.
+     *
+     * The planner cannot answer this alone: an unanalysed track carries no envelope, and the
+     * analyzer's own silence line sits far below a fade-out's tail, so its content end often
+     * reaches the file's end with the last ten seconds already inaudible. The live meters can —
+     * a stretch of dead air this long inside the file's last moments is the song having finished,
+     * not a breath between phrases — and mixing there is what makes Automix sound late.
+     */
+    private fun mustLeaveSilence(plan: TransitionPlan, positionMs: Long, durationMs: Long): Boolean {
+        if (plan.fadeSeconds <= 0) return false
+        val remaining = durationMs - positionMs
+        if (remaining <= 0 || remaining > SILENT_TAIL_REMAINING_MS) return false
+        val rate = sink.format.sampleRate.coerceAtLeast(1)
+        return framesSinceAudible * 1_000L >= rate * SILENT_TAIL_CONFIRM_MS
     }
 
     /**
@@ -2594,5 +2635,15 @@ class DesktopPlaybackEngine(
         private const val PULSE_ATTACK_SECONDS = 0.045
         private const val PULSE_BASS_ATTACK_SECONDS = 0.012
         private const val PULSE_RELEASE_SECONDS = 0.32
+
+        /** The meters' floor for "no sound", about -50 dBFS — far below any music. */
+        private const val SILENT_TAIL_LEVEL = 0.012f
+        /** Dead air this long is the outgoing track having stopped, not a breath between phrases. */
+        private const val SILENT_TAIL_CONFIRM_MS = 1_000L
+        /**
+         * Only inside the file's last moments: a quiet passage mid-song still has music after it,
+         * and mixing out of that would cut the track short rather than rescue its ending.
+         */
+        private const val SILENT_TAIL_REMAINING_MS = 15_000L
     }
 }

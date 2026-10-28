@@ -215,6 +215,9 @@ internal object DesktopMusicSources {
     fun ceiling(qualityOverride: String? = null): DesktopAudioQuality =
         DesktopSourceRegistry.ceiling(qualityOverride)
 
+    /** Whether the listener asked for the immersive mix, and this build can decode it. */
+    fun wantsAtmos(): Boolean = DesktopSourceRegistry.wantsAtmos()
+
     fun worthSwapping(candidate: DesktopStreamFormat, playing: DesktopStreamFormat?): Boolean =
         DesktopSourceRegistry.worthSwapping(candidate, playing)
 

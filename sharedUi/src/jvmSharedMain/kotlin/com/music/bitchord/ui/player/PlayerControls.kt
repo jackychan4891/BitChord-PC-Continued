@@ -369,7 +369,7 @@ private const val MIXING_LABEL_REST = 0.5f
  * where the caller has no such panel.
  */
 @Composable
-internal fun PlaybackQualityLabel(
+fun PlaybackQualityLabel(
     song: Song,
     isLoading: Boolean,
     modifier: Modifier = Modifier,

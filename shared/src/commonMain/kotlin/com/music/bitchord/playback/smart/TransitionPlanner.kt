@@ -596,10 +596,40 @@ private fun phraseBarPlan(
     )
 }
 
+/**
+ * The phrase lengths an automatic mix tries, longest first.
+ *
+ * Sixteen bars is the ride Apple takes on a pair that can share one: the
+ * tempo within [AUTO_PHRASE_TEMPO_GAP] of the outgoing track, no clash of key
+ * or of vocals, and no more than [AUTO_PHRASE_MAX_SECONDS] of overlap to
+ * carry — past that a sixteen-bar blend is most of a song, and eight bars is
+ * the phrase to take. Every other pair gets the single eight.
+ */
+private fun autoPhraseBars(analysis: TrackAnalysis, nextAnalysis: TrackAnalysis): List<Int> {
+    val outgoingBpm = analysis.bpm.orZero()
+    val nextBpm = nextAnalysis.bpm.orZero()
+    val closeInTempo = outgoingBpm > 0 && nextBpm > 0 &&
+        abs(normalizedTempoRatio(outgoingBpm, nextBpm) - 1.0) <= AUTO_PHRASE_TEMPO_GAP
+    val longFits = outgoingBpm > 0 &&
+        PHRASE_BARS_LONG * BEATS_PER_BAR * (60.0 / outgoingBpm) <= AUTO_PHRASE_MAX_SECONDS
+    val traits = PairTraits(analysis, nextAnalysis)
+    val calm = closeInTempo && !traits.keyClash && !traits.vocalConflict
+    return if (calm && longFits) listOf(PHRASE_BARS_LONG, PHRASE_BARS_SHORT) else listOf(PHRASE_BARS_SHORT)
+}
+
+/** How far apart two tempi may sit and still take the long phrase together. */
+private const val AUTO_PHRASE_TEMPO_GAP = 0.03
+
+/**
+ * The most overlap an automatic sixteen-bar phrase may run to. Sixteen bars of
+ * a slow track are most of a minute — a DJ set's ride, not a mix between two
+ * songs — so past this the automatic phrase is the eight-bar one.
+ */
+private const val AUTO_PHRASE_MAX_SECONDS = 34.0
+
 // ---------------------------------------------------------------------------
 // WSOLA-style beat-matched phrase-switch plan (ported from WsolaPlanner.kt)
 // ---------------------------------------------------------------------------
-
 // The fade is bounded in beats because overlap length is musical: bounding it
 // in seconds makes a faster track get a longer mix, which is backwards. Four
 // bars is the ceiling and one bar the floor, the latter for tracks whose
@@ -884,7 +914,9 @@ fun planWsolaTransition(
         return WsolaPlanResult.Refused("incoming-mix-in")
     }
 
-    val contentEnd = analysis.contentEndTime.orZero().takeIf { it != 0.0 } ?: outgoingLength
+    val storedContentEnd = analysis.contentEndTime.orZero().takeIf { it != 0.0 } ?: outgoingLength
+    val contentEnd = audibleTailEnd(analysis, storedContentEnd)
+        .takeIf { it >= MIN_CLEARANCE_SECONDS } ?: storedContentEnd
     val mixOutAnchor = resolveMixOutAnchor(analysis, contentEnd = contentEnd, duration = outgoingLength)
     val unshiftedOverlapEnd = min(outgoingLength, mixOutAnchor.time)
     val outgoingArrangementOverlap =
@@ -1442,7 +1474,12 @@ private fun planTransitionInner(
         return blocked("short-duration-guard", transitionStart = length, transitionEnd = length)
     }
 
-    val analyzedContentEnd = analysis.contentEndTime.orZero().takeIf { it != 0.0 } ?: length
+    val storedContentEnd = analysis.contentEndTime.orZero().takeIf { it != 0.0 } ?: length
+    // The stored content end says where the file stops; the envelope says where the sound does.
+    // Those differ by the track's tail — silence, or a decay too quiet to hear — and ending the
+    // blend in it is what made Automix arrive after the music had already gone.
+    val analyzedContentEnd = audibleTailEnd(analysis, storedContentEnd)
+        .takeIf { it >= MIN_CLEARANCE_SECONDS } ?: storedContentEnd
     val finalMixAnchor = if (analyzedContentEnd > 0 && analyzedContentEnd <= length) {
         analyzedContentEnd
     } else {
@@ -1539,6 +1576,45 @@ private fun planTransitionInner(
                     nextLength,
                 )
             }
+        }
+    }
+
+    // Apple's own Automix lands its transitions on a phrase — eight bars, or
+    // sixteen when the pair can share one. Only on a pair whose grids lock,
+    // though: a phrase is a beat-matched ride, and across a tempo the decks
+    // cannot share it would just be a long crossfade. Tried before the
+    // whole-intro phrase switch and the adaptive sizes, so an automatic join is
+    // bar-aligned whenever the analysis can hold one; the planners below are
+    // what it does when it cannot, which is what keeps this a preference.
+    if (policy.tier == TransitionTier.BEATMATCHED) {
+        // The rate the incoming deck needs to sit on the outgoing grid. Where the planner will
+        // not apply it — a faster incoming under Advanced — a phrase would drift for its whole
+        // length, so that pair keeps the filter ride the adaptive plan already gives it.
+        val lockRate = roundRate(1.0 / normalizedTempoRatio(analysis.bpm.orZero(), nextAnalysis.bpm.orZero()))
+        for (bars in autoPhraseBars(analysis, nextAnalysis)) {
+            val phrase = phraseBarPlan(
+                analysis = analysis,
+                nextAnalysis = nextAnalysis,
+                length = length,
+                nextLength = nextLength,
+                phraseBars = bars,
+                mixAnchor = mixAnchor,
+                advanced = advanced,
+            ) ?: continue
+            if (abs(phrase.incomingPlaybackRate - lockRate) > 1e-3) continue
+            // Two vocals riding over each other for a whole phrase is the join the
+            // adaptive plan can reroute and a fixed phrase cannot; leave it its chance.
+            if (playbackTime >= phrase.transitionEnd || phrase.vocalOverlap > VOCAL_REROUTE_OVERLAP) continue
+            val started = playbackTime >= phrase.transitionStart
+            return capIncomingSkip(
+                phrase.copy(
+                    shouldStart = started,
+                    policyReasons = policy.reasons,
+                    reason = if (started) "smart-auto-phrase-$bars-bar" else "before-auto-phrase-$bars-bar",
+                ),
+                nextAnalysis,
+                nextLength,
+            )
         }
     }
 

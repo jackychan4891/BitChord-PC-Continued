@@ -11,10 +11,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
@@ -46,41 +42,6 @@ import androidx.compose.ui.window.WindowScope
 import java.awt.MouseInfo
 
 // The window's own frame, drawn by the application rather than by the system.
-
-/** The strip where the system's title bar would have been. */
-@Composable
-internal fun DesktopTitleBar() {
-    // Collected rather than read: [DesktopTitleBarSetting.active] is a plain call, so a composable
-    // that only asks it never learns the answer changed.
-    val enabled by DesktopTitleBarSetting.enabled.collectAsState()
-    if (!DesktopPlatform.drawsOwnWindowFrame || !enabled) return
-    DesktopTitleBarDragArea(
-        Modifier
-            .fillMaxWidth()
-            .height(CAPTION_HEIGHT)
-            .desktopWindowGlass(),
-    ) {
-        Box(Modifier.fillMaxSize()) {
-            DesktopWindowButtons(Modifier.align(Alignment.CenterStart))
-        }
-    }
-}
-
-/** Whether there is a title bar at all. */
-internal object DesktopTitleBarSetting {
-
-    internal const val KEY = "window_title_bar"
-
-    private val _enabled = MutableStateFlow(DesktopPersistence().boolean(KEY, false))
-
-    /** What Settings shows and writes. */
-    val enabled: StateFlow<Boolean> = _enabled
-
-    fun set(value: Boolean) {
-        DesktopPersistence().saveBoolean(KEY, value)
-        _enabled.value = value
-    }
-}
 
 /** What the caption buttons act on. */
 internal class DesktopWindowActions(

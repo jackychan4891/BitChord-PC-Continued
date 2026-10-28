@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,27 +51,31 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.PopupProperties
 import com.music.bitchord.data.model.LikeStatus
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.ui.LyricsProviderState
@@ -665,62 +671,153 @@ internal fun DesktopAppleCollectionMenu(
     }
 }
 
-/** The panel a menu is drawn in: a floating card in the app's own glass. */
+/**
+ * The window's one open menu: what opened it, and what to draw over it.
+ *
+ * A menu in a `Popup` lives in a window of its own, so the page behind it cannot be blurred —
+ * there is nothing in that window to read. Holding the open menu here instead lets the frame draw
+ * it in an overlay of its own, in the window, on the same glass the quick-search palette uses.
+ */
+internal class DesktopMenuSlot {
+    /** Where the menu hangs from, in window coordinates. */
+    var anchor by mutableStateOf(IntRect.Zero)
+        private set
+    var onDismiss by mutableStateOf<() -> Unit>({})
+        private set
+    var draw by mutableStateOf<(@Composable () -> Unit)?>(null)
+        private set
+
+    /** Which opening this is. A fresh menu must not inherit the last one's measured size. */
+    var opening by mutableStateOf(0)
+        private set
+
+    val isOpen get() = draw != null
+
+    fun open(anchor: IntRect, onDismiss: () -> Unit, draw: @Composable () -> Unit) {
+        if (this.draw == null) opening++
+        this.anchor = anchor
+        this.onDismiss = onDismiss
+        this.draw = draw
+    }
+
+    fun close() {
+        draw = null
+    }
+}
+
+internal val LocalDesktopMenuSlot = staticCompositionLocalOf<DesktopMenuSlot> {
+    error("A desktop menu has to be drawn inside DesktopFrame, which provides its overlay")
+}
+
+/**
+ * The panel a menu is drawn in, handed to the frame's overlay.
+ *
+ * The zero-sized marker is what finds the anchor: its parent layout node is the button, or the
+ * one-point box the pointer host plants, which is exactly the rect a popup used to hang from. It
+ * takes no room and no pointer events, so the caller's layout is unchanged.
+ */
 @Composable
 private fun DesktopMenuSurface(onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    Popup(
-        popupPositionProvider = remember { DesktopMenuPosition() },
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true),
+    val slot = LocalDesktopMenuSlot.current
+    // Null until this menu has been laid out. Opening the slot before that would place a menu
+    // against the window's origin for the frame it takes the real anchor to arrive.
+    var anchor by remember { mutableStateOf<IntRect?>(null) }
+    Box(
+        Modifier
+            .size(0.dp)
+            .onGloballyPositioned { coords ->
+                coords.parentLayoutCoordinates?.boundsInWindow()?.let { bounds ->
+                    anchor = IntRect(
+                        bounds.left.toInt(),
+                        bounds.top.toInt(),
+                        bounds.right.toInt(),
+                        bounds.bottom.toInt(),
+                    )
+                }
+            },
+    )
+    val placed = anchor
+    SideEffect { if (placed != null) slot.open(placed, onDismiss, content) }
+    DisposableEffect(Unit) { onDispose { slot.close() } }
+}
+
+/**
+ * The open menu, drawn over everything else in the window.
+ *
+ * Placed by hand rather than by a popup: the card's own size is only known once it has been
+ * measured, so it stays invisible for that first pass and appears already where it belongs.
+ */
+@Composable
+internal fun DesktopMenuOverlay(slot: DesktopMenuSlot) {
+    val draw = slot.draw ?: return
+    val anchor = slot.anchor
+    val opening = slot.opening
+    val onDismiss = slot.onDismiss
+    val outside = remember { MutableInteractionSource() }
+    val inside = remember { MutableInteractionSource() }
+    var window by remember { mutableStateOf(IntSize.Zero) }
+    // Measured afresh for every opening: a menu placed with the last one's size would settle on
+    // the wrong side of its button, then jump once its own size came in.
+    var card by remember(opening) { mutableStateOf(IntSize.Zero) }
+    // Settled on the first measure of this opening and kept: a drawer growing inside the card
+    // would otherwise flip it to the other side of the button while the pointer is on it.
+    var above by remember(opening) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(opening, card, window) {
+        if (above == null && card != IntSize.Zero && window != IntSize.Zero) {
+            above = !fitsBelow(anchor, window, card) && fitsAbove(anchor, card)
+        }
+    }
+    val settled = above != null && card != IntSize.Zero
+    val placed = if (settled) menuPlacement(anchor, window, card, above!!) else IntOffset.Zero
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onSizeChanged { window = it }
+            // The page under the menu keeps its own clicks out, as a popup window did.
+            .clickable(interactionSource = outside, indication = null, onClick = onDismiss),
     ) {
         val shape = RoundedCornerShape(12.dp)
         Column(
             Modifier
+                .offset { placed }
+                .graphicsLayer { alpha = if (settled) 1f else 0f }
+                .onSizeChanged { card = it }
                 .widthIn(min = 232.dp, max = 300.dp)
-                .clip(shape)
-                .desktopCard(shape)
+                .desktopMenuGlass(shape)
+                .clickable(interactionSource = inside, indication = null, onClick = {})
                 .padding(vertical = 6.dp)
                 // A menu with every optional row on it is taller than a small window; capped and
                 // scrolled rather than run off the screen.
                 .heightIn(max = 460.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            content()
+            draw()
         }
     }
 }
 
+private fun fitsBelow(anchor: IntRect, window: IntSize, card: IntSize): Boolean =
+    anchor.bottom + MENU_MARGIN + card.height + MENU_MARGIN <= window.height
+
+private fun fitsAbove(anchor: IntRect, card: IntSize): Boolean =
+    anchor.top - card.height - MENU_MARGIN >= MENU_MARGIN
+
 /** Where a menu hangs relative to the button that opened it. */
-private class DesktopMenuPosition : PopupPositionProvider {
-
-    private var above: Boolean? = null
-
-    override fun calculatePosition(
-        anchorBounds: IntRect,
-        windowSize: IntSize,
-        layoutDirection: LayoutDirection,
-        popupContentSize: IntSize,
-    ): IntOffset {
-        val margin = MENU_MARGIN
-        val below = anchorBounds.bottom + margin
-        val above = anchorBounds.top - popupContentSize.height - margin
-        val fitsBelow = below + popupContentSize.height + margin <= windowSize.height
-        val fitsAbove = above >= margin
-        val placeAbove = this.above ?: (!fitsBelow && fitsAbove)
-        if (this.above == null) this.above = placeAbove
-        val y = when {
-            placeAbove && fitsAbove -> above
-            fitsBelow -> below
-            // Neither side has room, so it is as tall as the window allows and sits between the
-            // margins.
-            else -> margin
-        }
-        val x = anchorBounds.left.coerceIn(
-            margin,
-            (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin),
-        )
-        return IntOffset(x, y.coerceAtMost((windowSize.height - popupContentSize.height - margin).coerceAtLeast(margin)))
+private fun menuPlacement(anchor: IntRect, window: IntSize, card: IntSize, placeAbove: Boolean): IntOffset {
+    val below = anchor.bottom + MENU_MARGIN
+    val above = anchor.top - card.height - MENU_MARGIN
+    val y = when {
+        placeAbove && fitsAbove(anchor, card) -> above
+        fitsBelow(anchor, window, card) -> below
+        // Neither side has room, so it sits between the margins as tall as the window allows.
+        else -> MENU_MARGIN
     }
+    val x = anchor.left.coerceIn(
+        MENU_MARGIN,
+        (window.width - card.width - MENU_MARGIN).coerceAtLeast(MENU_MARGIN),
+    )
+    return IntOffset(x, y.coerceAtMost((window.height - card.height - MENU_MARGIN).coerceAtLeast(MENU_MARGIN)))
 }
 
 /** Air kept between a menu and the window's edges. */

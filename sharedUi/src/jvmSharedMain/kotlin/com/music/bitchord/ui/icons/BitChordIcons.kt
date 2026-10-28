@@ -474,8 +474,37 @@ object BitChordIcons {
             "bc_repeat",
             "m17 2 4 4-4 4",
             "M3 11V9a4 4 0 0 1 4-4h14",
-            "m7 10-4 4 4 4",
+            "m7 22-4-4 4-4",
             "M21 13v2a4 4 0 0 1-4 4H3",
+        )
+    }
+
+    /** The same loop struck through, for the setting that keeps AutoPlay off a song. */
+    val RepeatOff: ImageVector by lazy {
+        lucide(
+            "bc_repeat_off",
+            "m2 2 20 20",
+            "m17 2 4 4-4 4",
+            "M3 11V9a4 4 0 0 1 4-4h14",
+            "m7 22-4-4 4-4",
+            "M21 13v2a4 4 0 0 1-4 4H3",
+        )
+    }
+
+    /** Lucide's skip: the mark the instant-skip window is measured against. */
+    val SkipForward: ImageVector by lazy {
+        lucide("bc_skip_forward", "m5 4 10 8-10 8V4z", "M19 5v14")
+    }
+
+    /** Lucide's ruler, for a length given in bars. */
+    val Ruler: ImageVector by lazy {
+        lucide(
+            "bc_ruler",
+            "M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0z",
+            "m14.5 12.5 2-2",
+            "m11.5 9.5 2-2",
+            "m8.5 6.5 2-2",
+            "m17.5 15.5 2-2",
         )
     }
 
@@ -572,13 +601,46 @@ object BitChordIcons {
             viewportWidth = 512f, viewportHeight = 512f,
         ).addPath(pathData = addPathNodes(pathData), fill = stroke).build()
 
+    /** The flagged note [MusicNote] is cut from; [Playlist] sets it beside the bars. */
+    private const val NOTE_PATH =
+        "M9.732 19.241c1.077 0 2.688-.79 2.688-2.922V9.617c0-.388.074-.469.418-.542l3.347-.732a.48.48 0 0 0 .403-.484V5.105c0-.388-.315-.637-.689-.563l-3.764.82c-.47.102-.725.359-.725.769l.014 8.144c.037.36-.132.594-.454.66l-1.164.241c-1.465.308-2.154 1.055-2.154 2.16 0 1.122.864 1.905 2.08 1.905"
+
     /** Apple's own single note, the mark the web player puts on its Songs row. */
     val MusicNote: ImageVector by lazy {
-        apple(
-            "bc_music_note",
-            "M9.732 19.241c1.077 0 2.688-.79 2.688-2.922V9.617c0-.388.074-.469.418-.542l3.347-.732a.48.48 0 0 0 .403-.484V5.105c0-.388-.315-.637-.689-.563l-3.764.82c-.47.102-.725.359-.725.769l.014 8.144c.037.36-.132.594-.454.66l-1.164.241c-1.465.308-2.154 1.055-2.154 2.16 0 1.122.864 1.905 2.08 1.905",
-            fill = 0.613f,
-        )
+        apple("bc_music_note", NOTE_PATH, fill = 0.613f)
+    }
+
+    /**
+     * Apple's playlist mark: three bars beside the flagged note.
+     *
+     * The note is [NOTE_PATH], moved right rather than redrawn, so the Songs row and a playlist
+     * row are the same hand. Both halves are solid silhouettes with no pen, which is what lets
+     * this sit evenly beside the rest of the sidebar column at any tint. The bars stay light —
+     * three thin lines, not blocks — and centre a touch above the note's own middle, the way
+     * the reference's mark does.
+     */
+    val Playlist: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_playlist",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            addGroup(translationX = 3.9f)
+            addPath(pathData = addPathNodes(NOTE_PATH), fill = stroke)
+            clearGroup()
+            addPath(
+                pathData = addPathNodes("M4.05 8.1h6.3a.8.8 0 0 1 0 1.6h-6.3a.8.8 0 0 1 0-1.6z"),
+                fill = stroke,
+            )
+            addPath(
+                pathData = addPathNodes("M4.05 11.2h6.3a.8.8 0 0 1 0 1.6h-6.3a.8.8 0 0 1 0-1.6z"),
+                fill = stroke,
+            )
+            addPath(
+                pathData = addPathNodes("M4.05 14.3h6.3a.8.8 0 0 1 0 1.6h-6.3a.8.8 0 0 1 0-1.6z"),
+                fill = stroke,
+            )
+        }.build()
     }
 
     /** Lucide's own download: a stem, a chevron, and the tray it falls into. */
@@ -979,15 +1041,6 @@ object BitChordIcons {
         lucide("bc_ratio",
             "M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-16a2 2 0 0 1 2 -2z",
             "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2z",
-        )
-    }
-
-    val ListVideo: ImageVector by lazy {
-        lucide("bc_list_video",
-            "M21 5H3",
-            "M10 12H3",
-            "M10 19H3",
-            "M15 12.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997a1 1 0 0 1-1.517-.86z",
         )
     }
 

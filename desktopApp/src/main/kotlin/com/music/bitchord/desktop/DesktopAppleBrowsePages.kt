@@ -42,7 +42,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import bitchord.desktopapp.generated.resources.Res
@@ -124,71 +126,53 @@ private fun LazyListScope.appleBrowseHomeShelves(
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
 ) {
-    val recents = shelves.indices.filter { shelves[it].title.isAppleBrowseRecent() }
-    val editorial = shelves.indices.filter { index ->
-        index !in recents && shelves[index].title.isAppleBrowseEditorial()
-    }.ifEmpty {
-        shelves.indices.firstOrNull { index ->
-            index !in recents && shelves[index].items.any { it.browseId != null && !it.isAppleSong() }
-        }?.let(::listOf).orEmpty()
-    }
-    recents.forEach { index ->
-        item(key = "home:$index") {
-            AppleBrowseRecentShelf(shelves[index], onItemClick, onItemMenu)
+    // The reference site's home is one running order: Recently Played as a run
+    // of songs at the head, then the feed's own shelves exactly as it delivered
+    // them. No ranking, no editorial shelf lifted out of the middle.
+    val recents = shelves.filter { it.title.isAppleBrowseRecent() }
+    recents.forEach { shelf ->
+        item(key = "home:recent:${shelf.title}") {
+            AppleBrowseRecentShelf(shelf, onItemClick, onItemMenu)
         }
     }
-    editorial.forEach { index ->
+    // Apple's home opens with a row of tall picks whose words sit inside the art.
+    // A feed that is not Apple's has no such lockup, so its own first cover row
+    // takes that place — runs of songs, artist circles and video rows are not
+    // picks and keep the shape they already have.
+    val portraitAt = shelves.withIndex()
+        .filterNot { (_, shelf) -> shelf.title.isAppleBrowseRecent() || shelf.title.isAppleBrowseDropped() }
+        .firstOrNull { (_, shelf) -> shelf.wearsPortrait() }
+        ?.index
+    shelves.forEachIndexed { index, shelf ->
+        if (shelf.title.isAppleBrowseRecent() || shelf.title.isAppleBrowseDropped()) return@forEachIndexed
         item(key = "home:$index") {
-            AppleBrowseHeroShelf(shelves[index], onItemClick, onItemMenu)
-        }
-    }
-    // Apple's home leads with the charts and only then shows what you have been
-    // playing; the feed the backend hands over arrives in the opposite order, so
-    // the two are pinned to the front here rather than left in arrival order.
-    // Apple's own playlist rows follow them, and everything else keeps the order
-    // it came in.
-    val rest = shelves.indices.filter { it !in recents && it !in editorial && !shelves[it].title.isAppleBrowseDropped() }
-        .sortedBy { index -> appleBrowseShelfRank(shelves[index], index) }
-    rest.forEach { index ->
-        item(key = "home:$index") {
-            // Every row on Apple's home is a sideways run of covers, playlists and albums included:
-            // a playlist is a tile you open, and the list is what you find inside it.
-            DesktopAppleShelf(shelves[index], onItemClick, onItemMenu)
+            DesktopAppleShelf(shelf, onItemClick, onItemMenu, portrait = index == portraitAt)
         }
     }
 }
+
+/** Whether this row is covers enough to be drawn as the site's tall (3:4) pick. */
+private fun HomeShelf.wearsPortrait(): Boolean =
+    items.isNotEmpty() &&
+        !isAppleRadioShelf() &&
+        !title.contains("video", ignoreCase = true) &&
+        items.none { it.isSongLine() || DesktopRadioClient.isStation(it) } &&
+        items.none { it.browseId?.startsWith("UC") == true } &&
+        feedLayout(false).let { it == null || it == AppleFeedLayout.Square }
 
 private fun LazyListScope.appleBrowseNewShelves(
     source: List<HomeShelf>,
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
 ) {
-    val shelves = source.filterNot { it.title.isAppleBrowseRecent() }
-        .sortedBy { if (it.title.isAppleBrowseEditorial()) 0 else 1 }
-    shelves.firstOrNull()?.let { first ->
-        item(key = "new:hero") { AppleBrowseHeroShelf(first, onItemClick, onItemMenu) }
-    }
-    val tracksIndex = shelves.indexOfFirst { shelf -> shelf.items.any { !it.videoId.isNullOrBlank() || it.isAppleSong() } }
-    if (tracksIndex >= 0) {
-        val shelf = shelves[tracksIndex]
-        item(key = "new:tracks") {
-            DesktopAppleShelf(
-                shelf.copy(items = shelf.items.filter { !it.videoId.isNullOrBlank() || it.isAppleSong() }),
-                onItemClick,
-                onItemMenu,
-            )
+    // New is Home without the recents: the feed's own order, one row per shelf.
+    source.forEachIndexed { index, shelf ->
+        if (shelf.title.isAppleBrowseRecent() || shelf.isAppleRadioShelf() ||
+            shelf.title.isAppleBrowseDropped()
+        ) {
+            return@forEachIndexed
         }
-    }
-    shelves.forEachIndexed { index, shelf ->
-        if (index == 0) return@forEachIndexed
-        val remaining = if (index == tracksIndex) {
-            shelf.copy(items = shelf.items.filter { it.videoId.isNullOrBlank() && !it.isAppleSong() })
-        } else {
-            shelf
-        }
-        if (remaining.items.isNotEmpty()) {
-            item(key = "new:$index") { DesktopAppleShelf(remaining, onItemClick, onItemMenu) }
-        }
+        item(key = "new:$index") { DesktopAppleShelf(shelf, onItemClick, onItemMenu) }
     }
 }
 
@@ -304,94 +288,437 @@ internal fun AppleBrowsePageTitle(title: String, trailing: @Composable () -> Uni
     }
 }
 
+/**
+ * The reference site's shelf measures, read off its stylesheet.
+ *
+ * Its rows come in six shapes — four rows of songs, or one row of squares,
+ * circles, videos or editorial stills — and on a wide page each shape fits a
+ * fixed number of columns across the content. The numbers below are its own;
+ * [APPLE_FEED_SIDEBAR] puts this window's content back on the site's viewport
+ * scale, since the site's breakpoints include its navigation column and this
+ * page is already past the sidebar when it measures itself.
+ */
+private const val APPLE_FEED_SIDEBAR = 260f
+
+private val AppleShelfGap = 20.dp
+
+internal enum class AppleFeedLayout { Tracks, Square, Circle, Video, Editorial, Horizontal, Portrait }
+
+/**
+ * The site's shelf shape for a source shelf, when the source names one: Apple's `itemKind` maps
+ * one-for-one onto the site's lockups. Null for a source that doesn't say, which leaves the
+ * caller's own reading of the items in charge.
+ *
+ * Portrait is not an Apple kind: a feed that is not Apple's has no "Top Picks" lockup, so the
+ * page decides which of its own cover rows wears one. See `AppleFeedLayout.Portrait`.
+ */
+internal fun HomeShelf.feedLayout(circles: Boolean): AppleFeedLayout? = when (layout) {
+    "trackLockup" -> AppleFeedLayout.Tracks
+    "verticalVideoLockup" -> AppleFeedLayout.Video
+    "horizontalLockup" -> AppleFeedLayout.Horizontal
+    "flowcaseLockup" -> AppleFeedLayout.Editorial
+    "squareLockup" -> if (circles) AppleFeedLayout.Circle else AppleFeedLayout.Square
+    else -> null
+}
+
+private val AppleFeedLayout.xsWidth: Dp
+    get() = when (this) {
+        AppleFeedLayout.Tracks -> 270.dp
+        AppleFeedLayout.Square -> 144.dp
+        AppleFeedLayout.Circle -> 118.dp
+        AppleFeedLayout.Video -> 200.dp
+        AppleFeedLayout.Editorial -> 298.dp
+        AppleFeedLayout.Horizontal -> 298.dp
+        AppleFeedLayout.Portrait -> 262.dp
+    }
+
+/** How many columns of [layout] the site fits across at this content width. */
+private fun appleFeedColumns(layout: AppleFeedLayout, contentWidth: Dp): Int {
+    val viewport = contentWidth.value + APPLE_FEED_SIDEBAR
+    return when (layout) {
+        AppleFeedLayout.Tracks -> if (viewport < 1260f) 2 else if (viewport < 1580f) 3 else 4
+        AppleFeedLayout.Square -> if (viewport < 1260f) 4 else if (viewport < 1580f) 5 else 6
+        AppleFeedLayout.Circle -> if (viewport < 1260f) 6 else if (viewport < 1580f) 8 else 10
+        AppleFeedLayout.Video -> if (viewport < 1260f) 3 else if (viewport < 1580f) 4 else 5
+        AppleFeedLayout.Editorial -> if (viewport < 1580f) 2 else 3
+        AppleFeedLayout.Horizontal -> if (viewport < 1260f) 2 else if (viewport < 1580f) 3 else 4
+        AppleFeedLayout.Portrait -> if (viewport < 1260f) 2 else if (viewport < 1580f) 3 else 4
+    }
+}
+
+/** A column's width: fixed on a narrow page, and exactly a share of the content on a wide one. */
+private fun appleFeedTileWidth(layout: AppleFeedLayout, contentWidth: Dp, columns: Int): Dp {
+    if (contentWidth < 1024.dp) return layout.xsWidth
+    val available = contentWidth - DesktopPageGutter * 2
+    return ((available - AppleShelfGap * (columns - 1)) / columns).coerceAtLeast(layout.xsWidth)
+}
+
+/**
+ * A shelf's name in the site's type: 17/22 bold. A label, not a control — the site's headings
+ * name the row and do nothing else, so there is no chevron and nothing to click.
+ */
 @Composable
-private fun AppleBrowseHeroShelf(
-    shelf: HomeShelf,
-    onItemClick: (ShelfItem, String?) -> Unit,
-    onItemMenu: (ShelfItem) -> Unit,
+internal fun AppleFeedShelfHeading(
+    title: String,
+    modifier: Modifier = Modifier,
 ) {
-    val quiet = shelf.title.isQuietShelfTitle()
-    // Without its heading the row has no line of its own to sit under, so it
-    // rides a little closer to the shelf above than a titled one would.
-    Column(Modifier.padding(top = if (quiet) 10.dp else 22.dp, bottom = 6.dp)) {
-        // The shelf is reached through its heading, like every other one: the
-        // corner button on the tile is gone and the chevron that opens the whole
-        // page is the only thing beside the title. A tile still answers a right
-        // click with its menu.
-        val more = shelf.moreBrowseId
-        if (!quiet) {
-            DesktopAppleHeading(
-                shelf.title,
-                Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
-                    .then(if (more != null) Modifier.clickable { onItemClick(ShelfItem(shelf.title, "", null, null, more), shelf.title) } else Modifier),
-                chevron = more != null,
+    Text(
+        title,
+        color = DesktopAppleText,
+        fontSize = 17.sp,
+        lineHeight = 22.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = modifier.fillMaxWidth().padding(bottom = 14.dp),
+    )
+}
+
+/**
+ * The site's run-of-songs shelf: four rows down, columns measured to the page,
+ * scrolled sideways when there are more songs than fit. The row itself is a
+ * plain [AppleSongLine]; the menu is the right-click, as the site's own rows
+ * are opened from their surrounding list.
+ */
+@Composable
+internal fun AppleFeedTracksShelf(
+    title: String,
+    lines: List<AppleSongLine>,
+    onPlay: (Int) -> Unit,
+    onOpenMenu: ((Int) -> Unit)?,
+    showHeading: Boolean = true,
+    topPadding: Dp = 36.dp,
+    /** The source's own depth for this run of songs; four rows when it doesn't say. */
+    rows: Int = 4,
+) {
+    if (lines.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(top = topPadding)) {
+        if (showHeading) {
+            AppleFeedShelfHeading(
+                title,
+                Modifier.padding(horizontal = DesktopPageGutter),
             )
         }
-        DesktopScrollableRow(spacing = 20.dp) {
-            items(shelf.items) { item ->
-                val interaction = remember { MutableInteractionSource() }
-                val hovered by interaction.collectIsHoveredAsState()
-                // The pointer drops a half-black scrim over the picture — the same
-                // shade every sleeve in the app takes under the pointer.
-                val shade by animateFloatAsState(
-                    targetValue = if (hovered) 1f else 0f,
-                    animationSpec = tween(ART_HOVER_MS),
-                    label = "heroShade",
-                )
-                val menu = { onItemMenu(item) }
-                Column(
-                    Modifier.width(457.dp).hoverable(interaction)
-                        .longPressMenuClickable(
-                            onClick = { onItemClick(item, shelf.title) },
-                            onLongClick = menu,
-                            highlight = false,
-                        )
-                        .contextClick(menu),
-                ) {
-                    // An untitled shelf names nothing on its tiles either, even when
-                    // the source hands over a subtitle that only repeats the title.
-                    if (!quiet) {
-                        Text(
-                            shelf.subtitle.ifBlank { shelf.title }.uppercase(Locale.ROOT),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = DesktopAppleSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Text(
-                        item.title,
-                        fontSize = 22.sp,
-                        lineHeight = 27.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = DesktopAppleText,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                    Text(
-                        item.subtitle,
-                        fontSize = 13.sp,
-                        color = DesktopAppleSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 3.dp, bottom = 12.dp),
-                    )
-                    Box(
-                        Modifier.width(457.dp).height(261.dp).clip(RoundedCornerShape(8.dp))
-                            .drawWithContent {
-                                drawContent()
-                                if (shade > 0.001f) {
-                                    drawRect(Color.Black.copy(alpha = ART_HOVER_ALPHA * shade))
-                                }
-                            },
-                    ) {
-                        DesktopArtwork(item.thumbnailUrl, Modifier.fillMaxSize(), px = 800)
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val columns = appleFeedColumns(AppleFeedLayout.Tracks, maxWidth)
+            val width = appleFeedTileWidth(AppleFeedLayout.Tracks, maxWidth, columns)
+            val chunks = lines.indices.chunked(rows.coerceIn(1, 8))
+            DesktopScrollableRow(gutter = DesktopPageGutter, spacing = AppleShelfGap) {
+                items(chunks) { chunk ->
+                    Column(Modifier.width(width)) {
+                        chunk.forEach { index ->
+                            AppleFeedTrackRow(
+                                lines[index],
+                                onClick = { onPlay(index) },
+                                onMenu = onOpenMenu?.let { menu -> { menu(index) } },
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/** One 55dp song line of a site tracks shelf: 40dp sleeve, 13/16 title, 12/15 credit. */
+@Composable
+private fun AppleFeedTrackRow(
+    line: AppleSongLine,
+    onClick: () -> Unit,
+    onMenu: (() -> Unit)?,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(
+        Modifier.fillMaxWidth().height(55.dp).hoverable(interaction)
+            .then(if (onMenu != null) Modifier.contextClick { onMenu() } else Modifier)
+            .clickable(onClick = onClick)
+            .padding(end = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.size(40.dp)) {
+            DesktopArtwork(line.artworkUrl, Modifier.size(40.dp).clip(RoundedCornerShape(5.dp)), px = 160)
+            if (hovered) {
+                Box(
+                    Modifier.matchParentSize().clip(RoundedCornerShape(5.dp))
+                        .background(Color.Black.copy(alpha = 0.35f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(BitChordIcons.TransportPlay, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+            Text(line.title, color = DesktopAppleText, fontSize = 13.sp, lineHeight = 16.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (line.subtitle.isNotBlank()) {
+                Text(line.subtitle, color = DesktopAppleSecondary, fontSize = 12.sp, lineHeight = 15.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+/**
+ * The site's cover shelves: one row of square covers, circles or 16:9 stills,
+ * each sized to its share of the page and captioned underneath in 12/15.
+ */
+@Composable
+internal fun AppleFeedCoverShelf(
+    title: String,
+    layout: AppleFeedLayout,
+    items: List<ShelfItem>,
+    onClick: (ShelfItem) -> Unit,
+    onMenu: ((ShelfItem) -> Unit)?,
+    showHeading: Boolean = true,
+    topPadding: Dp = 36.dp,
+    /** The source's own depth for this shelf: one row unless Apple stacks it two or more deep. */
+    rows: Int = 1,
+) {
+    if (items.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(top = topPadding)) {
+        if (showHeading) {
+            AppleFeedShelfHeading(
+                title,
+                Modifier.padding(horizontal = DesktopPageGutter),
+            )
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val columns = appleFeedColumns(layout, maxWidth)
+            val width = appleFeedTileWidth(layout, maxWidth, columns)
+            // The horizontal lockup has always been two deep, whatever the source says; every
+            // other shelf is as deep as the source lays it out. A portrait card is nearly half
+            // again as tall as it is wide, so it is never stacked.
+            val depth = when (layout) {
+                AppleFeedLayout.Horizontal -> rows.coerceAtLeast(2)
+                AppleFeedLayout.Portrait -> 1
+                else -> rows.coerceAtLeast(1)
+            }
+            DesktopScrollableRow(gutter = DesktopPageGutter, spacing = AppleShelfGap) {
+                // Columns fill downwards, the way the source's own grid flows.
+                items(items.chunked(depth)) { column ->
+                    if (depth == 1) {
+                        AppleFeedCoverCell(column.first(), layout, width, onClick, onMenu)
+                    } else {
+                        Column(Modifier.width(width), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                            column.forEach { item -> AppleFeedCoverCell(item, layout, width, onClick, onMenu) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppleFeedCoverCell(
+    item: ShelfItem,
+    layout: AppleFeedLayout,
+    width: Dp,
+    onClick: (ShelfItem) -> Unit,
+    onMenu: ((ShelfItem) -> Unit)?,
+) {
+    when (layout) {
+        AppleFeedLayout.Circle -> AppleFeedCircle(
+            item, width,
+            onClick = { onClick(item) },
+            onMenu = onMenu?.let { menu -> { menu(item) } },
+        )
+        // The site's two story cards — a 3:4 pick and a 16:9 editorial still — carry
+        // their words inside the art, over a scrim at its foot rather than under it.
+        AppleFeedLayout.Portrait -> AppleFeedArtCard(
+            item, width,
+            aspect = 3f / 4f,
+            onClick = { onClick(item) },
+            onMenu = onMenu?.let { menu -> { menu(item) } },
+        )
+        AppleFeedLayout.Editorial -> AppleFeedArtCard(
+            item, width,
+            aspect = 16f / 9f,
+            onClick = { onClick(item) },
+            onMenu = onMenu?.let { menu -> { menu(item) } },
+        )
+        AppleFeedLayout.Horizontal -> AppleFeedHorizontalRow(
+            item,
+            onClick = { onClick(item) },
+            onMenu = onMenu?.let { menu -> { menu(item) } },
+        )
+        else -> AppleFeedCover(
+            item,
+            width,
+            aspect = if (layout == AppleFeedLayout.Square) 1f else 16f / 9f,
+            onClick = { onClick(item) },
+            onMenu = onMenu?.let { menu -> { menu(item) } },
+        )
+    }
+}
+
+/**
+ * The site's horizontal lockup: a 97dp sleeve with the name at 15/20 and the credit beneath it,
+ * both beside the art rather than under it.
+ */
+@Composable
+private fun AppleFeedHorizontalRow(
+    item: ShelfItem,
+    onClick: () -> Unit,
+    onMenu: (() -> Unit)?,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClick = onClick)
+            .then(if (onMenu == null) Modifier else Modifier.contextClick { onMenu() }),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        DesktopArtwork(
+            item.thumbnailUrl,
+            Modifier.size(97.dp).clip(RoundedCornerShape(5.dp))
+                .desktopArtHoverShade().clickable(onClick = onClick),
+            px = 400,
+        )
+        Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+            Text(
+                item.title,
+                color = DesktopAppleText,
+                fontSize = 15.sp,
+                lineHeight = 20.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (item.subtitle.isNotBlank()) {
+                Text(
+                    item.subtitle,
+                    color = DesktopAppleSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The site's story card: the art is the card, and the words sit inside it at the foot over a
+ * scrim — the credit as a small kicker, the name in bold white under it. Two sizes wear it, the
+ * 3:4 pick on the home page and the 16:9 editorial still.
+ */
+@Composable
+private fun AppleFeedArtCard(
+    item: ShelfItem,
+    width: Dp,
+    aspect: Float,
+    onClick: () -> Unit,
+    onMenu: (() -> Unit)?,
+) {
+    Box(
+        Modifier.width(width).aspectRatio(aspect).clip(RoundedCornerShape(10.dp))
+            .desktopArtHoverShade().clickable(onClick = onClick)
+            .then(if (onMenu == null) Modifier else Modifier.contextClick { onMenu() }),
+    ) {
+        DesktopArtwork(
+            item.thumbnailUrl,
+            Modifier.matchParentSize(),
+            px = if (width > 240.dp) 800 else 500,
+        )
+        Box(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.45f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = 0.82f),
+                ),
+            ),
+        )
+        Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+            if (item.subtitle.isNotBlank()) {
+                Text(
+                    item.subtitle,
+                    color = Color.White.copy(alpha = 0.72f),
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                item.title,
+                color = Color.White,
+                fontSize = 15.sp,
+                lineHeight = 19.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppleFeedCover(
+    item: ShelfItem,
+    width: Dp,
+    aspect: Float,
+    onClick: () -> Unit,
+    onMenu: (() -> Unit)?,
+) {
+    Column(Modifier.width(width)) {
+        DesktopArtwork(
+            item.thumbnailUrl,
+            Modifier.width(width).aspectRatio(aspect).clip(RoundedCornerShape(7.dp))
+                .desktopArtHoverShade().clickable(onClick = onClick)
+                .then(if (onMenu == null) Modifier else Modifier.contextClick { onMenu() }),
+            px = if (width > 240.dp) 800 else 400,
+        )
+        Text(
+            item.title,
+            color = DesktopAppleText,
+            fontSize = 12.sp,
+            lineHeight = 15.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        if (item.subtitle.isNotBlank()) {
+            Text(
+                item.subtitle,
+                color = DesktopAppleSecondary,
+                fontSize = 12.sp,
+                lineHeight = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppleFeedCircle(
+    item: ShelfItem,
+    width: Dp,
+    onClick: () -> Unit,
+    onMenu: (() -> Unit)?,
+) {
+    Column(Modifier.width(width), horizontalAlignment = Alignment.CenterHorizontally) {
+        DesktopArtwork(
+            item.thumbnailUrl,
+            Modifier.size(width).clip(CircleShape)
+                .desktopArtHoverShade().clickable(onClick = onClick)
+                .then(if (onMenu == null) Modifier else Modifier.contextClick { onMenu() }),
+            px = 400,
+        )
+        Text(
+            item.title,
+            color = DesktopAppleText,
+            fontSize = 13.sp,
+            lineHeight = 16.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+        )
     }
 }
 
@@ -401,29 +728,14 @@ private fun AppleBrowseRecentShelf(
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
 ) {
-    Column(Modifier.padding(top = 20.dp, bottom = 6.dp)) {
-        DesktopAppleHeading(shelf.title, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp))
-        DesktopScrollableRow(spacing = 20.dp) {
-            items(shelf.items) { item ->
-                Column(
-                    Modifier.width(172.dp)
-                        .longPressMenuClickable(
-                            onClick = { onItemClick(item, shelf.title) },
-                            onLongClick = { onItemMenu(item) },
-                            highlight = false,
-                        ).contextClick { onItemMenu(item) },
-                ) {
-                    // Only the cover lights up, not the caption under it.
-                    DesktopArtwork(
-                        item.thumbnailUrl,
-                        Modifier.size(172.dp).clip(RoundedCornerShape(8.dp)).desktopArtHoverShade(),
-                        px = 400,
-                    )
-                    AppleBrowseCaptions(item.title, item.subtitle)
-                }
-            }
-        }
-    }
+    // Recently Played is a run of songs on the site, not a row of covers: the
+    // same four-row shelf every other run of songs gets.
+    AppleFeedTracksShelf(
+        title = shelf.title,
+        lines = shelf.items.map { AppleSongLine(it.title, it.subtitle, it.thumbnailUrl) },
+        onPlay = { index -> onItemClick(shelf.items[index], shelf.title) },
+        onOpenMenu = { index -> onItemMenu(shelf.items[index]) },
+    )
 }
 
 /**
@@ -633,9 +945,10 @@ private fun RowScope.AppleTrackHeading(
 /**
  * One row of a release's track table, in Apple's four columns.
  *
- * The web list answers the pointer in three places at once: the row lights, a play triangle comes
- * up over the cover, and the length in the last column is replaced by a ⋯ that opens the same menu
- * a right-click does. All three are driven by the one hover value so they arrive together.
+ * The web list answers the pointer in two places at once: a play triangle comes up over the cover,
+ * and the length in the last column is replaced by a ⋯ that opens the same menu a right-click
+ * does. Both are driven by the one hover value so they arrive together. The row itself keeps its
+ * ground — only the name under the pointer underlines, the way a link does.
  */
 @Composable
 private fun AppleTrackTableRow(
@@ -665,7 +978,6 @@ private fun AppleTrackTableRow(
         )
         Row(
             Modifier.fillMaxWidth().height(TRACK_ROW_HEIGHT).hoverable(interaction)
-                .background(Color.White.copy(alpha = 0.08f * reveal), RoundedCornerShape(12.dp))
                 .longPressMenuClickable(onClick = { onItemClick(track, shelfTitle) }, onLongClick = menu)
                 .contextClick(menu),
             verticalAlignment = Alignment.CenterVertically,
@@ -703,33 +1015,17 @@ private fun AppleTrackTableRow(
             }
             // The Artist and Album cells are links, as they are on Apple's own table: the inner
             // clickable takes the press, so the row's own play action is left alone.
-            Text(
+            AppleTableLink(
                 artistName,
-                color = DesktopAppleSecondary,
-                fontSize = 12.sp,
-                lineHeight = 15.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(25.25f).padding(end = 10.dp)
-                    .then(
-                        if (onArtistClick != null && artistName.isNotBlank()) {
-                            Modifier.clickable { onArtistClick(artistName) }
-                        } else Modifier,
-                    ),
+                canOpen = onArtistClick != null && artistName.isNotBlank(),
+                onClick = { onArtistClick?.invoke(artistName) },
+                modifier = Modifier.weight(25.25f).padding(end = 10.dp),
             )
-            Text(
+            AppleTableLink(
                 albumName,
-                color = DesktopAppleSecondary,
-                fontSize = 12.sp,
-                lineHeight = 15.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(25.25f).padding(end = 16.dp)
-                    .then(
-                        if (onAlbumClick != null && albumName.isNotBlank()) {
-                            Modifier.clickable { onAlbumClick(track) }
-                        } else Modifier,
-                    ),
+                canOpen = onAlbumClick != null && albumName.isNotBlank(),
+                onClick = { onAlbumClick?.invoke(track) },
+                modifier = Modifier.weight(25.25f).padding(end = 16.dp),
             )
             Box(Modifier.weight(13f).fillMaxHeight()) {
                 Text(
@@ -761,6 +1057,38 @@ private fun AppleTrackTableRow(
             }
         }
     }
+}
+
+/**
+ * A link in the track table: under the pointer it lightens to white and underlines, the way
+ * Apple's own table answers a name — and the row itself keeps its ground. It takes the press
+ * itself, so a click here opens the artist or release rather than playing the row.
+ */
+@Composable
+private fun AppleTableLink(
+    text: String,
+    canOpen: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val lit = hovered && canOpen
+    Text(
+        text,
+        color = if (lit) DesktopAppleText else DesktopAppleSecondary,
+        fontSize = 12.sp,
+        lineHeight = 15.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textDecoration = if (lit) TextDecoration.Underline else null,
+        modifier = if (canOpen) {
+            modifier.hoverable(interaction)
+                .clickable(interaction, indication = null, onClick = onClick)
+        } else {
+            modifier
+        },
+    )
 }
 
 /** Apple keeps the length of a track in milliseconds and shows it as `3:28`. */
@@ -815,31 +1143,11 @@ private fun AppleBrowseStations(seeds: List<Song>, onStartStation: (Song) -> Uni
 }
 
 @Composable
-private fun AppleBrowseWideShelf(shelf: HomeShelf, onItemClick: (ShelfItem, String?) -> Unit) {
-    Column(Modifier.padding(top = 25.dp, bottom = 5.dp)) {
-        DesktopAppleHeading(shelf.title, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp))
-        DesktopScrollableRow(spacing = 20.dp) {
-            items(shelf.items) { item ->
-                Column(Modifier.width(220.dp).desktopQuietClick { onItemClick(item, shelf.title) }) {
-                    DesktopArtwork(
-                        item.thumbnailUrl,
-                        Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
-                            .desktopArtHoverShade(),
-                        px = 800,
-                    )
-                    AppleBrowseCaptions(item.title, item.subtitle)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun AppleBrowseCaptions(title: String, subtitle: String) {
-    Text(title, color = DesktopAppleText, fontSize = 13.sp, fontWeight = FontWeight.Normal,
-        maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 7.dp))
+    Text(title, color = DesktopAppleText, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Normal,
+        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
     if (subtitle.isNotBlank()) {
-        Text(subtitle, color = DesktopAppleSecondary, fontSize = 12.sp, fontWeight = FontWeight.Normal,
+        Text(subtitle, color = DesktopAppleSecondary, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Normal,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
@@ -946,22 +1254,6 @@ private fun String.isAppleBrowseRecent(): Boolean = trim().lowercase(Locale.ROOT
     "recents", "recently played", "recentlyplayed", "gần đây", "最近",
 )
 
-/** The shelves that lead the home page, in the order they lead it. */
-private val AppleBrowsePinnedShelves = listOf("Trending", "Listen again")
-
-/**
- * Where a shelf belongs in home's running order: the pinned rows first, then
- * Apple's playlist rows, then the rest as the feed delivered them.
- */
-private fun appleBrowseShelfRank(shelf: HomeShelf, index: Int): Int {
-    val pinned = AppleBrowsePinnedShelves.indexOfFirst { it.equals(shelf.title.trim(), ignoreCase = true) }
-    return when {
-        pinned >= 0 -> pinned
-        shelf.items.any(ShelfItem::isApplePlaylistTile) -> AppleBrowsePinnedShelves.size
-        else -> AppleBrowsePinnedShelves.size + 1 + index
-    }
-}
-
 /**
  * Feed rows Apple's own home has no equivalent of, so the page drops them rather
  * than carrying the backend's taxonomy onto a screen that is meant to read as
@@ -970,12 +1262,6 @@ private fun appleBrowseShelfRank(shelf: HomeShelf, index: Int): Int {
 private fun String.isAppleBrowseDropped(): Boolean {
     val value = trim().lowercase(Locale.ROOT)
     return value.contains("fresh finds") || value.contains("old favourite") || value.contains("old favorite")
-}
-
-private fun String.isAppleBrowseEditorial(): Boolean {
-    val value = trim().lowercase(Locale.ROOT)
-    return value in setOf("albums", "singles", "albums & singles", "new albums & singles", "new releases") ||
-        value.contains("featured") || value.contains("editorial")
 }
 
 /**
@@ -988,9 +1274,6 @@ internal fun String.isQuietShelfTitle(): Boolean {
     return value == "new" || value == "albums&singles" ||
         value == "newalbum&singles" || value == "newalbums&singles"
 }
-
-private fun HomeShelf.isAppleBrowseWide(): Boolean =
-    title.contains("interview", ignoreCase = true) || title.contains("video", ignoreCase = true)
 
 private fun appleBrowseCategoryColor(title: String): Color = when ((title.hashCode() and Int.MAX_VALUE) % 6) {
     0 -> Color(0xFF96576D)

@@ -88,6 +88,7 @@ import com.music.bitchord.ui.player.ArtworkMeshBackdrop
 import com.music.bitchord.ui.player.LyricsSidePanel
 import com.music.bitchord.ui.player.MeshGradientBackground
 import com.music.bitchord.ui.player.MixPulse
+import com.music.bitchord.ui.player.PlaybackQualityLabel
 import com.music.bitchord.ui.player.PlayerEscapeLayer
 import com.music.bitchord.ui.player.QueueSidePanel
 import com.music.bitchord.ui.player.TurntableDeck
@@ -150,6 +151,8 @@ internal fun DesktopWebPlayer(
     volume: Float,
     onVolumeChange: (Float) -> Unit,
     onOpenAudioOutput: () -> Unit,
+    /** The quality badge opens the audio pipeline readout, as it does on every other player. */
+    onOpenTrackInfo: () -> Unit,
     onOpenMenu: () -> Unit,
     menu: @Composable () -> Unit,
     onOpenAlbum: (String) -> Unit,
@@ -166,6 +169,8 @@ internal fun DesktopWebPlayer(
     lyricsProviderStates: Map<LyricsSource, LyricsProviderState>,
     onSelectLyricsProvider: (LyricsSource) -> Unit,
     lyricsUnavailable: Boolean,
+    /** Right-click on a lyric line: ask Genius what that line means. */
+    onLineMeaning: (String) -> Unit,
     playerLyricsToggle: MutableState<Boolean>,
     playerQueueToggle: MutableState<Boolean>,
     playerTranslateToggle: MutableState<Boolean>,
@@ -269,6 +274,9 @@ internal fun DesktopWebPlayer(
                         durationMs = durationMs,
                         transitionWindow = transitionWindow,
                         mixPulse = mixPulse,
+                        song = song,
+                        isLoading = isLoading,
+                        onOpenTrackInfo = onOpenTrackInfo,
                         onSeek = onSeek,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -310,6 +318,7 @@ internal fun DesktopWebPlayer(
                                     onSelectLyricsProvider = onSelectLyricsProvider,
                                     lyricsUnavailable = lyricsUnavailable,
                                     onSeek = onSeek,
+                                    onLineMeaning = onLineMeaning,
                                     modifier = Modifier.fillMaxSize(),
                                     // The words rest slightly above the pane's middle,
                                     // as the player's own sheet keeps them.
@@ -448,9 +457,12 @@ private fun WebArtwork(url: String?, paused: Boolean, canvas: DesktopCanvasArtwo
         modifier
             .graphicsLayer { if (!turntableOn) { scaleX = scale; scaleY = scale } }
             // shadow-[0_4px_10px_#0000001a] — the shadow the reference draws under the cover.
+            // Its clip stays on for the sleeve, but off for the deck: shadow() clips to the
+            // shape, and clipping to the record's circle would cut the tonearm off at the rim.
             .shadow(
                 10.dp,
                 if (turntableOn) CircleShape else RoundedCornerShape(10.dp),
+                clip = !turntableOn,
                 ambientColor = Color.Black.copy(alpha = 0.1f),
                 spotColor = Color.Black.copy(alpha = 0.1f),
             ),
@@ -464,6 +476,8 @@ private fun WebArtwork(url: String?, paused: Boolean, canvas: DesktopCanvasArtwo
             saturated = true,
             modifier = Modifier
                 .matchParentSize()
+                // Clipped to the record's circle before the blur, since the box no longer is.
+                .then(if (turntableOn) Modifier.clip(CircleShape) else Modifier)
                 .blur(20.dp)
                 .graphicsLayer { translationY = 8.dp.toPx(); scaleX = 0.96f; scaleY = 0.96f },
         )
@@ -693,8 +707,8 @@ private fun WebLink(
 /**
  * The player's scrubber: a 4px bar that grows to 8px under the pointer, its
  * fill brightening from 64% to 92% white, with the elapsed and remaining
- * times below — and the "Mixing" label that takes their place while a blend
- * covers the bar.
+ * times below and the quality badge in the gap between them — and the
+ * "Mixing" label that takes the badge's place while a blend covers the bar.
  */
 @Composable
 private fun WebScrubber(
@@ -702,6 +716,9 @@ private fun WebScrubber(
     durationMs: Long,
     transitionWindow: ClosedFloatingPointRange<Float>? = null,
     mixPulse: MixPulse,
+    song: Song,
+    isLoading: Boolean,
+    onOpenTrackInfo: () -> Unit,
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -811,6 +828,17 @@ private fun WebScrubber(
                 lineHeight = 14.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.align(Alignment.Center).graphicsLayer { alpha = mixPulse.cover },
+            )
+            // The badge holds the centre the "Mixing" label takes over, so it
+            // fades out on exactly the same curve the times do.
+            PlaybackQualityLabel(
+                song = song,
+                isLoading = isLoading,
+                onOpenTrackInfo = onOpenTrackInfo,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 8.dp)
+                    .graphicsLayer { alpha = 1f - mixPulse.cover },
             )
         }
     }

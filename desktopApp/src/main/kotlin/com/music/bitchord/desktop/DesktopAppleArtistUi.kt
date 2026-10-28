@@ -182,15 +182,29 @@ internal fun DesktopAppleArtistHeader(
                     value = if (logoMissing) Result.success(DesktopArtistSignatures.signatureFor(name)) else null
                 }
                 val ink = signature?.getOrNull()
-                if (mark != null) {
-                    val aspect = mark.width.toFloat() / mark.height
-                    val width = minOf(headerWidth * 0.45f, 282.dp, 94.dp * aspect)
-                    Image(mark, name, Modifier.width(width).height(width / aspect), contentScale = ContentScale.Fit)
-                } else if (logoMissing && ink != null) {
-                    val aspect = ink.width.toFloat() / ink.height
-                    val width = minOf(headerWidth * 0.5f, 320.dp, 110.dp * aspect)
-                    Image(ink, name, Modifier.width(width).height(width / aspect), contentScale = ContentScale.Fit,
-                        colorFilter = ColorFilter.tint(Color.White, BlendMode.SrcIn))
+                // A signature is credited rather than just shown: Apple set the
+                // artist's own hand under a "Signed by" line, and without it
+                // the script reads as a logo nobody wrote.
+                if (mark != null || (logoMissing && ink != null)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (mark != null) {
+                            val aspect = mark.width.toFloat() / mark.height
+                            val width = minOf(headerWidth * 0.45f, 282.dp, 94.dp * aspect)
+                            Image(mark, name, Modifier.width(width).height(width / aspect), contentScale = ContentScale.Fit)
+                        } else {
+                            val aspect = ink!!.width.toFloat() / ink.height
+                            val width = minOf(headerWidth * 0.5f, 320.dp, 110.dp * aspect)
+                            Image(ink, name, Modifier.width(width).height(width / aspect), contentScale = ContentScale.Fit,
+                                colorFilter = ColorFilter.tint(Color.White, BlendMode.SrcIn))
+                        }
+                        Text(
+                            DesktopStrings.format("d_signed_by", name, fallback = "Signed by %1\$s"),
+                            color = Color.White.copy(alpha = 0.78f),
+                            fontSize = 12.sp,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier.padding(top = 10.dp),
+                        )
+                    }
                 } else if (logoMissing && signature != null) {
                     Text(canonicalAppleArtistName(name), fontSize = 44.sp, fontWeight = FontWeight.Bold, color = Color.White, textAlign = TextAlign.Center, maxLines = 2)
                 } else {
@@ -232,11 +246,8 @@ private fun DesktopAppleArtistButton(size: Int, label: String, enabled: Boolean 
 }
 
 @Composable
-internal fun DesktopAppleHeading(title: String, modifier: Modifier = Modifier, chevron: Boolean = false) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Text(title, color = DesktopAppleText, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-        if (chevron) Icon(BitChordIcons.ChevronRight, null, tint = DesktopAppleSecondary, modifier = Modifier.padding(start = 3.dp).size(14.dp))
-    }
+internal fun DesktopAppleHeading(title: String, modifier: Modifier = Modifier) {
+    Text(title, modifier, color = DesktopAppleText, fontSize = 17.sp, fontWeight = FontWeight.Bold)
 }
 
 @Composable
@@ -295,8 +306,6 @@ internal fun DesktopAppleSongGrid(
     lines: List<AppleSongLine>,
     onPlay: (Int) -> Unit,
     onOpenMenu: (Int) -> Unit,
-    chevron: Boolean = false,
-    onHeadingClick: (() -> Unit)? = null,
     rowsPerColumn: Int = 3,
     columnWidth: Dp = 298.dp,
     rowHeight: Dp = 55.dp,
@@ -306,9 +315,7 @@ internal fun DesktopAppleSongGrid(
     Column(Modifier.padding(top = 25.dp, bottom = 5.dp)) {
         DesktopAppleHeading(
             title,
-            Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
-                .then(if (onHeadingClick != null) Modifier.clickable { onHeadingClick() } else Modifier),
-            chevron = chevron,
+            Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp),
         )
         DesktopScrollableRow(gutter = DesktopPageGutter, spacing = 20.dp) {
             items(columns) { column ->
@@ -380,7 +387,7 @@ internal fun DesktopAppleTopSongs(
     val shown = songs.take(maxSongs)
     val columns = shown.indices.chunked(rowsPerColumn)
     Column(modifier) {
-        DesktopAppleHeading("Top Songs", Modifier.padding(bottom = 15.dp), chevron = true)
+        DesktopAppleHeading("Top Songs", Modifier.padding(bottom = 15.dp))
         BoxWithConstraints {
             val spacing = 20.dp
             val columnWidth = ((maxWidth - spacing * (columns.size - 1)) / columns.size)
@@ -431,30 +438,34 @@ internal fun DesktopAppleShelf(
     playingRadioKey: String? = null,
     /** Off for a page that already names itself, so the shelf's own title is left out. */
     showHeading: Boolean = true,
+    /**
+     * Draw this row as the site's tall (3:4) pick, words inside the art. Only a square
+     * cover row can wear it: an Apple shelf that already named its own shape keeps it.
+     */
+    portrait: Boolean = false,
 ) {
     val circles = shelf.items.isNotEmpty() && shelf.items.all { it.browseId?.startsWith("UC") == true }
     val videos = shelf.title.contains("video", ignoreCase = true)
+    // What the source itself says this row is, when it says anything at all: Apple's item kind is
+    // the site's own layout vocabulary, and beats guessing from the titles.
+    val declared = shelf.feedLayout(circles)
     val titled = showHeading && !shelf.title.isQuietShelfTitle()
-    val more = shelf.moreBrowseId?.takeIf { it.startsWith(DesktopAppleBrowseClient.PAGE_PREFIX) }
-    val heading: @Composable () -> Unit = {
-        if (titled) DesktopAppleHeading(shelf.title, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)
-            .then(if (more != null) Modifier.clickable { onItemClick(ShelfItem(shelf.title, "", null, null, more), shelf.title) } else Modifier), chevron = true)
-    }
-    // Apple's track grid — the columns of short rows that read down three at a
-    // time — is what a *run of songs* looks like on its pages: the charts, a
-    // "Best New Songs", an artist's top tracks. The source's other song rows
-    // ("Quick picks", "Covers and remixes") are covers, and stay tiles.
+    // Apple's track grid — the columns of short rows that read down — is what a
+    // *run of songs* looks like on its pages: the charts, a "Best New Songs", an
+    // artist's top tracks. The source's other song rows ("Quick picks", "Covers
+    // and remixes") are covers, and stay tiles.
     val songGrid = shelf.items.isNotEmpty() && !circles && !videos && shelf.items.all { it.isSongLine() } &&
         (shelf.items.all { it.isAppleSong() } || shelf.isAppleChartShelf() ||
-            shelf.title.contains("song", ignoreCase = true) || shelf.title.equals("Listen again", ignoreCase = true))
+            shelf.title.contains("song", ignoreCase = true) || shelf.title.equals("Listen again", ignoreCase = true) ||
+            declared == AppleFeedLayout.Tracks)
     if (songGrid) {
-        DesktopAppleSongGrid(
-            shelf.title,
-            shelf.items.map { AppleSongLine(it.title, it.subtitle, it.thumbnailUrl) },
+        AppleFeedTracksShelf(
+            title = shelf.title,
+            lines = shelf.items.map { AppleSongLine(it.title, it.subtitle, it.thumbnailUrl) },
             onPlay = { onItemClick(shelf.items[it], shelf.title) },
-            onOpenMenu = { i -> onItemMenu?.invoke(shelf.items[i]) },
-            chevron = more != null,
-            onHeadingClick = more?.let { id -> { onItemClick(ShelfItem(shelf.title, "", null, null, id), shelf.title) } },
+            onOpenMenu = onItemMenu?.let { menu -> { index: Int -> menu(shelf.items[index]) } },
+            showHeading = titled,
+            rows = if (shelf.rows > 1) shelf.rows else 4,
         )
         return
     }
@@ -480,30 +491,26 @@ internal fun DesktopAppleShelf(
         )
         return
     }
-    // Apple's own tile measures: 171 to the square, 219 to a 16:9 video, 97 to a
-    // circle, all 20 apart.
-    val width = if (circles) 97.dp else if (videos) 219.dp else 171.dp
-    Column(Modifier.padding(top = 25.dp, bottom = 5.dp)) {
-        heading()
-        DesktopScrollableRow(gutter = DesktopPageGutter, spacing = 20.dp) {
-            items(shelf.items) { item ->
-                val shape = if (circles) CircleShape else RoundedCornerShape(8.dp)
-                Column(Modifier.width(width)) {
-                    DesktopArtwork(
-                        item.thumbnailUrl,
-                        Modifier.width(width).aspectRatio(if (videos) 16f / 9f else 1f).clip(shape)
-                            .desktopArtHoverShade().clickable { onItemClick(item, shelf.title) }
-                            .then(if (onItemMenu == null) Modifier else Modifier.contextClick { onItemMenu(item) }),
-                        px = if (videos) 800 else 400,
-                    )
-                    Text(item.title, fontSize = 13.sp, color = DesktopAppleText, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        textAlign = if (circles) TextAlign.Center else TextAlign.Start,
-                        modifier = Modifier.fillMaxWidth().padding(top = 7.dp))
-                    if (!circles) Text(item.subtitle, fontSize = 12.sp, color = DesktopAppleSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-        }
+    // The reference site's cover rows: square covers, 16:9 stills, artist circles, `horizontal`
+    // pairs and editorial tiles, each measured to its share of the page. A page's lead cover row
+    // can wear the site's taller pick instead; see [portrait].
+    val coverLayout = declared?.takeIf { it != AppleFeedLayout.Tracks } ?: when {
+        circles -> AppleFeedLayout.Circle
+        videos -> AppleFeedLayout.Video
+        else -> AppleFeedLayout.Square
     }
+    val portraitRow = portrait && coverLayout == AppleFeedLayout.Square
+    AppleFeedCoverShelf(
+        title = shelf.title,
+        layout = if (portraitRow) AppleFeedLayout.Portrait else coverLayout,
+        items = shelf.items,
+        onClick = { item -> onItemClick(item, shelf.title) },
+        onMenu = onItemMenu,
+        // The tall picks row is a shelf in its own right on the site, titled above; a quiet title
+        // is only ever quiet because the page it came from names itself, and this row is not that.
+        showHeading = titled || portraitRow,
+        rows = shelf.rows,
+    )
 }
 
 /**

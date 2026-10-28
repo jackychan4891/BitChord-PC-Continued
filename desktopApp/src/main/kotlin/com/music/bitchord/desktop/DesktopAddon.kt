@@ -683,11 +683,15 @@ internal object DesktopAddonSource {
             )
             return null
         }
+        val format = formatOf(answer, url, tier)
         return DesktopStream(
             url = url,
-            format = formatOf(answer, url, tier),
+            format = format,
             sourceId = config.id,
-            isDolbyAtmos = answer.isDolbyAtmos,
+            // Either source of truth: an explicit `atmos` field, or a codec that is only
+            // ever E-AC-3 JOC. Reading just the field let an Atmos answer with an
+            // `eac3` codec look like a stereo one downstream.
+            isDolbyAtmos = answer.isDolbyAtmos || format.isDolbyAtmos,
             transport = answer.transport,
             durationSec = rows[rowKey(config.id, trackId)]?.durationSec,
         )
