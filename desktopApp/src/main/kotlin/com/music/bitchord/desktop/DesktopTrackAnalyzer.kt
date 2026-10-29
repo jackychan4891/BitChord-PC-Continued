@@ -8,6 +8,8 @@ import com.music.bitchord.playback.smart.BeatTracker
 import com.music.bitchord.playback.smart.MelSpectrogram
 import com.music.bitchord.playback.smart.TrackAnalysis
 import com.music.bitchord.playback.smart.TrackFeatures
+import java.util.Collections
+import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -46,7 +48,21 @@ internal class DesktopTrackAnalyzer(
     /** Analyses kept between runs, so a track measured yesterday is not measured again today. */
     private val store = AnalysisStore { DesktopAnalysisRuntime.analysisHome() }
 
-    private val results = ConcurrentHashMap<String, TrackAnalysis>()
+    /**
+     * Analyses in RAM, newest-used first.
+     *
+     * A window rather than a history: [analysisFor] is asked for the whole queue every tick, and
+     * every ask promotes a stored analysis out of [store] and into here, so unbounded this held the
+     * per-frame energy and vocal curves of everything a session had touched — around a megabyte of
+     * boxed samples per track, with nothing ever dropped. The disk store keeps them all; this only
+     * has to hold what the planner might mix with.
+     */
+    private val results: MutableMap<String, TrackAnalysis> = Collections.synchronizedMap(
+        object : LinkedHashMap<String, TrackAnalysis>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TrackAnalysis>) =
+                size > ANALYSES_IN_RAM
+        },
+    )
     private val running = ConcurrentHashMap.newKeySet<String>()
 
     /** Tracks the analyser could not measure. */
@@ -183,14 +199,14 @@ internal class DesktopTrackAnalyzer(
         stream: DesktopStream,
         durationSeconds: Double,
     ): TrackAnalysis? {
-        val features = decode(stream, TrackFeatures.sampleRate)
+        val features = decode(stream, TrackFeatures.sampleRate, durationSeconds)
             ?.let { TrackFeatures.analyze(it, durationSeconds) }
             ?: return null
 
         if (stopped()) return null
         // The model runs at its own rate, so it gets its own decode rather than a resample of the
         // analyser's.
-        val grid = decode(stream, MelSpectrogram.sampleRate)?.let { beats.track(it) }
+        val grid = decode(stream, MelSpectrogram.sampleRate, durationSeconds)?.let { beats.track(it) }
 
         return TrackAnalysis(
             status = TrackAnalysis.STATUS_READY,
@@ -223,7 +239,7 @@ internal class DesktopTrackAnalyzer(
     }
 
     /** The whole track as mono float at [rate]. */
-    private fun decode(stream: DesktopStream, rate: Double): FloatArray? {
+    private fun decode(stream: DesktopStream, rate: Double, durationSeconds: Double): FloatArray? {
         val decoder = DesktopAudioDecoder()
         val opened = decoder.open(
             url = stream.url,
@@ -237,25 +253,39 @@ internal class DesktopTrackAnalyzer(
             return null
         }
         return try {
-            val out = ArrayList<FloatArray>()
+            // One array sized from the track's own length plus two seconds, grown only if the
+            // decode runs long. The previous list-of-blocks-then-copy held the whole decode twice
+            // over, and this is the largest single allocation the analyser makes.
+            //
+            // The slack is deliberately the same as the crop threshold below: a decode that lands
+            // inside two seconds of its own duration keeps the buffer it already has, because
+            // cropping it would put a second whole-track array in the heap at the same moment —
+            // the peak this class exists to avoid. Only a decode that really fell short of the
+            // tagged length is copied, so a wrong duration cannot feed minutes of silence to the
+            // model as though they were music.
+            val slack = (2 * rate).toInt()
+            val capacity = (durationSeconds * rate).toLong().coerceIn(0, MAX_SAMPLES.toLong()).toInt() + slack
+            var samples = FloatArray(capacity)
             var total = 0
             while (true) {
                 if (stopped()) return null
                 val block = decoder.readSamples() ?: break
                 val count = decoder.sampleCount
                 if (count <= 0) continue
-                out += block.copyOf(count)
+                if (total + count > samples.size) {
+                    val grown = samples.copyOf((total + count).coerceAtMost(MAX_SAMPLES))
+                    if (grown.size == samples.size) break
+                    samples = grown
+                }
+                block.copyInto(samples, total, 0, count)
                 total += count
-                if (total > MAX_SAMPLES) break
+                if (total >= MAX_SAMPLES) break
             }
-            if (total == 0) return null
-            val samples = FloatArray(total)
-            var at = 0
-            for (block in out) {
-                block.copyInto(samples, at)
-                at += block.size
+            when {
+                total == 0 -> null
+                samples.size - total <= slack -> samples
+                else -> samples.copyOf(total)
             }
-            samples
         } finally {
             decoder.close()
         }
@@ -279,6 +309,9 @@ internal class DesktopTrackAnalyzer(
          * upload cannot eat the heap.
          */
         const val MAX_SAMPLES = 20 * 60 * 11_025
+
+        /** How many analyses this process holds in RAM; the disk store keeps the rest. */
+        const val ANALYSES_IN_RAM = 12
 
         /** Stack for the analysis thread. */
         const val ANALYSIS_STACK_BYTES = 64L * 1024 * 1024

@@ -496,13 +496,22 @@ internal object DesktopSourceRegistry {
 
     /** Whether a copy found after the fact is worth interrupting playback for. */
     internal fun worthSwapping(candidate: DesktopStreamFormat, playing: DesktopStreamFormat?): Boolean {
-        // Nothing takes a listener off the mix they asked for, and nothing ever swaps one
-        // lossless copy for a worse one — hunt as often as the sources allow.
-        if (playing?.isDolbyAtmos == true && !candidate.isDolbyAtmos) return false
+        if (playing?.isDolbyAtmos == true) return false
         if (candidate.isDolbyAtmos) return true
-        if (playing?.isLossless == true && !candidate.isLossless) return false
-        if (candidate.isLossless) return true
-        val gain = (candidate.kbps ?: return false) - (playing?.kbps ?: return false)
+        if (playing == null) return candidate.isLossless
+        if (candidate.isLossless != playing.isLossless) return candidate.isLossless
+        if (candidate.isLossless) {
+            val depthGain = candidate.bitDepth != null && playing.bitDepth != null &&
+                candidate.bitDepth > playing.bitDepth
+            val rateGain = candidate.sampleRateHz != null && playing.sampleRateHz != null &&
+                candidate.sampleRateHz > playing.sampleRateHz
+            val noDepthLoss = candidate.bitDepth == null || playing.bitDepth == null ||
+                candidate.bitDepth >= playing.bitDepth
+            val noRateLoss = candidate.sampleRateHz == null || playing.sampleRateHz == null ||
+                candidate.sampleRateHz >= playing.sampleRateHz
+            return (depthGain || rateGain) && noDepthLoss && noRateLoss
+        }
+        val gain = (candidate.kbps ?: return false) - (playing.kbps ?: return false)
         return gain >= UPGRADE_MIN_GAIN_KBPS
     }
 

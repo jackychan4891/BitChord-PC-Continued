@@ -2932,14 +2932,19 @@ fun BitChordDesktopApp() {
     }
 
     // Category buttons carry no artwork of their own, so a few are resolved at a time from the
-    // shelves they open.
+    // shelves they open. Each is asked for once per visit: this pass writes its answers back into
+    // [exploreState], which restarts it, and a category with no cover to lend would otherwise stay
+    // "missing" forever — a fetch and a BotGuard token on every restart, without end.
+    val resolvedCategoryArtwork = remember { mutableSetOf<String>() }
     LaunchedEffect(exploreState) {
         val sections = (exploreState as? UiState.Success)?.data ?: return@LaunchedEffect
-        if (sections.all { section -> section.items.all { it.thumbnailUrl != null } }) return@LaunchedEffect
+        val pending = sections.flatMap(MoodGenreSection::items)
+            .filter { it.thumbnailUrl == null }
+            .filter { resolvedCategoryArtwork.add("${it.browseId}:${it.params.orEmpty()}") }
+        if (pending.isEmpty()) return@LaunchedEffect
         val limiter = Semaphore(4)
         coroutineScope {
-            sections.flatMap(MoodGenreSection::items)
-                .filter { it.thumbnailUrl == null }
+            pending
                 .forEach { item ->
                     launch {
                         val artwork = limiter.withPermit {
@@ -6125,6 +6130,23 @@ private fun DesktopSettingsScreen(
                         dontRepeatSuggestions,
                         onDontRepeatSuggestionsChange,
                     )
+                    // Only offered where this build can actually run yt-dlp, so a non-Windows user
+                    // never sees a switch that does nothing. On by default: it keeps the BotGuard
+                    // WebView out of memory. Flipping it off here cannot unload a WebKit the session
+                    // already started — a restart frees that.
+                    if (DesktopYtDlpResolver.supported) {
+                        val ytdlpOn by DesktopYtDlpResolver.enabledSetting.collectAsState()
+                        SettingsToggle(
+                            BitChordIcons.Download,
+                            DesktopStrings["d_ytdlp_extractor", "External stream extractor"],
+                            DesktopStrings[
+                                "d_ytdlp_extractor_subtitle",
+                                "Resolve YouTube through a separate yt-dlp process, keeping the browser engine out of memory",
+                            ],
+                            ytdlpOn,
+                            DesktopYtDlpResolver::setEnabled,
+                        )
+                    }
                 }
             }
             if (section == DesktopSettingsGroup.LYRICS) item {

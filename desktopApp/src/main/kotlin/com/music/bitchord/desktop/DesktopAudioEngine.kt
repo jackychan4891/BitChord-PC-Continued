@@ -406,7 +406,7 @@ class DesktopPlaybackEngine(
                 val pendingStream = runCatching { pending.await() }.getOrNull()
                 val pendingAtmos = pendingStream != null &&
                     (pendingStream.isDolbyAtmos || pendingStream.format.isDolbyAtmos)
-                take(song, pendingStream)
+                val accepted = pendingStream?.takeIf { take(song, it) }
                 if (pendingAtmos) return@launch
                 // The live race takes the first copy that beats YouTube, so a slower lossless
                 // source can still be searching when a lossy one wins — and a source that failed
@@ -423,8 +423,12 @@ class DesktopPlaybackEngine(
                     if (!atmosWanted && DesktopMusicSources.ceiling(null) != DesktopAudioQuality.LOSSLESS) return@launch
                     awaitMixEnd()
                     if (_state.value.song?.videoId != song.videoId) return@launch
-                    val playing = DesktopStream(url = "", format = current.streamFormat ?: DesktopStreamFormat(), sourceId = current.streamSourceId)
-                    if (take(song, DesktopMusicSources.upgradeFor(song, playing))) return@launch
+                    val playing = accepted ?: DesktopStream(
+                        url = "",
+                        format = current.streamFormat ?: DesktopStreamFormat(),
+                        sourceId = current.streamSourceId,
+                    )
+                    if (take(song, DesktopMusicSources.upgradeFor(song, playing.copy(url = "")))) return@launch
                 }
                 DesktopTrackLog.log("no better copy of '${song.title}' was found")
             } finally {
@@ -2586,9 +2590,11 @@ class DesktopPlaybackEngine(
         /**
          * How many of the tracks still to come are kept open ahead of their turn — enough that
          * whatever Next lands on has already crossed the network, few enough that the read-ahead
-         * stays beneath the listening itself.
+         * stays beneath the listening itself. Each warm deck holds an open decoder and eight
+         * seconds of decoded audio, so every one beyond the next track is resident memory spent
+         * on a skip that may never come.
          */
-        const val PRELOAD_SONGS = 3
+        const val PRELOAD_SONGS = 2
 
         /** How long a preloaded deck may sit before it is thrown away rather than played. */
         private const val WARM_MAX_AGE_MS = 10 * 60_000L

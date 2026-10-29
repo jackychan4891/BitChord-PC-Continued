@@ -22,11 +22,18 @@ internal object DesktopAnalysisRuntime {
     /** Where unpacked resources and cached analyses live. */
     fun analysisHome(): java.io.File = home.toFile().also { Files.createDirectories(home) }
 
+    /**
+     * `-Dbitchord.analysis=off` keeps the analyser's native library out of this process, which is
+     * how the memory cost of running it in-process is measured.
+     */
+    private val disabled: Boolean =
+        System.getProperty("bitchord.analysis", "").lowercase() == "off"
+
     /** True once the native analyser is loaded and usable. */
-    val available: Boolean get() = ensureStarted().let { NativeAnalysisLibrary.available }
+    val available: Boolean get() = if (disabled) false else ensureStarted().let { NativeAnalysisLibrary.available }
 
     fun ensureStarted() {
-        if (!started.compareAndSet(false, true)) return
+        if (disabled || !started.compareAndSet(false, true)) return
         AnalysisLog.install { message, error ->
             DesktopTrackLog.log(
                 when {

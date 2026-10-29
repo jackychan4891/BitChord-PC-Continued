@@ -172,6 +172,15 @@ data class DesktopStreamFormat(
  */
 internal object DesktopStreamClient {
     suspend fun resolve(song: Song, maxKbps: Int = Int.MAX_VALUE): Result<DesktopStream> = runCatching {
+        if (DesktopYtDlpResolver.enabled) {
+            val helper = DesktopYtDlpResolver.resolve(song, maxKbps)
+            val viaHelper = helper.getOrNull()
+            if (viaHelper != null) {
+                DesktopTrackLog.log("  youtube: resolved '${song.title}' through yt-dlp")
+                return@runCatching viaHelper
+            }
+            DesktopTrackLog.log("  youtube: yt-dlp failed for '${song.title}' (${helper.exceptionOrNull()?.message}), falling back in-process")
+        }
         val url = withContext(Dispatchers.IO) {
             ceiling.set(maxKbps)
             try {

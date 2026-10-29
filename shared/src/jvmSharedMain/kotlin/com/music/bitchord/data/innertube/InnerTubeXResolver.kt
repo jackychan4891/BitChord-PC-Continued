@@ -69,6 +69,14 @@ object InnerTubeXResolver {
     @Volatile
     var debugLogging: Boolean = false
 
+    /**
+     * Whether [init] should eagerly prewarm the cipher solver and the PoToken WebView before the
+     * first track. Default on; a platform that resolves streams out of process turns it off so
+     * WebKit and the JS engine are never loaded at all.
+     */
+    @Volatile
+    var autoPrewarm: Boolean = true
+
     private var prefs: ConfigStore? = null
     private var poTokens: TokenProvider? = null
     private var playerDir: File? = null
@@ -86,7 +94,7 @@ object InnerTubeXResolver {
         playerDir = File(filesDir, "innertubex_players").apply { mkdirs() }
         scope.launch {
             cipherService.setPreprocessedPlayerCache(::readPlayer, ::writePlayer)
-            warm(WARM_DELAY_MS)
+            if (autoPrewarm) warm(WARM_DELAY_MS)
         }
     }
 
@@ -277,7 +285,7 @@ object InnerTubeXResolver {
         excluded.clear()
         minted.clear()
         // A new cookie or visitor means a new player config and PoToken binding.
-        if (prefs != null) warm(0)
+        if (prefs != null && autoPrewarm) warm(0)
     }
 
     private fun excludedFor(videoId: String): Set<String> {

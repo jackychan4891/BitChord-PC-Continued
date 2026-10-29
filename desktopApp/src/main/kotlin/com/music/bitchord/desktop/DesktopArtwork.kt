@@ -45,8 +45,9 @@ import java.security.MessageDigest
 internal object DesktopArtworkCache {
 
     /**
-     * A twelfth of the heap, within reason. Capped at 24 MB: decoded covers are also uploaded as
-     * GPU textures by the window, so the bitmaps kept here are paid for twice over.
+     * A twelfth of the heap, within reason. Capped at 12 MB: decoded covers are also uploaded as
+     * GPU textures by the window, so the bitmaps kept here are paid for twice over, and the
+     * encoded history this fronts is on disk anyway.
      *
      *
      * Derived rather than fixed so the budget still makes sense against whatever `-Xmx` the
@@ -58,7 +59,7 @@ internal object DesktopArtworkCache {
      * history is what the disk copy below is for. Only the decode repeats.
      */
     internal val budgetBytes: Long =
-        (Runtime.getRuntime().maxMemory() / 12).coerceIn(12L * 1024 * 1024, 24L * 1024 * 1024)
+        (Runtime.getRuntime().maxMemory() / 12).coerceIn(8L * 1024 * 1024, 12L * 1024 * 1024)
 
     /** Four bytes a pixel, which is what every format here decodes to. */
     private val images = DesktopByteBudgetLru<ImageBitmap>(budgetBytes) {

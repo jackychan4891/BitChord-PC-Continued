@@ -60,4 +60,35 @@ class DesktopQualityTest {
         // The download rungs' spelling, in case one was ever written here.
         assertEquals(DesktopAudioQuality.MEDIUM, DesktopAudioQuality.stored("STANDARD", hasFourRungs = true))
     }
+
+    @Test
+    fun anEqualLosslessCopyIsNotAnUpgrade() {
+        val playing = DesktopStreamFormat(codec = "flac", bitDepth = 24, sampleRateHz = 48_000)
+        assertFalse(DesktopSourceRegistry.worthSwapping(playing.copy(), playing))
+        assertFalse(DesktopSourceRegistry.worthSwapping(DesktopStreamFormat(codec = "flac"), playing))
+        assertFalse(
+            DesktopSourceRegistry.worthSwapping(
+                DesktopStreamFormat(codec = "flac", bitDepth = 16, sampleRateHz = 96_000),
+                playing,
+            ),
+        )
+    }
+
+    @Test
+    fun aRealLosslessGainStillSwaps() {
+        val playing = DesktopStreamFormat(codec = "flac", bitDepth = 16, sampleRateHz = 44_100)
+        assertTrue(
+            DesktopSourceRegistry.worthSwapping(
+                DesktopStreamFormat(codec = "flac", bitDepth = 24, sampleRateHz = 48_000),
+                playing,
+            ),
+        )
+        assertTrue(DesktopSourceRegistry.worthSwapping(playing, DesktopStreamFormat(codec = "aac", kbps = 320)))
+    }
+
+    @Test
+    fun anAtmosCopyDoesNotReplaceAnotherAtmosCopy() {
+        val playing = DesktopStreamFormat(codec = "eac3-joc")
+        assertFalse(DesktopSourceRegistry.worthSwapping(playing.copy(), playing))
+    }
 }

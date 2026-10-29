@@ -342,6 +342,9 @@ class DesktopPoTokenWebView private constructor(
     override fun close() {
         if (closed) return
         closed = true
+        // A closed page must read as dead: the generator keeps the minter between calls and would
+        // otherwise mint on a page whose script has gone.
+        isDead = true
         scope.cancel()
         runOnFx {
             runCatching { if (::engine.isInitialized) engine.load("about:blank") }
@@ -361,8 +364,16 @@ class DesktopPoTokenWebView private constructor(
 
         private const val GENERATE_TIMEOUT_MS = 15_000L
 
-        /** Whether JavaFX could be started in this process; checked once. */
-        val available: Boolean by lazy { startFx() }
+        /**
+         * Whether JavaFX could be started in this process; checked once.
+         *
+         * `-Dbitchord.potoken=off` answers no before JavaFX is touched, which is the only way to keep
+         * a WebEngine out of this process: it has no dispose, so one page leaves its WebCore resident
+         * for the life of the app.
+         */
+        val available: Boolean by lazy {
+            System.getProperty("bitchord.potoken", "").lowercase() != "off" && startFx()
+        }
 
         suspend fun getNewPoTokenGenerator(): DesktopPoTokenWebView {
             var created: DesktopPoTokenWebView? = null

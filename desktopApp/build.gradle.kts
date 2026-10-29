@@ -370,6 +370,16 @@ tasks.named<ProcessResources>("processResources") {
         include("*.dll")
         into("native")
     }
+    // The external YouTube extractor, so a Windows build resolves streams without ever loading
+    // the BotGuard WebView or the cipher solver. Unpacked from the jar on first use — see
+    // DesktopYtDlpResolver. Only Windows ships it; other platforms fall back in-process unless the
+    // user supplies their own via -Dbitchord.ytdlp.
+    if (targetOs == "windows") {
+        from(file("packaging/yt-dlp")) {
+            include("yt-dlp.exe")
+            into("yt-dlp")
+        }
+    }
     // The Automix models, taken from the Android module rather than copied into this one.
     from(rootProject.file("app/src/main/assets")) {
         include("*.onnx")
@@ -503,16 +513,15 @@ compose.desktop {
             it.metadata.installationPath.asFile.absolutePath
         }.get()
         mainClass = composeMainClass
-        jvmArgs("-Xmx512m")
-        // The ceiling is what the app may use; the soft ceiling is what it should keep. G1 is
-        // allowed to grow to the first but, with the periodic collection below, hands unused pages
-        // back to the operating system once it sits above the second — so a page of artwork that
-        // scrolled away stops counting as this app's memory.
-        jvmArgs("-XX:SoftMaxHeapSize=320m")
-        // Compose and Coil load a great many classes; bounding metaspace stops a leak there from
-        // showing up as RSS, and half a gig of thread stacks is more than this window spawns.
-        jvmArgs("-XX:MaxMetaspaceSize=256m", "-Xss512k")
-        jvmArgs("-XX:+UseG1GC", "-XX:+UseStringDeduplication", "-XX:G1PeriodicGCInterval=20000", "-XX:G1PeriodicGCSystemLoadThreshold=0")
+        // G1, and never pin the heap free ratios: forcing Serial to hold a 300m heap at 10-25%
+        // free made it shrink to ~135m after every collection, which the next artwork burst
+        // refilled immediately — 760 Full GCs in 157s, 88% of wall clock stopped. Live set ~90m.
+        jvmArgs("-Xms64m", "-Xmx288m")
+        jvmArgs("-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200", "-XX:+ParallelRefProcEnabled")
+        jvmArgs("-XX:MaxMetaspaceSize=192m", "-XX:CompressedClassSpaceSize=48m", "-Xss512k")
+        jvmArgs("-XX:ReservedCodeCacheSize=88m", "-XX:InitialCodeCacheSize=4m")
+        jvmArgs("-XX:MaxDirectMemorySize=96m")
+        jvmArgs("-XX:CICompilerCount=2")
         jvmArgs("-Dbitchord.version=$appVersion")
         if (desktopModuleIndexUrl.isNotBlank()) {
             jvmArgs("-Dbitchord.module.index=$desktopModuleIndexUrl")

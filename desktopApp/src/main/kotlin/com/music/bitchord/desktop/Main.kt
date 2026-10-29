@@ -57,6 +57,12 @@ fun main() {
     StreamResolver.maxKbps = {
         DesktopStreamClient.ceiling.get() ?: DesktopSourceRegistry.ceiling(null).maxKbps
     }
+    // With the external yt-dlp extractor, YouTube streams never go through InnerTubeX, so the
+    // eager prewarm that loads the BotGuard WebView (WebKit) and the QuickJS cipher solver is
+    // pointless — and neither has a dispose, so paying it would keep a couple of hundred
+    // megabytes resident for the whole session. Skip it; the first real resolve would only load
+    // them on the fallback path, which yt-dlp succeeding never reaches.
+    if (DesktopYtDlpResolver.enabled) InnerTubeXResolver.autoPrewarm = false
     InnerTubeXResolver.init(
         filesDir = DesktopMediaCache.directory.toFile(),
         store = DesktopInnerTubeXStore,
@@ -193,4 +199,4 @@ private const val MIN_WINDOW_WIDTH_DP = 900.0
 private const val MIN_WINDOW_HEIGHT_DP = 600.0
 
 /** A few screens of covers; the rest is on disk in [DesktopArtworkCache]. */
-private const val COIL_MEMORY_CACHE_BYTES = 32L * 1024 * 1024
+private const val COIL_MEMORY_CACHE_BYTES = 12L * 1024 * 1024
