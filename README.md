@@ -6,10 +6,10 @@
 
 # BitChord for PC
 
-### The YouTube Music desktop client, dressed by Apple Music
+### A YouTube Music desktop client, dressed by Apple Music
 
-A Kotlin Multiplatform / Compose Desktop player for Windows, macOS and Linux —
-with Apple Music's layout, lossless sources, beat-matched Automix and word-synced lyrics.
+A Desktop player for Windows, macOS and Linux —
+inspired by Apple Music's design, with support for lossless sources, beat-matched Automix and word-synced lyrics.
 
 <br/>
 
@@ -23,7 +23,6 @@ with Apple Music's layout, lossless sources, beat-matched Automix and word-synce
 <a href="https://github.com/jackychan4891/BitChord-PC-Continued/releases/latest"><img src="https://img.shields.io/badge/Download_for_Windows-Installer-8b5cf6?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download for Windows" height="46" /></a>
 <a href="https://github.com/jackychan4891/BitChord-PC-Continued/releases"><img src="https://img.shields.io/badge/All_Releases-Archive-0d1117?style=for-the-badge&logo=github&logoColor=white" alt="All releases" height="46" /></a>
 <a href="https://github.com/jackychan4891/BitChord-PC-Continued/issues"><img src="https://img.shields.io/badge/Report_an_Issue-Bug_Reports-0d1117?style=for-the-badge&logo=githubissues&logoColor=white" alt="Report an issue" height="46" /></a>
-<a href="https://discord.gg/cWQSGjpXM"><img src="https://img.shields.io/badge/Join_the_Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white&labelColor=0d1117" alt="Join the Discord" height="46" /></a>
 
 <br/>
 
@@ -76,10 +75,11 @@ with Apple Music's layout, lossless sources, beat-matched Automix and word-synce
 
 #### Playback
 - **Anything on YouTube Music** — search, browse, albums, playlists, artist pages.
-- **Lossless & Hi-Res audio** — FLAC/ALAC from a configured module source, with YouTube
+- **Apple music playlists** - sourced from Apple, played by youtube music.
+- **Lossless, Hi-Res audio & Dolby Atmos** — FLAC/ALAC and Dolby Atmos from a configured module source, with YouTube
   Music as the fallback; switch output from the lossless badge.
 - **Gapless playback with true crossfade** — 0–12 s, adjustable.
-- **Automix** — beat-matched, phrase-aligned (8/16-bar) DJ transitions with a set of
+- **Automix** — beat-matched, phrase-aligned DJ transitions with a set of
   transition effects; it mixes on the stream already playing, so skipping never stalls
   waiting for a lossless download.
 - **Downloads** — save tracks with embedded metadata, or a whole release at once.
@@ -87,9 +87,9 @@ with Apple Music's layout, lossless sources, beat-matched Automix and word-synce
 - **SponsorBlock** — skips non-music segments.
 
 #### Apple Music-style interface
-- **Listen Now, New, Radio, Charts, Library, Search** — the web player's layout, shelves,
+- **Listen Now, New, Moods, Radio, Charts, Library, Search** — the web player's layout, shelves,
   tile shapes and typography, rebuilt in Compose.
-- **Animated release artwork** — motion covers on artist pages and the player.
+- **Animated release artwork** — Apple Music's own motion covers on artist pages and the player.
 - **Full-screen player** — artwork left, transport centred, live lyrics right.
 - **Mini player** — frosted, artwork-driven, with progress and quick controls.
 - **Artist pages** — Apple's discography shelves, tour dates, and the artist's own
@@ -196,7 +196,6 @@ interface.
   [Musixmatch](https://www.musixmatch.com), [Genius](https://genius.com) and
   [lrc.red](https://lrc.red).
 - Lyrics animation inspired by [binimum/am-lyrics](https://github.com/binimum/am-lyrics).
-- Radio data from the BBC's public schedule API.
 - Design studied from the Apple Music web player. Apple Music is a trademark of Apple Inc.;
   this project is not affiliated with Apple.
 
