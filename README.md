@@ -8,8 +8,8 @@
 
 ### A YouTube Music desktop client, dressed by Apple Music
 
-A Desktop player for Windows, macOS and Linux —
-inspired by Apple Music's design, with support for lossless sources, beat-matched Automix and word-synced lyrics.
+A desktop player for Windows, macOS and Linux —
+inspired by Apple Music's design, with support for lossless sources, and local library's, beat-matched Automix and word-synced lyrics.
 
 <br/>
 
