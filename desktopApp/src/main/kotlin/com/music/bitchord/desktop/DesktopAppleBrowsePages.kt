@@ -2,7 +2,6 @@ package com.music.bitchord.desktop
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -12,10 +11,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,8 +49,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import bitchord.desktopapp.generated.resources.Res
-import bitchord.desktopapp.generated.resources.logo_mark
 import com.music.bitchord.data.model.HomeShelf
 import com.music.bitchord.data.model.MoodGenre
 import com.music.bitchord.data.model.MoodGenreSection
@@ -62,7 +62,6 @@ import com.music.bitchord.ui.components.longPressMenuClickable
 import com.music.bitchord.ui.icons.BitChordIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.jetbrains.compose.resources.painterResource
 import java.util.Locale
 
 @Composable
@@ -77,14 +76,29 @@ internal fun DesktopAppleFeedPage(
     onLoadMore: (() -> Unit)? = null,
     loadingMore: Boolean = false,
     recentlyPlayedLoading: Boolean = false,
+    /** The station on air in the radio player, so its tile on the New page can be marked. */
+    playingRadioKey: String? = null,
+    /** A page a heading's chevron leads to: its rows are laid out as grids down the page. */
+    gridded: Boolean = false,
 ) {
     val isNew = title.equals("New", ignoreCase = true)
+    // Stations show only where Apple puts them — a row in the New feed — and only the ones this
+    // player can start. Hiding happens on a tile, so the page is what watches the store: only a
+    // read here recomposes the rows that follow it.
+    val hiddenStations by DesktopRadioVisibility.hidden.collectAsState()
+    val shelves = remember(state, hiddenStations) {
+        (state as? UiState.Success)?.data.orEmpty().mapNotNull { shelf ->
+            if (shelf.isAppleRadioShelf()) DesktopRadioClient.playableStations(shelf) else shelf
+        }
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().background(DesktopPageGround()),
         contentPadding = contentPadding,
     ) {
-        item { AppleBrowsePageTitle(title) }
+        // The shelves below open with their own gap, so the title leaves it to them rather than
+        // stacking a second one on top and pushing the page's content down.
+        item { AppleBrowsePageTitle(title, bottomPadding = 0.dp) }
         when (state) {
             UiState.Loading -> {
                 if (!isNew) item { AppleBrowseShelfSkeleton() }
@@ -97,12 +111,21 @@ internal fun DesktopAppleFeedPage(
                     item { AppleBrowseShelfSkeleton("Recently Played") }
                 }
                 if (isNew) {
-                    appleBrowseNewShelves(state.data, onItemClick, onItemMenu)
+                    appleBrowseNewShelves(shelves, onItemClick, onItemMenu, playingRadioKey, gridded)
                 } else {
-                    appleBrowseHomeShelves(state.data, onItemClick, onItemMenu)
+                    appleBrowseHomeShelves(shelves, onItemClick, onItemMenu, gridded)
                 }
-                if (state.data.isEmpty() && !recentlyPlayedLoading) {
+                if (shelves.isEmpty() && !recentlyPlayedLoading) {
                     item { AppleBrowseEmpty("No music to show yet.") }
+                }
+                if (isNew && hiddenStations.isNotEmpty()) item {
+                    Box(Modifier.padding(horizontal = DesktopPageGutter + 8.dp, vertical = 18.dp)) {
+                        DesktopHiddenRestoreRow(
+                            hidden = hiddenStations,
+                            onShow = DesktopRadioVisibility::show,
+                            onShowAll = DesktopRadioVisibility::showAll,
+                        )
+                    }
                 }
                 if (loadingMore) item { AppleBrowseShelfSkeleton() }
             }
@@ -125,31 +148,68 @@ private fun LazyListScope.appleBrowseHomeShelves(
     shelves: List<HomeShelf>,
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
+    gridded: Boolean = false,
 ) {
-    // The reference site's home is one running order: Recently Played as a run
-    // of songs at the head, then the feed's own shelves exactly as it delivered
+    // The reference site's home is one running order: the picks built for this listener as the tall
+    // row, Recently Played next, then the moods, then the feed's own shelves exactly as it delivered
     // them. No ranking, no editorial shelf lifted out of the middle.
+    val picks = shelves.filter { it.isApplePicksShelf() }
     val recents = shelves.filter { it.title.isAppleBrowseRecent() }
-    recents.forEach { shelf ->
-        item(key = "home:recent:${shelf.title}") {
-            AppleBrowseRecentShelf(shelf, onItemClick, onItemMenu)
+    val moods = shelves.filter { it.isAppleMoodsShelf() }
+    val rest = shelves.filterNot {
+        it.isApplePicksShelf() || it.isAppleMoodsShelf() ||
+            it.title.isAppleBrowseRecent() || it.title.isAppleBrowseDropped()
+    }
+    if (!gridded) {
+        picks.forEach { shelf ->
+            item(key = "home:picks:${shelf.title}") {
+                DesktopAppleShelf(shelf, onItemClick, onItemMenu, portrait = true)
+            }
+        }
+        recents.forEach { shelf ->
+            item(key = "home:recent:${shelf.title}") {
+                AppleBrowseRecentShelf(shelf, onItemClick, onItemMenu)
+            }
+        }
+        // A mood plays instead of opening, and a tile that plays has nothing to put in a menu.
+        moods.forEach { shelf ->
+            item(key = "home:moods:${shelf.title}") {
+                DesktopAppleShelf(shelf, onItemClick, null)
+            }
         }
     }
-    // Apple's home opens with a row of tall picks whose words sit inside the art.
-    // A feed that is not Apple's has no such lockup, so its own first cover row
-    // takes that place — runs of songs, artist circles and video rows are not
-    // picks and keep the shape they already have.
-    val portraitAt = shelves.withIndex()
-        .filterNot { (_, shelf) -> shelf.title.isAppleBrowseRecent() || shelf.title.isAppleBrowseDropped() }
-        .firstOrNull { (_, shelf) -> shelf.wearsPortrait() }
-        ?.index
-    shelves.forEachIndexed { index, shelf ->
-        if (shelf.title.isAppleBrowseRecent() || shelf.title.isAppleBrowseDropped()) return@forEachIndexed
+    // Apple's home opens its cover rows in the site's tall picks; a feed that is not Apple's names
+    // no such lockup, so its own first cover row takes that place — runs of songs, artist circles
+    // and video rows are not picks and keep the shape they already have. The rows built for this
+    // listener are exempt: one already wears the shape, and the other is a cover row of its own.
+    val portraitAt = rest.withIndex().firstOrNull { (_, shelf) -> shelf.wearsPortrait() }?.index
+    if (gridded) {
+        (picks + moods).forEach { shelf ->
+            item(key = "home:shelf:${shelf.title}") {
+                DesktopAppleShelf(
+                    shelf, onItemClick,
+                    if (shelf.isAppleMoodsShelf()) null else onItemMenu,
+                    gridded = true,
+                )
+            }
+        }
+    }
+    rest.forEachIndexed { index, shelf ->
         item(key = "home:$index") {
-            DesktopAppleShelf(shelf, onItemClick, onItemMenu, portrait = index == portraitAt)
+            DesktopAppleShelf(
+                shelf, onItemClick, onItemMenu,
+                portrait = !gridded && index == portraitAt,
+                gridded = gridded,
+            )
         }
     }
 }
+
+/** The row built for this listener, drawn as the site's tall picks. */
+internal fun HomeShelf.isApplePicksShelf(): Boolean = layout == DesktopApplePersonalFeed.PICKS_LAYOUT
+
+/** The row of Apple's mood playlists. */
+internal fun HomeShelf.isAppleMoodsShelf(): Boolean = layout == DesktopApplePersonalFeed.MOODS_LAYOUT
 
 /** Whether this row is covers enough to be drawn as the site's tall (3:4) pick. */
 private fun HomeShelf.wearsPortrait(): Boolean =
@@ -164,15 +224,18 @@ private fun LazyListScope.appleBrowseNewShelves(
     source: List<HomeShelf>,
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
+    playingRadioKey: String?,
+    gridded: Boolean = false,
 ) {
-    // New is Home without the recents: the feed's own order, one row per shelf.
+    // New is Home without the recents: the feed's own order, one row per shelf — including the
+    // stations, which Apple lays in the running order here rather than on a page of their own.
     source.forEachIndexed { index, shelf ->
-        if (shelf.title.isAppleBrowseRecent() || shelf.isAppleRadioShelf() ||
-            shelf.title.isAppleBrowseDropped()
-        ) {
+        if (shelf.title.isAppleBrowseRecent() || shelf.title.isAppleBrowseDropped()) {
             return@forEachIndexed
         }
-        item(key = "new:$index") { DesktopAppleShelf(shelf, onItemClick, onItemMenu) }
+        item(key = "new:$index") {
+            DesktopAppleShelf(shelf, onItemClick, onItemMenu, playingRadioKey, gridded = gridded)
+        }
     }
 }
 
@@ -213,78 +276,27 @@ internal fun DesktopAppleCategories(
 }
 
 @Composable
-internal fun DesktopAppleRadioPage(
-    shelves: UiState<List<HomeShelf>>,
-    listState: LazyListState,
-    contentPadding: PaddingValues,
-    onItemClick: (ShelfItem, String?) -> Unit,
-    onItemMenu: (ShelfItem) -> Unit,
-    onRetry: () -> Unit,
-    playingRadioKey: String?,
+internal fun AppleBrowsePageTitle(
+    title: String,
+    /** The gap under the title, left to the content when that content opens with its own. */
+    bottomPadding: Dp = 18.dp,
+    trailing: @Composable () -> Unit = {},
 ) {
-    // A station hidden from its tile is left off the page, and the row at the foot names everything
-    // hidden so nothing is stranded. The page is what watches the store: hiding happens on a tile, and
-    // only a read here recomposes the shelves that follow it.
-    val hiddenStations by DesktopRadioVisibility.hidden.collectAsState()
-    val rows = remember(shelves, hiddenStations) {
-        (shelves as? UiState.Success)?.let { DesktopRadioClient.visible(it.data) }.orEmpty()
-    }
-    AppleScrollbarBox(listState, Modifier.fillMaxSize()) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize().background(DesktopPageGround()),
-            contentPadding = contentPadding,
-        ) {
-            item { AppleBrowsePageTitle(DesktopStrings["d_radio", "Radio"]) }
-            when (shelves) {
-                UiState.Loading -> item { AppleBrowseShelfSkeleton() }
-                is UiState.Error -> item { AppleBrowseError(shelves.message, onRetry) }
-                is UiState.Success -> {
-                    // The stations start straight under the page's own name. The shelf Apple labels
-                    // this feed with is a banner, not a heading, and the page already says Radio.
-                    items(rows) { shelf ->
-                        DesktopAppleShelf(shelf, onItemClick, onItemMenu, playingRadioKey, showHeading = false)
-                    }
-                    if (rows.isEmpty()) item {
-                        AppleBrowseEmpty(
-                            if (hiddenStations.isEmpty()) "No radio content to show yet."
-                            else DesktopStrings["d_radio_all_hidden", "Every station on this page is hidden."],
-                        )
-                    }
-                    if (hiddenStations.isNotEmpty()) item {
-                        Box(Modifier.padding(horizontal = DesktopPageGutter + 8.dp, vertical = 18.dp)) {
-                            DesktopHiddenRestoreRow(
-                                hidden = hiddenStations,
-                                onShow = DesktopRadioVisibility::show,
-                                onShowAll = DesktopRadioVisibility::showAll,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun AppleBrowsePageTitle(title: String, trailing: @Composable () -> Unit = {}) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 8.dp, top = 24.dp, bottom = 18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Image(painterResource(Res.drawable.logo_mark), null, Modifier.size(30.dp, 23.dp))
-            Text(
-                title,
-                color = DesktopAppleText,
-                fontSize = 34.sp,
-                lineHeight = 41.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 12.dp).weight(1f),
-            )
-            trailing()
-        }
-        HorizontalDivider(thickness = 0.5.dp, color = Color.White.copy(alpha = 0.1f))
+    Row(
+        // On the same left edge as the rows below.
+        Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter)
+            .padding(top = 32.dp, bottom = bottomPadding),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            color = DesktopAppleText,
+            fontSize = 34.sp,
+            lineHeight = 41.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
+        trailing()
     }
 }
 
@@ -300,7 +312,7 @@ internal fun AppleBrowsePageTitle(title: String, trailing: @Composable () -> Uni
  */
 private const val APPLE_FEED_SIDEBAR = 260f
 
-private val AppleShelfGap = 20.dp
+internal val AppleShelfGap = 20.dp
 
 internal enum class AppleFeedLayout { Tracks, Square, Circle, Video, Editorial, Horizontal, Portrait }
 
@@ -309,14 +321,16 @@ internal enum class AppleFeedLayout { Tracks, Square, Circle, Video, Editorial, 
  * one-for-one onto the site's lockups. Null for a source that doesn't say, which leaves the
  * caller's own reading of the items in charge.
  *
- * Portrait is not an Apple kind: a feed that is not Apple's has no "Top Picks" lockup, so the
- * page decides which of its own cover rows wears one. See `AppleFeedLayout.Portrait`.
+ * Portrait is not an Apple kind from the New feed: a feed has to be told which of its rows is the
+ * pick row, either by the page's own reading of its cover rows or by a row built for the purpose —
+ * see [DesktopApplePersonalFeed.PICKS_LAYOUT].
  */
 internal fun HomeShelf.feedLayout(circles: Boolean): AppleFeedLayout? = when (layout) {
     "trackLockup" -> AppleFeedLayout.Tracks
     "verticalVideoLockup" -> AppleFeedLayout.Video
     "horizontalLockup" -> AppleFeedLayout.Horizontal
     "flowcaseLockup" -> AppleFeedLayout.Editorial
+    "portraitLockup" -> AppleFeedLayout.Portrait
     "squareLockup" -> if (circles) AppleFeedLayout.Circle else AppleFeedLayout.Square
     else -> null
 }
@@ -333,7 +347,7 @@ private val AppleFeedLayout.xsWidth: Dp
     }
 
 /** How many columns of [layout] the site fits across at this content width. */
-private fun appleFeedColumns(layout: AppleFeedLayout, contentWidth: Dp): Int {
+internal fun appleFeedColumns(layout: AppleFeedLayout, contentWidth: Dp): Int {
     val viewport = contentWidth.value + APPLE_FEED_SIDEBAR
     return when (layout) {
         AppleFeedLayout.Tracks -> if (viewport < 1260f) 2 else if (viewport < 1580f) 3 else 4
@@ -347,29 +361,60 @@ private fun appleFeedColumns(layout: AppleFeedLayout, contentWidth: Dp): Int {
 }
 
 /** A column's width: fixed on a narrow page, and exactly a share of the content on a wide one. */
-private fun appleFeedTileWidth(layout: AppleFeedLayout, contentWidth: Dp, columns: Int): Dp {
+internal fun appleFeedTileWidth(layout: AppleFeedLayout, contentWidth: Dp, columns: Int): Dp {
     if (contentWidth < 1024.dp) return layout.xsWidth
     val available = contentWidth - DesktopPageGutter * 2
     return ((available - AppleShelfGap * (columns - 1)) / columns).coerceAtLeast(layout.xsWidth)
 }
 
 /**
- * A shelf's name in the site's type: 17/22 bold. A label, not a control — the site's headings
- * name the row and do nothing else, so there is no chevron and nothing to click.
+ * A shelf's name in the site's type: 17/22 bold, with its chevron when the row leads anywhere.
+ *
+ * The site's headings are links: the name carries a › and opens the page that lists the row out in
+ * full. A shelf the source gives no page keeps the bare name, which is then only a label.
  */
 @Composable
 internal fun AppleFeedShelfHeading(
     title: String,
     modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
 ) {
-    Text(
-        title,
-        color = DesktopAppleText,
-        fontSize = 17.sp,
-        lineHeight = 22.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = modifier.fillMaxWidth().padding(bottom = 14.dp),
-    )
+    if (onClick == null) {
+        Text(
+            title,
+            color = DesktopAppleText,
+            fontSize = 17.sp,
+            lineHeight = 22.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = modifier.fillMaxWidth().padding(bottom = 14.dp),
+        )
+        return
+    }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(
+        modifier.padding(bottom = 14.dp)
+            .hoverable(interaction)
+            .clickable(interaction, indication = null, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            color = DesktopAppleText,
+            fontSize = 17.sp,
+            lineHeight = 22.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Icon(
+            BitChordIcons.ChevronRight,
+            null,
+            tint = if (hovered) DesktopAppleText else DesktopAppleSecondary,
+            modifier = Modifier.padding(start = 5.dp).size(15.dp),
+        )
+    }
 }
 
 /**
@@ -388,6 +433,8 @@ internal fun AppleFeedTracksShelf(
     topPadding: Dp = 36.dp,
     /** The source's own depth for this run of songs; four rows when it doesn't say. */
     rows: Int = 4,
+    /** Where the row's own page is, when the source names one; null leaves the name a label. */
+    onOpenHeading: (() -> Unit)? = null,
 ) {
     if (lines.isEmpty()) return
     Column(Modifier.fillMaxWidth().padding(top = topPadding)) {
@@ -395,6 +442,7 @@ internal fun AppleFeedTracksShelf(
             AppleFeedShelfHeading(
                 title,
                 Modifier.padding(horizontal = DesktopPageGutter),
+                onOpenHeading,
             )
         }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -473,6 +521,8 @@ internal fun AppleFeedCoverShelf(
     topPadding: Dp = 36.dp,
     /** The source's own depth for this shelf: one row unless Apple stacks it two or more deep. */
     rows: Int = 1,
+    /** Where the row's own page is, when the source names one; null leaves the name a label. */
+    onOpenHeading: (() -> Unit)? = null,
 ) {
     if (items.isEmpty()) return
     Column(Modifier.fillMaxWidth().padding(top = topPadding)) {
@@ -480,6 +530,7 @@ internal fun AppleFeedCoverShelf(
             AppleFeedShelfHeading(
                 title,
                 Modifier.padding(horizontal = DesktopPageGutter),
+                onOpenHeading,
             )
         }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -504,6 +555,83 @@ internal fun AppleFeedCoverShelf(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * A page of covers laid out as the site lays out a page of covers: a grid that runs down the
+ * page rather than a row that runs off its side. Only a page opened from a shelf's chevron wears
+ * it — elsewhere the same covers are a shelf, and a shelf is one row.
+ */
+@Composable
+internal fun AppleFeedCoverGrid(
+    title: String,
+    layout: AppleFeedLayout,
+    items: List<ShelfItem>,
+    onClick: (ShelfItem) -> Unit,
+    onMenu: ((ShelfItem) -> Unit)?,
+    showHeading: Boolean = true,
+    topPadding: Dp = 36.dp,
+    onOpenHeading: (() -> Unit)? = null,
+) {
+    if (items.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(top = topPadding)) {
+        if (showHeading) {
+            AppleFeedShelfHeading(
+                title,
+                Modifier.padding(horizontal = DesktopPageGutter),
+                onOpenHeading,
+            )
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val columns = appleFeedColumns(layout, maxWidth)
+            val width = appleFeedTileWidth(layout, maxWidth, columns)
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                items.chunked(columns).forEach { line ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(AppleShelfGap)) {
+                        line.forEach { item -> AppleFeedCoverCell(item, layout, width, onClick, onMenu) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The same page of covers as [AppleFeedCoverGrid], built from lazily composed cells instead of a
+ * column of rows: the site's measured square columns, captioned underneath, for a page that can
+ * run long — a history, say — where every tile must not be built at once.
+ */
+@Composable
+internal fun AppleFeedLazyCoverGrid(
+    items: List<ShelfItem>,
+    gridState: LazyGridState,
+    contentPadding: PaddingValues,
+    onClick: (ShelfItem) -> Unit,
+    onMenu: ((ShelfItem) -> Unit)?,
+) {
+    if (items.isEmpty()) return
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val columns = appleFeedColumns(AppleFeedLayout.Square, maxWidth)
+        val width = appleFeedTileWidth(AppleFeedLayout.Square, maxWidth, columns)
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            state = gridState,
+            contentPadding = contentPadding,
+            horizontalArrangement = Arrangement.spacedBy(AppleShelfGap),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = DesktopPageGutter),
+        ) {
+            itemsIndexed(
+                items,
+                key = { index, item -> "${item.videoId ?: item.browseId ?: item.title}#$index" },
+            ) { _, item ->
+                AppleFeedCoverCell(item, AppleFeedLayout.Square, width, onClick, onMenu)
             }
         }
     }
@@ -665,13 +793,17 @@ private fun AppleFeedCover(
     onMenu: (() -> Unit)?,
 ) {
     Column(Modifier.width(width)) {
-        DesktopArtwork(
-            item.thumbnailUrl,
-            Modifier.width(width).aspectRatio(aspect).clip(RoundedCornerShape(7.dp))
-                .desktopArtHoverShade().clickable(onClick = onClick)
-                .then(if (onMenu == null) Modifier else Modifier.contextClick { onMenu() }),
-            px = if (width > 240.dp) 800 else 400,
-        )
+        if (item.isAppleMoodTile()) {
+            AppleFeedMoodArt(item, onClick, onMenu)
+        } else {
+            DesktopArtwork(
+                item.thumbnailUrl,
+                Modifier.width(width).aspectRatio(aspect).clip(RoundedCornerShape(7.dp))
+                    .desktopArtHoverShade().clickable(onClick = onClick)
+                    .then(if (onMenu == null) Modifier else Modifier.contextClick { onMenu() }),
+                px = if (width > 240.dp) 800 else 400,
+            )
+        }
         Text(
             item.title,
             color = DesktopAppleText,
@@ -690,6 +822,33 @@ private fun AppleFeedCover(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+    }
+}
+
+/**
+ * A mood station's cover, which moves.
+ *
+ * Only under the pointer — Apple animates one of these at a time too, and here it is a matter of
+ * cost as much as taste: every clip is an HLS loop decoded in software, so a row of seven playing
+ * side by side is seven decoders running for a page nobody is watching closely.
+ */
+@Composable
+private fun AppleFeedMoodArt(item: ShelfItem, onClick: () -> Unit, onMenu: (() -> Unit)?) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val animated by DesktopPlayerSettings.animatedCanvas.collectAsState()
+    val clip = if (animated) DesktopApplePersonalFeed.motionFor(item) else null
+    Box(
+        Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(7.dp))
+            .hoverable(interaction)
+            .clickable(interaction, null, onClick = onClick)
+            .desktopArtShade(hovered)
+            .then(if (onMenu == null) Modifier else Modifier.contextClick { onMenu() }),
+    ) {
+        DesktopArtwork(item.thumbnailUrl, Modifier.matchParentSize(), px = 400)
+        if (hovered && clip != null) {
+            DesktopCanvasView(clip, Modifier.matchParentSize(), publishBackdrop = false)
         }
     }
 }
@@ -741,7 +900,8 @@ private fun AppleBrowseRecentShelf(
 /**
  * An album's or playlist's own page, in Apple's shape: the sleeve large on the left with what
  * moves behind it, the name and credits beside it, and the tracks below as a table read down —
- * Song, Artist, Album, Time — rather than as shelves of covers.
+ * Song, Artist, Album, Time. A release page is the album its rows sit on, so its list leaves that
+ * column out; a playlist's rows come from all over and keep it.
  */
 @Composable
 internal fun DesktopAppleCollectionPage(
@@ -761,8 +921,13 @@ internal fun DesktopAppleCollectionPage(
     onRetry: () -> Unit,
     /** The artist name in a track row, which opens their page — as Apple's table does. */
     onArtistClick: ((String) -> Unit)? = null,
-    /** The track whose Album cell was picked; the caller resolves the release page. */
-    onAlbumClick: ((ShelfItem) -> Unit)? = null,
+    /** The album in a track row that named no release of its own, found from its name. */
+    onAlbumByName: ((String, String) -> Unit)? = null,
+    /**
+     * Whether the rows get an Album column. A release page is the album its rows sit on; a
+     * playlist's rows come from all over, which is when the site shows where each one is from.
+     */
+    showsAlbum: Boolean = false,
 ) {
     val shelves = (state as? UiState.Success)?.data.orEmpty()
     val tracks = shelves.flatMap { it.items }.filter { it.isAppleSong() }
@@ -770,7 +935,12 @@ internal fun DesktopAppleCollectionPage(
     // releases, more by the artist — and those keep the cover-row shape below the table.
     val extras = shelves.map { shelf -> shelf.copy(items = shelf.items.filterNot { it.isAppleSong() }) }
         .filter { it.items.isNotEmpty() }
-    val tint = rememberDesktopArtworkPalette(coverUrl).secondary
+    val tint = rememberDesktopArtworkTint(coverUrl)
+    // The column only stands when the rows can name an album: one of dashes says less than none.
+    val albumColumn = showsAlbum && tracks.any { !DesktopAppleBrowseClient.trackDetail(it)?.album.isNullOrBlank() }
+    // The length of every row is already kept for the table, and the site adds them up to say how
+    // long the release runs for under it.
+    val totalMs = tracks.mapNotNull { DesktopAppleBrowseClient.trackDetail(it)?.durationMs }.sum()
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().background(DesktopPageGround()),
@@ -786,49 +956,42 @@ internal fun DesktopAppleCollectionPage(
                     ),
                 ),
             ) {
+                // The sleeve and its copy share a baseline: the buttons under the title sit level
+                // with the bottom of the cover rather than being spaced from the text above them.
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter).padding(top = 28.dp, bottom = 30.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment = Alignment.Bottom,
                 ) {
                     AppleReleaseCover(title, credit, coverUrl, appleId, tracks.firstOrNull()?.subtitle, animatedCanvas)
-                    Spacer(Modifier.width(30.dp))
+                    Spacer(Modifier.width(50.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
                             title,
                             color = DesktopAppleText,
-                            fontSize = 32.sp,
-                            lineHeight = 38.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 3,
+                            fontSize = 26.sp,
+                            lineHeight = 30.sp,
+                            fontWeight = FontWeight.W700,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                         if (!credit.isNullOrBlank()) {
                             Text(
                                 credit,
-                                color = DesktopAppleText,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                color = AppleReleaseMeta,
+                                fontSize = 12.sp,
+                                lineHeight = 15.sp,
+                                fontWeight = FontWeight.W600,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(top = 6.dp),
-                            )
-                        }
-                        if (tracks.isNotEmpty()) {
-                            Text(
-                                "${tracks.size} SONGS",
-                                color = DesktopAppleSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
-                                letterSpacing = 0.6.sp,
-                                modifier = Modifier.padding(top = 8.dp),
+                                modifier = Modifier.padding(top = 12.dp),
                             )
                         }
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.padding(top = 20.dp),
+                            modifier = Modifier.padding(top = 32.dp),
                         ) {
-                            AppleReleasePill("Play", BitChordIcons.TransportPlay, filled = true, onClick = onPlay)
-                            AppleReleasePill("Shuffle", BitChordIcons.TransportShuffle, filled = false, onClick = onShuffle)
+                            AppleReleasePlay("Play", BitChordIcons.TransportPlay, onClick = onPlay)
+                            AppleReleaseRound("Shuffle", BitChordIcons.TransportShuffle, onClick = onShuffle)
                         }
                     }
                 }
@@ -838,11 +1001,21 @@ internal fun DesktopAppleCollectionPage(
             UiState.Loading -> items(8) { AppleBrowseTrackRowSkeleton() }
             is UiState.Error -> item { AppleBrowseError(state.message, onRetry) }
             is UiState.Success -> {
-                item(key = "table-head") { AppleTrackTableHead() }
+                item(key = "table-head") { AppleTrackTableHead(tint, albumColumn) }
                 items(tracks, key = { it.browseId.orEmpty() + "|" + it.title }) { track ->
-                    AppleTrackTableRow(track, title, onItemClick, onItemMenu, onArtistClick, onAlbumClick)
+                    AppleTrackTableRow(track, title, tint, onItemClick, onItemMenu, onArtistClick, albumColumn, onAlbumByName)
                 }
                 if (tracks.isEmpty()) item { AppleBrowseEmpty("No music to show yet.") }
+                // The count and the running time, in the same colour the artwork gave the table.
+                if (tracks.isNotEmpty()) item(key = "release-footer") {
+                    Text(
+                        appleReleaseFooter(tracks.size, totalMs),
+                        color = tint,
+                        fontSize = 13.sp,
+                        lineHeight = 16.sp,
+                        modifier = Modifier.padding(horizontal = DesktopPageGutter + 7.dp).padding(top = 20.dp, bottom = 8.dp),
+                    )
+                }
                 extras.forEachIndexed { index, shelf ->
                     item(key = "release-extra:$index") { DesktopAppleShelf(shelf, onItemClick, onItemMenu) }
                 }
@@ -876,7 +1049,7 @@ private fun AppleReleaseCover(
             }
         }
     }
-    Box(Modifier.size(290.dp).clip(RoundedCornerShape(10.dp))) {
+    Box(Modifier.size(238.dp)) {
         DesktopArtwork(coverUrl, Modifier.fillMaxSize(), px = 600)
         canvas?.let {
             DesktopCanvasView(
@@ -889,36 +1062,42 @@ private fun AppleReleaseCover(
     }
 }
 
+/** The release's own button: a white stadium with black in it, fixed at the site's 130×36. */
 @Composable
-private fun AppleReleasePill(label: String, icon: ImageVector, filled: Boolean, onClick: () -> Unit) {
-    val ink = if (filled) Color.Black else Color.White
+internal fun AppleReleasePlay(label: String, icon: ImageVector, onClick: () -> Unit) {
     Row(
-        Modifier.clip(RoundedCornerShape(50.dp)).clickable(onClick = onClick)
-            .background(if (filled) Color.White else Color.White.copy(alpha = 0.14f))
-            .padding(horizontal = 20.dp, vertical = 9.dp),
+        Modifier.size(width = 130.dp, height = 36.dp).clip(CircleShape).background(Color.White)
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, label, tint = ink, modifier = Modifier.size(18.dp))
-        Text(
-            label,
-            color = ink,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 8.dp),
-        )
+        Icon(icon, label, tint = Color.Black, modifier = Modifier.size(18.dp))
+        Text(label, color = Color.Black, fontSize = 15.sp, fontWeight = FontWeight.W600, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+/** The round button that follows it, barely lighter than the page it sits on. */
+@Composable
+internal fun AppleReleaseRound(label: String, icon: ImageVector, onClick: () -> Unit) {
+    Box(
+        Modifier.size(36.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.04f))
+            .clickable(onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, label, tint = DesktopAppleText, modifier = Modifier.size(17.dp))
     }
 }
 
 @Composable
-private fun AppleTrackTableHead() {
+internal fun AppleTrackTableHead(tint: Color, showsAlbum: Boolean = false) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter).height(32.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AppleTrackHeading("Song", 36.5f, Modifier.padding(start = 7.dp))
-        AppleTrackHeading("Artist", 25.25f, Modifier.padding(end = 10.dp))
-        AppleTrackHeading("Album", 25.25f, Modifier.padding(end = 16.dp))
-        AppleTrackHeading("Time", 13f, Modifier.fillMaxWidth().padding(end = 18.dp), TextAlign.End)
+        AppleTrackHeading("Song", if (showsAlbum) 42f else 50f, tint, Modifier.padding(start = 7.dp))
+        AppleTrackHeading("Artist", if (showsAlbum) 26f else 32f, tint, Modifier.padding(end = 10.dp))
+        if (showsAlbum) AppleTrackHeading("Album", 20f, tint)
+        AppleTrackHeading("Time", if (showsAlbum) 12f else 18f, tint, Modifier.fillMaxWidth().padding(end = 18.dp), TextAlign.End)
     }
 }
 
@@ -927,12 +1106,15 @@ private fun RowScope.AppleTrackHeading(
     label: String,
     /** An extension on [RowScope] because the column is a share of the row's width. */
     share: Float,
+    tint: Color,
     modifier: Modifier = Modifier,
     align: TextAlign = TextAlign.Start,
 ) {
     Text(
         label,
-        color = DesktopAppleSecondary,
+        // The site colours a release's whole table from its cover, headings included, rather than
+        // leaving them the page's generic gray.
+        color = tint,
         fontSize = 12.sp,
         lineHeight = 15.sp,
         fontWeight = FontWeight.W600,
@@ -943,21 +1125,23 @@ private fun RowScope.AppleTrackHeading(
 }
 
 /**
- * One row of a release's track table, in Apple's four columns.
+ * One row of a release's track table, in Apple's columns.
  *
- * The web list answers the pointer in two places at once: a play triangle comes up over the cover,
- * and the length in the last column is replaced by a ⋯ that opens the same menu a right-click
- * does. Both are driven by the one hover value so they arrive together. The row itself keeps its
- * ground — only the name under the pointer underlines, the way a link does.
+ * The web list answers the pointer in two places at once: the row takes a wash, a play triangle
+ * comes up over the cover, and the length in the last column is replaced by a ⋯ that opens the same
+ * menu a right-click does. A playlist's rows come from all over, so the album each one sits on is a
+ * column of its own; a release page is the album its rows sit on and leaves it out.
  */
 @Composable
 private fun AppleTrackTableRow(
     track: ShelfItem,
     shelfTitle: String,
+    tint: Color,
     onItemClick: (ShelfItem, String?) -> Unit,
     onItemMenu: (ShelfItem) -> Unit,
     onArtistClick: ((String) -> Unit)? = null,
-    onAlbumClick: ((ShelfItem) -> Unit)? = null,
+    showsAlbum: Boolean = false,
+    onAlbumByName: ((String, String) -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -969,7 +1153,6 @@ private fun AppleTrackTableRow(
     val detail = DesktopAppleBrowseClient.trackDetail(track)
     val menu = { onItemMenu(track) }
     val artistName = track.subtitle
-    val albumName = detail?.album.orEmpty()
     Column(Modifier.padding(horizontal = DesktopPageGutter)) {
         // The hairline above a row, which goes when the pointer is on it, so a hovered row reads as
         // one block rather than two halves.
@@ -977,13 +1160,15 @@ private fun AppleTrackTableRow(
             Modifier.fillMaxWidth().height(0.5.dp).background(Color.White.copy(alpha = 0.12f * (1f - reveal))),
         )
         Row(
-            Modifier.fillMaxWidth().height(TRACK_ROW_HEIGHT).hoverable(interaction)
+            Modifier.fillMaxWidth().height(TRACK_ROW_HEIGHT)
+                .background(Color.White.copy(alpha = APPLE_ROW_WASH_ALPHA * reveal))
+                .hoverable(interaction)
                 .longPressMenuClickable(onClick = { onItemClick(track, shelfTitle) }, onLongClick = menu)
                 .contextClick(menu),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
-                Modifier.weight(36.5f),
+                Modifier.weight(if (showsAlbum) 42f else 50f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -1013,24 +1198,48 @@ private fun AppleTrackTableRow(
                     modifier = Modifier.weight(1f).padding(end = 8.dp),
                 )
             }
-            // The Artist and Album cells are links, as they are on Apple's own table: the inner
-            // clickable takes the press, so the row's own play action is left alone.
+            // The Artist cell is a link, as it is on Apple's own table: the inner clickable takes
+            // the press, so the row's own play action is left alone.
             AppleTableLink(
                 artistName,
+                tint,
                 canOpen = onArtistClick != null && artistName.isNotBlank(),
                 onClick = { onArtistClick?.invoke(artistName) },
-                modifier = Modifier.weight(25.25f).padding(end = 10.dp),
+                modifier = Modifier.weight(if (showsAlbum) 26f else 32f).padding(end = 10.dp),
             )
-            AppleTableLink(
-                albumName,
-                canOpen = onAlbumClick != null && albumName.isNotBlank(),
-                onClick = { onAlbumClick?.invoke(track) },
-                modifier = Modifier.weight(25.25f).padding(end = 16.dp),
-            )
-            Box(Modifier.weight(13f).fillMaxHeight()) {
+            if (showsAlbum) {
+                val album = detail?.album?.takeIf(String::isNotBlank)
+                val albumUrl = detail?.albumUrl
+                // A release the row names a page for opens it directly; one named only by title
+                // is found from its name, so the cell is a link either way.
+                val openByName = onAlbumByName
+                val byName = album != null && albumUrl == null && openByName != null
+                AppleTableLink(
+                    album ?: "—",
+                    tint,
+                    canOpen = (album != null && albumUrl != null) || byName,
+                    onClick = {
+                        when {
+                            album != null && albumUrl != null -> onItemClick(
+                                ShelfItem(
+                                    title = album,
+                                    subtitle = artistName,
+                                    thumbnailUrl = track.thumbnailUrl,
+                                    videoId = null,
+                                    browseId = DesktopAppleBrowseClient.PAGE_PREFIX + albumUrl,
+                                ),
+                                shelfTitle,
+                            )
+                            byName -> openByName?.invoke(album.orEmpty(), artistName)
+                        }
+                    },
+                    modifier = Modifier.weight(20f).padding(end = 10.dp),
+                )
+            }
+            Box(Modifier.weight(if (showsAlbum) 12f else 18f).fillMaxHeight()) {
                 Text(
                     appleTrackTime(detail?.durationMs),
-                    color = DesktopAppleSecondary,
+                    color = tint,
                     fontSize = 13.sp,
                     lineHeight = 16.sp,
                     style = TextStyle(fontFeatureSettings = TABULAR_FIGURES),
@@ -1062,11 +1271,12 @@ private fun AppleTrackTableRow(
 /**
  * A link in the track table: under the pointer it lightens to white and underlines, the way
  * Apple's own table answers a name — and the row itself keeps its ground. It takes the press
- * itself, so a click here opens the artist or release rather than playing the row.
+ * itself, so a click here opens the artist rather than playing the row.
  */
 @Composable
-private fun AppleTableLink(
+internal fun AppleTableLink(
     text: String,
+    tint: Color,
     canOpen: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1076,9 +1286,9 @@ private fun AppleTableLink(
     val lit = hovered && canOpen
     Text(
         text,
-        color = if (lit) DesktopAppleText else DesktopAppleSecondary,
-        fontSize = 12.sp,
-        lineHeight = 15.sp,
+        color = if (lit) DesktopAppleText else tint,
+        fontSize = 13.sp,
+        lineHeight = 16.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         textDecoration = if (lit) TextDecoration.Underline else null,
@@ -1097,8 +1307,20 @@ private fun appleTrackTime(durationMs: Long?): String {
     return "${seconds / 60}:${"%02d".format(seconds % 60)}"
 }
 
+/** What a release's table signs off with: `8 songs, 27 minutes`. */
+internal fun appleReleaseFooter(songs: Int, totalMs: Long): String {
+    val minutes = ((totalMs + 30_000L) / 60_000L).toInt()
+    return "$songs ${if (songs == 1) "song" else "songs"}, $minutes ${if (minutes == 1) "minute" else "minutes"}"
+}
+
+/** The gray a release page writes its update line in, whatever its cover looks like. */
+internal val AppleReleaseMeta = Color(0xFFA1A1A6)
+
 private const val TRACK_REVEAL_MS = 140
-private val TRACK_ROW_HEIGHT = 54.dp
+internal val TRACK_ROW_HEIGHT = 54.dp
+
+/** The wash a track row takes under the pointer — the row lifting off the page, not a grey block. */
+private const val APPLE_ROW_WASH_ALPHA = 0.045f
 private const val TABULAR_FIGURES = "tnum"
 
 @Composable
@@ -1108,16 +1330,15 @@ private fun AppleBrowseTrackRowSkeleton() {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
-            Modifier.weight(36.5f),
+            Modifier.weight(50f),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ShimmerBox(Modifier.padding(start = 7.dp).size(40.dp).clip(RoundedCornerShape(5.dp)))
             ShimmerBox(Modifier.weight(1f).height(12.dp))
         }
-        ShimmerBox(Modifier.weight(25.25f).height(12.dp))
-        ShimmerBox(Modifier.weight(25.25f).height(12.dp))
-        ShimmerBox(Modifier.weight(13f).height(12.dp))
+        ShimmerBox(Modifier.weight(32f).height(12.dp))
+        ShimmerBox(Modifier.weight(18f).height(12.dp).padding(end = 18.dp))
     }
 }
 
@@ -1250,7 +1471,7 @@ private fun AppleBrowseEmpty(message: String) {
         modifier = Modifier.padding(horizontal = DesktopPageGutter, vertical = 28.dp))
 }
 
-private fun String.isAppleBrowseRecent(): Boolean = trim().lowercase(Locale.ROOT) in setOf(
+internal fun String.isAppleBrowseRecent(): Boolean = trim().lowercase(Locale.ROOT) in setOf(
     "recents", "recently played", "recentlyplayed", "gần đây", "最近",
 )
 

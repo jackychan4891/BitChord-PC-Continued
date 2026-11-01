@@ -83,6 +83,7 @@
     <string name="d_name_optional">Ad (isteğe bağlı)</string>
     <string name="d_new">Yeni</string>
     <string name="d_new_music_moods_and_discoveries">Yeni müzik, ruh halleri ve keşifler</string>
+    <string name="d_new_release">Yeni Çıkış</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">Bu makinede tarayıcı profili bulunamadı.</string>
     <string name="d_no_downloads">İndirme yok</string>
     <string name="d_nobody_is_signed_in">Oturum açan yok. Kitaplığın, çalma listelerin ve geçmişin bir YouTube Music hesabı gerekir.</string>
@@ -145,11 +146,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">Bu parça YouTube Music\'ten değil, bu yüzden yalnızca burada tutulan bir çalma listesine eklenebilir.</string>
     <string name="d_time">SÜRE</string>
     <string name="d_title_bar">Başlık çubuğu</string>
+    <string name="d_top_picks_for_you">Senin için en iyi seçimler</string>
     <string name="d_top_result">En iyi sonuç</string>
     <string name="d_track_info_hint">Yalnızca bu parça için geçerli. Seçtiğiniz kaynakta bunun kopyası yoksa BitChord normal sıraya döner.</string>
     <string name="d_track_information">Parça bilgileri</string>
     <string name="d_about_track">Bu şarkı hakkında</string>
     <string name="d_artist_signature_service">Sanatçı imzası hizmeti</string>
+    <string name="d_all_playlists">Tüm Çalma Listeleri</string>
     <string name="d_artist_signature_off">Kapalı. Kendi bağlantınızı ekleyene kadar hiçbir şey alınmaz.</string>
     <string name="d_artist_signature_dialog">BitChord, seçtiğiniz bir hizmetten el yazması imza ister ve bunu sanatçı başlığının üzerinde beyaz olarak çizer. Bağlantı JSON ile yanıt vermeli. Adın gideceği yere {artist} yazın; bırakmazsanız ad ?artist=…&amp;type=handwritten olarak eklenir. Hiçbir şey almamak için alanı temizleyin.</string>
     <string name="hidden_items">Gizli öğeler</string>
@@ -248,6 +251,7 @@
     <string name="d_already_added_as">Zaten %1$s olarak eklendi</string>
     <string name="d_count_minutes">%1$s dakika</string>
     <string name="d_count_songs">%1$s şarkı</string>
+    <string name="d_find_your_mood">Ruh halini keşfet</string>
     <string name="d_module_index_detected">Modül dizini · %1$s modül</string>
     <string name="d_on_this_computer">Bu bilgisayarda</string>
     <string name="d_one_song">1 şarkı</string>

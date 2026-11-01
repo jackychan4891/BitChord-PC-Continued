@@ -37,10 +37,17 @@ import kotlin.math.abs
  * with no Compose in it, so it can be tested frame by frame;
  * `rememberLyricClock` is the composable that drives it.
  */
+/** TEMP: installed by the desktop app so [LyricClock] can report what it draws. */
+object LyricTrace {
+    var sink: ((String) -> Unit)? = null
+}
+
 internal class LyricClock(startMs: Long) {
     /** Where the lyrics are drawn, in song milliseconds. */
     var displayedMs: Double = startMs.toDouble()
         private set
+
+    private var lastTraceMs = Double.NEGATIVE_INFINITY
 
     private var lastNowMs = Double.NaN
 
@@ -84,6 +91,11 @@ internal class LyricClock(startMs: Long) {
      * app left the screen — and the next [frame] starts a new one.
      */
     fun restart() {
+        LyricTrace.sink?.invoke(
+            "TEMP lyric clock: restart — drawn ${"%.1f".format(displayedMs / 1000.0)}s carried on at " +
+                "rate ${"%.3f".format(rate)} (settled $rateSettled), anchor " +
+                "${"%.1f".format(anchorMs / 1000.0)}s",
+        )
         lastNowMs = Double.NaN
         jumpPending = false
         glideStartMs = Double.NaN
@@ -96,6 +108,10 @@ internal class LyricClock(startMs: Long) {
      * seek made while paused still moves the words.
      */
     fun hold(positionMs: Long, nowMs: Double) {
+        LyricTrace.sink?.invoke(
+            "TEMP lyric clock: hold — drawn ${"%.1f".format(displayedMs / 1000.0)}s now " +
+                "${"%.1f".format(nowMs / 1000.0)}s",
+        )
         restart()
         displayedMs = positionMs.toDouble()
         heldAtMs = nowMs
@@ -111,6 +127,31 @@ internal class LyricClock(startMs: Long) {
      * changes when the playhead jumps on purpose; only its changing matters.
      */
     fun frame(nowMs: Double, reportedMs: Long, sampledAtMs: Double, discontinuity: Long): Long {
+        val drawn = runFrame(nowMs, reportedMs, sampledAtMs, discontinuity)
+        trace(nowMs, reportedMs, sampledAtMs, discontinuity)
+        return drawn
+    }
+
+    /** TEMP: where the words are drawn against the reading that steers them. */
+    private fun trace(nowMs: Double, reportedMs: Long, sampledAtMs: Double, discontinuity: Long) {
+        val sink = LyricTrace.sink ?: return
+        val target = targetAt(nowMs)
+        val ahead = displayedMs - target
+        if (nowMs - lastTraceMs < 2_000.0 && abs(ahead) < 250.0) return
+        lastTraceMs = nowMs
+        sink(
+            "TEMP lyric clock: drawn ${"%.1f".format(displayedMs / 1000.0)}s against song " +
+                "${"%.1f".format(target / 1000.0)}s — WORDS AHEAD ${"%.2f".format(ahead / 1000.0)}s " +
+                "(reported ${reportedMs}ms, rate ${"%.3f".format(rate)} settled $rateSettled, " +
+                "rejects $rejections, anchor ${"%.1f".format(anchorMs / 1000.0)}s taken at " +
+                "${"%.1f".format(anchorAtMs / 1000.0)}s, now ${"%.1f".format(nowMs / 1000.0)}s, " +
+                "sampled ${if (sampledAtMs.isNaN()) "none" else "%.1f".format(sampledAtMs / 1000.0)}s, " +
+                "glide ${if (glideStartMs.isNaN()) "off" else "on"}, jump $jumpPending, " +
+                "seek ${discontinuity ushr 32}, offset ${discontinuity and 0xFFFF_FFFFL})",
+        )
+    }
+
+    private fun runFrame(nowMs: Double, reportedMs: Long, sampledAtMs: Double, discontinuity: Long): Long {
         val firstOfRun = lastNowMs.isNaN()
         if (discontinuity != lastDiscontinuity) {
             if (lastDiscontinuity != null && !firstOfRun) jumpPending = true

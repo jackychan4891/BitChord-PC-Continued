@@ -83,6 +83,7 @@
     <string name="d_name_optional">Nome (facoltativo)</string>
     <string name="d_new">Novità</string>
     <string name="d_new_music_moods_and_discoveries">Nuova musica, atmosfere e scoperte</string>
+    <string name="d_new_release">Nuova pubblicazione</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">Nessun profilo browser trovato su questo computer.</string>
     <string name="d_no_downloads">Nessun download</string>
     <string name="d_nobody_is_signed_in">Nessuno ha effettuato l\'accesso. La tua libreria, le playlist e la cronologia richiedono una account YouTube Music.</string>
@@ -145,11 +146,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">Questo brano non è di YouTube Music, quindi può stare solo in una playlist conservata qui.</string>
     <string name="d_time">DURATA</string>
     <string name="d_title_bar">Barra del titolo</string>
+    <string name="d_top_picks_for_you">Le migliori selezioni per te</string>
     <string name="d_top_result">Risultato migliore</string>
     <string name="d_track_info_hint">Vale solo per questa traccia. Se la sorgente scelta non ne ha una copia, BitChord torna all'ordine abituale.</string>
     <string name="d_track_information">Informazioni sulla traccia</string>
     <string name="d_about_track">Informazioni su questo brano</string>
     <string name="d_artist_signature_service">Servizio di firma dell'artista</string>
+    <string name="d_all_playlists">Tutte le playlist</string>
     <string name="d_artist_signature_off">Disattivato. Non viene recuperato nulla finché non si aggiunge un link proprio.</string>
     <string name="d_artist_signature_dialog">BitChord chiede una firma manoscritta a un servizio a tua scelta e la disegna in bianco sull'intestazione dell'artista. Il link deve rispondere con JSON. Inserisci {artist} dove deve comparire il nome, oppure omettilo e il nome verrà aggiunto come ?artist=…&amp;type=handwritten. Svuota il campo per non recuperare nulla.</string>
     <string name="hidden_items">Elementi nascosti</string>
@@ -248,6 +251,7 @@
     <string name="d_already_added_as">Già aggiunta come %1$s</string>
     <string name="d_count_minutes">%1$s minuti</string>
     <string name="d_count_songs">%1$s brani</string>
+    <string name="d_find_your_mood">Trova il tuo stato d'animo</string>
     <string name="d_module_index_detected">Indice dei moduli · %1$s moduli</string>
     <string name="d_on_this_computer">Su questo computer</string>
     <string name="d_one_song">1 brano</string>

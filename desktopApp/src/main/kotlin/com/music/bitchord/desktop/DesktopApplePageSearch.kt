@@ -31,25 +31,22 @@ internal object DesktopApplePageSearch {
         synchronized(cache) { cache[key] }?.let { (at, rows) ->
             if (now - at < CACHE_MILLIS) return@withContext rows
         }
-        val rows = DesktopAppleMusicCanvas.searchPages(key, "playlists", limit = 12).map { hit ->
-            BrowseItem(
-                browseId = DesktopAppleBrowseClient.PAGE_PREFIX + hit.url,
-                title = hit.title,
-                subtitle = hit.subtitle,
-                thumbnailUrl = hit.artworkUrl,
-                type = BrowseType.PLAYLIST,
-            )
-        }
+        val rows = DesktopAppleMusicCanvas.searchPages(key, "playlists", limit = 12)
+            // Apple's "Video Essentials" playlists hold music videos, not songs, so their pages
+            // open empty here; leave them out rather than offer a row that cannot play.
+            .filterNot { it.title.contains("video essentials", ignoreCase = true) }
+            .map { hit ->
+                BrowseItem(
+                    browseId = DesktopAppleBrowseClient.PAGE_PREFIX + hit.url,
+                    title = hit.title,
+                    subtitle = hit.subtitle,
+                    thumbnailUrl = hit.artworkUrl,
+                    type = BrowseType.PLAYLIST,
+                )
+            }
         // Cached even when empty: a term Apple has nothing for should not be asked again on
         // every keystroke's worth of searching.
         synchronized(cache) { cache[key] = now to rows }
         rows
-    }
-
-    /** The Apple page for [album] by [artist], for a track whose album cell carries no link. */
-    suspend fun albumPage(album: String, artist: String): String? = withContext(Dispatchers.IO) {
-        if (album.isBlank()) return@withContext null
-        val hits = DesktopAppleMusicCanvas.searchPages("$artist $album".trim(), "albums", limit = 5)
-        hits.firstOrNull { it.title.equals(album, ignoreCase = true) }?.url ?: hits.firstOrNull()?.url
     }
 }

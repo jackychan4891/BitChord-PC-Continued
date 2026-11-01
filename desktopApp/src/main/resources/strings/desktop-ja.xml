@@ -86,6 +86,7 @@
     <string name="d_name_optional">名前（任意）</string>
     <string name="d_new">新着</string>
     <string name="d_new_music_moods_and_discoveries">新しい音楽、ムード、発見</string>
+    <string name="d_new_release">新着リリース</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">このマシンにブラウザのプロファイルが見つかりませんでした。</string>
     <string name="d_no_downloads">ダウンロードなし</string>
     <string name="d_nobody_is_signed_in">誰もログインしていません。ライブラリ、プレイリスト、履歴には YouTube Music アカウントが必要です。</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">この曲は YouTube Music のものではないため、ここに保存するプレイリストにのみ追加できます。</string>
     <string name="d_time">時間</string>
     <string name="d_title_bar">タイトルバー</string>
+    <string name="d_top_picks_for_you">あなたへのおすすめ</string>
     <string name="d_top_result">トップの結果</string>
     <string name="d_track_info_hint">このトラックのみに適用されます。選んだソースにコピーがない場合、BitChord は通常の順番に戻ります。</string>
     <string name="d_track_information">トラック情報</string>
     <string name="d_about_track">この曲について</string>
     <string name="d_artist_signature_service">アーティスト署名サービス</string>
+    <string name="d_all_playlists">すべてのプレイリスト</string>
     <string name="d_artist_signature_off">オフ：リンクを追加するまで何も取得しません。</string>
     <string name="d_artist_signature_dialog">BitChord は指定したサービスに手書き署名を要求し、アーティストヘッダーの上に白で描画します。リンクは JSON で応答する必要があります。名前を入れる場所に {artist} を記載してください。省略した場合は名前が ?artist=…&amp;type=handwritten として追加されます。何も取得したくない場合は欄を空にしてください。</string>
     <string name="hidden_items">非表示の項目</string>
@@ -254,6 +257,7 @@
     <string name="d_already_added_as">既に「%1$s」として追加されています</string>
     <string name="d_count_minutes">%1$s分</string>
     <string name="d_count_songs">%1$s曲</string>
+    <string name="d_find_your_mood">気分を見つけよう</string>
     <string name="d_module_index_detected">モジュールインデックス · %1$s個のモジュール</string>
     <string name="d_on_this_computer">このコンピュータ内</string>
     <string name="d_one_song">1曲</string>

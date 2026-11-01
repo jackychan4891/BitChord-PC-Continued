@@ -86,6 +86,7 @@
     <string name="d_name_optional">Nama (opsional)</string>
     <string name="d_new">Baru</string>
     <string name="d_new_music_moods_and_discoveries">Musik baru, suasana, dan penemuan</string>
+    <string name="d_new_release">Rilis Baru</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">Tidak ada profil peramban yang ditemukan di mesin ini.</string>
     <string name="d_no_downloads">Tidak ada unduhan</string>
     <string name="d_nobody_is_signed_in">Belum ada yang masuk. Pustaka, playlist, dan riwayatmu memerlukan akun YouTube Music.</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">Trek ini bukan dari YouTube Music, jadi hanya bisa masuk ke playlist yang disimpan di sini.</string>
     <string name="d_time">DURASI</string>
     <string name="d_title_bar">Bilah judul</string>
+    <string name="d_top_picks_for_you">Pilihan Teratas untuk Anda</string>
     <string name="d_top_result">Hasil teratas</string>
     <string name="d_track_info_hint">Hanya berlaku untuk trek ini. Jika sumber yang Anda pilih tidak punya salinannya, BitChord kembali ke urutan biasa.</string>
     <string name="d_track_information">Informasi trek</string>
     <string name="d_about_track">Tentang lagu ini</string>
     <string name="d_artist_signature_service">Layanan tanda tangan artis</string>
+    <string name="d_all_playlists">Semua Playlist</string>
     <string name="d_artist_signature_off">Nonaktif. Tidak ada yang diambil sampai Anda menambahkan tautan sendiri.</string>
     <string name="d_artist_signature_dialog">BitChord meminta tanda tangan tulisan tangan ke layanan pilihan Anda dan menggambarnya dengan warna putih di atas header artis. Tautan harus menjawab dengan JSON. Taruh {artist} di tempat nama seharusnya, atau hilangkan dan nama akan ditambahkan sebagai ?artist=…&amp;type=handwritten. Kosongkan kolom untuk tidak mengambil apa pun.</string>
     <string name="hidden_items">Item tersembunyi</string>
@@ -254,6 +257,7 @@
     <string name="d_already_added_as">Sudah ditambahkan sebagai %1$s</string>
     <string name="d_count_minutes">%1$s menit</string>
     <string name="d_count_songs">%1$s lagu</string>
+    <string name="d_find_your_mood">Temukan Suasana Hatimu</string>
     <string name="d_module_index_detected">Indeks modul · %1$s modul</string>
     <string name="d_on_this_computer">Di komputer ini</string>
     <string name="d_one_song">1 lagu</string>

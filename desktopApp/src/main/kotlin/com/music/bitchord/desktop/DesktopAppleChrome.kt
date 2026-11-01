@@ -71,6 +71,8 @@ internal fun DesktopAppleSidebar(
     libraryShelf: String?,
     onDestinationSelected: (DesktopDestination) -> Unit,
     onOpenLibraryShelf: (String) -> Unit,
+    /** The whole playlist list as one grid, which the site puts at the head of this section. */
+    onOpenAllPlaylists: () -> Unit,
     onOpenAccountPlaylist: (ShelfItem) -> Unit,
     onOpenLocalPlaylist: (DesktopPlaylist) -> Unit,
     onOpenSettings: () -> Unit,
@@ -95,6 +97,7 @@ internal fun DesktopAppleSidebar(
             accountAvatar = accountAvatar,
             hidden = hidden,
             onDestinationSelected = onDestinationSelected,
+            onOpenAllPlaylists = onOpenAllPlaylists,
             onOpenSettings = onOpenSettings,
             onOpenAccounts = onOpenAccounts,
         )
@@ -118,15 +121,17 @@ internal fun DesktopAppleSidebar(
             }
         }
         Column(Modifier.fillMaxWidth().weight(1f).padding(start = 16.dp, top = if (inlineCaption) 0.dp else 8.dp, end = 16.dp)) {
+            // The app's mark, left-aligned with the glyph column below it.
+            Image(
+                painterResource(Res.drawable.logo_mark),
+                "BitChord",
+                Modifier.padding(start = 4.dp, top = 8.dp, bottom = 14.dp).size(30.dp, 23.dp),
+            )
             DesktopSidebarItem(BitChordIcons.Search, DesktopDestination.SEARCH.label, destination == DesktopDestination.SEARCH) { onDestinationSelected(DesktopDestination.SEARCH) }
             DesktopSidebarItem(BitChordIcons.Home, DesktopDestination.LISTEN_NOW.label, destination == DesktopDestination.LISTEN_NOW) { onDestinationSelected(DesktopDestination.LISTEN_NOW) }
             DesktopSidebarItem(BitChordIcons.Explore, DesktopDestination.EXPLORE.label, destination == DesktopDestination.EXPLORE) { onDestinationSelected(DesktopDestination.EXPLORE) }
-            DesktopSidebarItem(BitChordIcons.Radio, DesktopDestination.RADIO.label, destination == DesktopDestination.RADIO, iconSize = DesktopLucideGlyph) { onDestinationSelected(DesktopDestination.RADIO) }
             Spacer(Modifier.height(24.dp))
             DesktopSidebarSection(DesktopStrings["library", "Library"])
-            DesktopSidebarItem(BitChordIcons.Library, DesktopDestination.LIBRARY.label, destination == DesktopDestination.LIBRARY && libraryShelf == null) {
-                onDestinationSelected(DesktopDestination.LIBRARY)
-            }
             if ("dest:HISTORY" !in hidden) DesktopSidebarItem(BitChordIcons.Clock, DesktopDestination.HISTORY.label, destination == DesktopDestination.HISTORY,
                 onHide = { DesktopSidebarVisibility.hide("dest:HISTORY", DesktopDestination.HISTORY.label) }) { onDestinationSelected(DesktopDestination.HISTORY) }
             // The four shortcuts are the page's own shelf list, so they hide like destinations do.
@@ -151,6 +156,14 @@ internal fun DesktopAppleSidebar(
             val playlistsState = rememberLazyListState()
             AppleScrollbarBox(playlistsState, Modifier.fillMaxWidth().weight(1f)) {
                 LazyColumn(Modifier.fillMaxSize(), state = playlistsState, contentPadding = PaddingValues(bottom = 12.dp)) {
+                    // The section heads with the whole list rather than with its members, the way the
+                    // site's does: one grid of every playlist, the account's and this computer's.
+                    // The shelf it opens is named in English, like the shortcuts above it.
+                    item(key = "all-playlists") {
+                        DesktopSidebarItem(BitChordIcons.Library, DesktopStrings["d_all_playlists", "All Playlists"], destination == DesktopDestination.LIBRARY && libraryShelf == "Playlists") {
+                            onOpenAllPlaylists()
+                        }
+                    }
                     items(accountPlaylists.filterNot { "account:${it.browseId}" in hidden }, key = { "account:${it.browseId}" }) { playlist ->
                         DesktopSidebarItem(BitChordIcons.Playlist, playlist.title, openedCollectionId == playlist.browseId,
                             onHide = { DesktopSidebarVisibility.hide("account:${playlist.browseId}", playlist.title) }) { onOpenAccountPlaylist(playlist) }
@@ -234,6 +247,7 @@ private fun DesktopAppleSidebarRail(
     accountAvatar: String?,
     hidden: Map<String, String>,
     onDestinationSelected: (DesktopDestination) -> Unit,
+    onOpenAllPlaylists: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAccounts: () -> Unit,
 ) {
@@ -265,12 +279,9 @@ private fun DesktopAppleSidebarRail(
             DesktopSidebarRailItem(BitChordIcons.Explore, DesktopDestination.EXPLORE.label, destination == DesktopDestination.EXPLORE) {
                 onDestinationSelected(DesktopDestination.EXPLORE)
             }
-            DesktopSidebarRailItem(BitChordIcons.Radio, DesktopDestination.RADIO.label, destination == DesktopDestination.RADIO) {
-                onDestinationSelected(DesktopDestination.RADIO)
-            }
             Spacer(Modifier.height(14.dp))
-            DesktopSidebarRailItem(BitChordIcons.Library, DesktopDestination.LIBRARY.label, destination == DesktopDestination.LIBRARY) {
-                onDestinationSelected(DesktopDestination.LIBRARY)
+            DesktopSidebarRailItem(BitChordIcons.Library, DesktopStrings["d_all_playlists", "All Playlists"], false) {
+                onOpenAllPlaylists()
             }
             if ("dest:HISTORY" !in hidden) {
                 DesktopSidebarRailItem(BitChordIcons.Clock, DesktopDestination.HISTORY.label, destination == DesktopDestination.HISTORY) {

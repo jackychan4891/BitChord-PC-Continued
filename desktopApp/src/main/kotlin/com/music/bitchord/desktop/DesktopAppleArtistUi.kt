@@ -182,21 +182,18 @@ internal fun DesktopAppleArtistHeader(
                     value = if (logoMissing) Result.success(DesktopArtistSignatures.signatureFor(name)) else null
                 }
                 val ink = signature?.getOrNull()
-                // A signature is credited rather than just shown: Apple set the
-                // artist's own hand under a "Signed by" line, and without it
-                // the script reads as a logo nobody wrote.
-                if (mark != null || (logoMissing && ink != null)) {
+                if (mark != null) {
+                    val aspect = mark.width.toFloat() / mark.height
+                    val width = minOf(headerWidth * 0.45f, 282.dp, 94.dp * aspect)
+                    Image(mark, name, Modifier.width(width).height(width / aspect), contentScale = ContentScale.Fit)
+                } else if (logoMissing && ink != null) {
+                    // Only the artist's own hand is credited. Under a logo the line has nothing to
+                    // sign, and the word "Signed by" above a mark nobody wrote reads as a mistake.
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (mark != null) {
-                            val aspect = mark.width.toFloat() / mark.height
-                            val width = minOf(headerWidth * 0.45f, 282.dp, 94.dp * aspect)
-                            Image(mark, name, Modifier.width(width).height(width / aspect), contentScale = ContentScale.Fit)
-                        } else {
-                            val aspect = ink!!.width.toFloat() / ink.height
-                            val width = minOf(headerWidth * 0.5f, 320.dp, 110.dp * aspect)
-                            Image(ink, name, Modifier.width(width).height(width / aspect), contentScale = ContentScale.Fit,
-                                colorFilter = ColorFilter.tint(Color.White, BlendMode.SrcIn))
-                        }
+                        val aspect = ink.width.toFloat() / ink.height
+                        val width = minOf(headerWidth * 0.5f, 320.dp, 110.dp * aspect)
+                        Image(ink, name, Modifier.width(width).height(width / aspect), contentScale = ContentScale.Fit,
+                            colorFilter = ColorFilter.tint(Color.White, BlendMode.SrcIn))
                         Text(
                             DesktopStrings.format("d_signed_by", name, fallback = "Signed by %1\$s"),
                             color = Color.White.copy(alpha = 0.78f),
@@ -443,6 +440,8 @@ internal fun DesktopAppleShelf(
      * cover row can wear it: an Apple shelf that already named its own shape keeps it.
      */
     portrait: Boolean = false,
+    /** Lay this row across the page as a grid: what a page opened from a chevron does. */
+    gridded: Boolean = false,
 ) {
     val circles = shelf.items.isNotEmpty() && shelf.items.all { it.browseId?.startsWith("UC") == true }
     val videos = shelf.title.contains("video", ignoreCase = true)
@@ -450,6 +449,22 @@ internal fun DesktopAppleShelf(
     // the site's own layout vocabulary, and beats guessing from the titles.
     val declared = shelf.feedLayout(circles)
     val titled = showHeading && !shelf.title.isQuietShelfTitle()
+    // A shelf whose source names a page of its own wears the site's chevron and opens it; a shelf
+    // that names none keeps a bare name, which is then only a label.
+    val shelfPage: (() -> Unit)? = shelf.moreBrowseId?.let { more ->
+        {
+            onItemClick(
+                ShelfItem(
+                    title = shelf.title,
+                    subtitle = "",
+                    thumbnailUrl = null,
+                    videoId = null,
+                    browseId = more,
+                ),
+                shelf.title,
+            )
+        }
+    }
     // Apple's track grid — the columns of short rows that read down — is what a
     // *run of songs* looks like on its pages: the charts, a "Best New Songs", an
     // artist's top tracks. The source's other song rows ("Quick picks", "Covers
@@ -466,17 +481,19 @@ internal fun DesktopAppleShelf(
             onOpenMenu = onItemMenu?.let { menu -> { index: Int -> menu(shelf.items[index]) } },
             showHeading = titled,
             rows = if (shelf.rows > 1) shelf.rows else 4,
+            onOpenHeading = shelfPage,
         )
         return
     }
-    // Apple's radio page is a grid of squares with what each one is carrying underneath. Apple names
-    // no programme in any feed a listener may ask for, so that line is read off the stream itself.
+    // The stations are a shelf like any other on the site — a row of squares with what each one is
+    // carrying underneath. Apple names no programme in any feed a listener may ask for, so that
+    // line is read off the stream itself.
     if (shelf.items.isNotEmpty() && shelf.items.all { DesktopRadioClient.isStation(it) }) {
         val offAir by DesktopRadioNowPlaying.lines.collectAsState()
         val itemOf = { tile: DesktopRadioTile -> shelf.items.firstOrNull { DesktopRadioClient.keyOf(it) == tile.key } }
-        DesktopRadioTileGrid(
-            if (titled) shelf.title else null,
-            shelf.items.map { item ->
+        DesktopRadioShelf(
+            title = shelf.title,
+            tiles = shelf.items.map { item ->
                 val key = DesktopRadioClient.keyOf(item)
                 DesktopRadioTile(
                     key = key,
@@ -488,6 +505,8 @@ internal fun DesktopAppleShelf(
             },
             onOpen = { tile -> itemOf(tile)?.let { onItemClick(it, shelf.title) } },
             onHide = { tile -> DesktopRadioVisibility.hide(tile.key, tile.title) },
+            showHeading = titled,
+            onOpenHeading = shelfPage,
         )
         return
     }
@@ -500,6 +519,19 @@ internal fun DesktopAppleShelf(
         else -> AppleFeedLayout.Square
     }
     val portraitRow = portrait && coverLayout == AppleFeedLayout.Square
+    if (gridded) {
+        // A page a chevron leads to lists its row out in full, laid across the page in columns the
+        // way the site lays a browse page, rather than kept to one sliding row.
+        AppleFeedCoverGrid(
+            title = shelf.title,
+            layout = coverLayout,
+            items = shelf.items,
+            onClick = { item -> onItemClick(item, shelf.title) },
+            onMenu = onItemMenu,
+            showHeading = titled,
+        )
+        return
+    }
     AppleFeedCoverShelf(
         title = shelf.title,
         layout = if (portraitRow) AppleFeedLayout.Portrait else coverLayout,
@@ -510,6 +542,7 @@ internal fun DesktopAppleShelf(
         // is only ever quiet because the page it came from names itself, and this row is not that.
         showHeading = titled || portraitRow,
         rows = shelf.rows,
+        onOpenHeading = shelfPage,
     )
 }
 

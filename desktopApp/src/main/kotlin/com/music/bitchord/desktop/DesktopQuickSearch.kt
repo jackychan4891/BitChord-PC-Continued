@@ -395,6 +395,8 @@ internal fun DesktopShortcutsDialog(onDismiss: () -> Unit) {
             ShortcutGroup(
                 DesktopStrings["shortcuts_layers", "Panels"],
                 listOf(
+                    "Ctrl+Q" to DesktopStrings["shortcut_queue", "Show or hide the queue"],
+                    "Ctrl+L" to DesktopStrings["shortcut_lyrics", "Show or hide the lyrics"],
                     "Esc" to DesktopStrings["shortcut_escape", "Close the panel that is open"],
                     (if (mac) "⌘/" else "Ctrl+/") to DesktopStrings["shortcut_help", "This list"],
                 ),

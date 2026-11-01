@@ -32,6 +32,11 @@ internal object DesktopAppleBrowseClient {
     const val SONG_PREFIX = "apple-song:"
     const val RADIO_PREFIX = "apple-radio:"
     /**
+     * One of Apple's mood stations. Not a page and not a live radio stream: a tile that starts the
+     * mood playing. See [DesktopApplePersonalFeed.playlistFor].
+     */
+    const val MOOD_PREFIX = "apple-mood:"
+    /**
      * Covers are asked for at twice the widest tile a shelf draws. A 600px copy is over twice the
      * bytes of a 400px one, and a page is a hundred of them; surfaces that want more say so.
      */
@@ -119,9 +124,9 @@ internal object DesktopAppleBrowseClient {
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(url.toByteArray(StandardCharsets.UTF_8))
             .joinToString(separator = "") { byte -> "%02x".format(byte) }
-        // v3: the shelf's own row count joined the cache format. A file from before it would draw
-        // today's two-row shelves in yesterday's single row until the day's page was fetched again.
-        pagesDirectory.resolve("$digest.v3.json")
+        // v5: the list of rows Apple keeps for its own player grew to the DJ mixes and Music
+        // Room releases. An older file still holds them, so it is re-derived once, then kept.
+        pagesDirectory.resolve("$digest.v5.json")
     }.getOrNull()
 
     private fun readDisk(url: String): Pair<Long, List<HomeShelf>>? = runCatching {
@@ -210,25 +215,67 @@ internal object DesktopAppleBrowseClient {
             )
         }
 
+    /**
+     * A release's page as its running order: every track the page lists, in the order it lists
+     * them. The page is the cache the app already keeps, so an open release costs nothing here.
+     */
+    suspend fun releaseTracks(url: String, title: String): Result<List<ShelfItem>> =
+        page(url, title).map { shelves -> shelves.flatMap { it.items }.filter { it.isAppleSong() } }
+
+    /**
+     * One Apple row, found on the music source.
+     *
+     * The search is the row's own title and credit. A row the source names differently still
+     * plays — its name a longer cut of ours ("Fire" for "Fire (Eurovision Song Contest)"), or the
+     * other way round — as long as the artist is the same, which is what keeps a cover out. Only
+     * when that search turns up nothing usable is it asked again without the bracketed part.
+     */
     suspend fun resolveSong(item: ShelfItem): Result<Song> {
         val id = item.browseId.orEmpty()
         synchronized(resolved) { resolved[id]?.let { return Result.success(it) } }
-        return DesktopSearchClient.search("${item.title} ${item.subtitle}").mapCatching { rows ->
-            val songs = rows.mapNotNull { row ->
-                when (row) {
-                    is SearchResult.Track -> row.song
-                    is SearchResult.TopTrack -> row.song
-                    else -> null
-                }
-            }
-            val song = songs.firstOrNull {
-                DesktopCanvasArtwork(url = "", title = it.title.cleanedForCanvas(), artist = it.artist.cleanedForCanvas())
-                    .matches(item.title.cleanedForCanvas(), item.subtitle.cleanedForCanvas(), null)
-            } ?: error("${item.title} by ${item.subtitle} is not available from the current music source")
+        return runCatching {
+            val rows = sourceSongs("${item.title} ${item.subtitle}")
+            val song = rows.firstOrNull { it.isExactMatchFor(item) }
+                ?: rows.firstOrNull { it.isNearMatchFor(item) }
+                ?: sourceSongs("${item.title.substringBefore('(').substringBefore('[').trim().ifBlank { item.title }} ${item.subtitle}")
+                    .firstOrNull { it.isExactMatchFor(item) || it.isNearMatchFor(item) }
+                ?: error("${item.title} by ${item.subtitle} is not available from the current music source")
             val withArtwork = song.copy(thumbnailUrl = item.thumbnailUrl ?: song.thumbnailUrl)
             synchronized(resolved) { resolved[id] = withArtwork }
             withArtwork
         }
+    }
+
+    /** The tracks a source search turned up, in the order the search ranked them. */
+    private suspend fun sourceSongs(term: String): List<Song> =
+        DesktopSearchClient.search(term.trim()).getOrDefault(emptyList()).mapNotNull { row ->
+            when (row) {
+                is SearchResult.Track -> row.song
+                is SearchResult.TopTrack -> row.song
+                else -> null
+            }
+        }
+
+    /** The same recording, up to the source's own punctuation and accents. */
+    private fun Song.isExactMatchFor(item: ShelfItem): Boolean =
+        DesktopCanvasArtwork(url = "", title = title.cleanedForCanvas(), artist = artist.cleanedForCanvas())
+            .matches(item.title.cleanedForCanvas(), item.subtitle.cleanedForCanvas(), null)
+
+    /**
+     * The same song under a longer or shorter name — "Fire" for "Fire (Eurovision Song Contest)",
+     * or the reverse. The artist still has to match, and the shorter name has to end on a word
+     * boundary, so "Fire" cannot stand in for "Firework".
+     */
+    private fun Song.isNearMatchFor(item: ShelfItem): Boolean {
+        val wanted = splitCanvasArtists(item.subtitle.cleanedForCanvas())
+        val ours = splitCanvasArtists(artist.cleanedForCanvas())
+        if (wanted.isEmpty() || ours.isEmpty() || !wanted.all { want -> ours.any { it == want } }) return false
+        val wantTitle = item.title.cleanedForCanvas().normalizeForCanvasMatch()
+        val ourTitle = title.cleanedForCanvas().normalizeForCanvasMatch()
+        if (wantTitle.isBlank() || ourTitle.isBlank()) return false
+        val short = if (wantTitle.length <= ourTitle.length) wantTitle else ourTitle
+        val long = if (wantTitle.length <= ourTitle.length) ourTitle else wantTitle
+        return long.startsWith("$short ")
     }
 
     internal fun parse(html: String, pageTitle: String): List<HomeShelf> {
@@ -267,6 +314,9 @@ internal object DesktopAppleBrowseClient {
         if (kind == "radioStation" && !liveGrid && item.obj("radioStation")?.text("isLiveRadio") != "true") return null
         val url = descriptor.text("url")?.takeIf(::validPageUrl) ?: return null
         val title = item.text("title") ?: item.links("titleLinks").firstOrNull() ?: item.text("accessibilityLabel") ?: return null
+        // Apple keeps some recordings for its own player: its sessions and studio exclusives are
+        // not on the music source at all, so a page offers only what it can actually start.
+        if (kind != "radioStation" && isAppleExclusive(title)) return null
         // A track cell's artist is a link on some pages and a plain name on others — an album's own
         // list gives only `artistName`, and would otherwise show no artist at all.
         val artist = item.links("subtitleLinks").joinToString(", ").ifBlank {
@@ -296,6 +346,31 @@ internal object DesktopAppleBrowseClient {
         return ShelfItem(title, caption, artwork, null, browseId)
     }
 
+    /**
+     * Whether a title is one of Apple's own records — a session, a studio performance, a live
+     * capture made for Apple Music — which the music source does not carry.
+     */
+    private fun isAppleExclusive(title: String): Boolean {
+        val name = title.trim()
+        // Apple files the "Sessions" series under the series name alone.
+        if (name.equals("Sessions", ignoreCase = true)) return true
+        return APPLE_EXCLUSIVE_MARKERS.any { name.contains(it, ignoreCase = true) }
+    }
+
+    private val APPLE_EXCLUSIVE_MARKERS = listOf(
+        "Apple Music Sessions",
+        "Apple Music Home Session",
+        "Apple Music Live",
+        "Apple Music Studios",
+        "Apple Music Nashville Sessions",
+        "Live from Apple Music",
+        "Live at Apple Music",
+        // Apple's artist-in-residence recordings, filed under the "Music Room" series.
+        "Music Room",
+        // Continuous mixes Apple carries as its own releases; the music source has no such album.
+        "DJ Mix",
+    )
+
     private fun validPageUrl(url: String): Boolean = runCatching {
         val uri = URI(url)
         uri.scheme == "https" && uri.host == "music.apple.com" && uri.userInfo == null && uri.port == -1
@@ -318,7 +393,10 @@ internal object DesktopAppleBrowseClient {
 
 internal fun ShelfItem.isAppleSong(): Boolean = browseId?.startsWith(DesktopAppleBrowseClient.SONG_PREFIX) == true
 
-/** Apple's live-radio grid. The Radio page is where a station belongs, not the New one. */
+/**
+ * Apple's live-radio grid. Stations are a row of the New feed, the way the site lays them out,
+ * rather than a page of their own.
+ */
 internal fun HomeShelf.isAppleRadioShelf(): Boolean =
     items.isNotEmpty() &&
         items.all { it.browseId?.startsWith(DesktopAppleBrowseClient.RADIO_PREFIX) == true }
@@ -331,6 +409,10 @@ internal fun HomeShelf.isAppleChartShelf(): Boolean = title.contains("trend", tr
 /** An Apple editorial playlist, opened as a page of its own. */
 internal fun ShelfItem.isApplePlaylistTile(): Boolean =
     browseId?.startsWith(DesktopAppleBrowseClient.PAGE_PREFIX) == true && browseId.orEmpty().contains("/playlist/")
+
+/** One of Apple's mood stations, which plays rather than opens. */
+internal fun ShelfItem.isAppleMoodTile(): Boolean =
+    browseId?.startsWith(DesktopAppleBrowseClient.MOOD_PREFIX) == true
 
 /**
  * A shelf of Apple's own playlists — the row the home page takes over from the

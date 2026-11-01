@@ -234,7 +234,11 @@ internal object DesktopAppleMusicCanvas {
      * cannot return a playlist at all.
      */
     fun record(id: String): DesktopCanvasArtwork? {
-        val clean = id.substringBefore('?').substringBefore('-').removePrefix("id")
+        // A playlist's own id has a dash in it (`pl.u-…`), so only the album form gets its trailing
+        // `-i…` track suffix cut away.
+        val page = id.substringBefore('?')
+        val clean = (if (page.startsWith("pl.") || page.startsWith("PL.")) page else page.substringBefore('-'))
+            .removePrefix("id")
         if (clean.isBlank()) return null
         val kind = if (clean.startsWith("pl.") || clean.startsWith("PL.")) "playlists" else "albums"
         val bearer = token() ?: return null
@@ -377,8 +381,19 @@ internal object DesktopAppleMusicCanvas {
         "apple music", "today's hits", "session",
     )
 
-    /** A page Apple's catalog search answered with: a playlist or an album. */
-    data class PageHit(val title: String, val subtitle: String, val artworkUrl: String?, val url: String)
+    /**
+     * A page Apple's catalog search answered with: a playlist or an album.
+     *
+     * [releaseDate] is Apple's ISO date for a record — blank for a playlist, which has none — and is
+     * what lets a caller ask which of an artist's pages is the newest rather than the most played.
+     */
+    data class PageHit(
+        val title: String,
+        val subtitle: String,
+        val artworkUrl: String?,
+        val url: String,
+        val releaseDate: String = "",
+    )
 
     /**
      * Apple's own pages for a term — the playlists and albums the music source's search cannot
@@ -409,6 +424,55 @@ internal object DesktopAppleMusicCanvas {
                 title = title,
                 subtitle = attributes.text("curatorName") ?: attributes.text("artistName").orEmpty(),
                 artworkUrl = artwork,
+                url = pageUrl,
+                releaseDate = attributes.text("releaseDate").orEmpty(),
+            )
+        }
+    }
+
+    /**
+     * One of Apple's mood stations, as the storefront names it.
+     *
+     * A mood is a station on Apple's pages, not a playlist: a name, a line about it, its own motion
+     * artwork, and a stream behind a subscription. The first three are public, and the stream is
+     * the one part this app has no use for — the songs come from the music source.
+     */
+    data class MoodStation(
+        val title: String,
+        val blurb: String,
+        val artworkUrl: String?,
+        val motionUrl: String?,
+        val url: String,
+    )
+
+    /**
+     * Apple's mood stations, in the order asked for.
+     *
+     * The ids are the same in every storefront and only their names, notes and pages are localized,
+     * so a row of them reads as Apple's own *Find Your Mood* in whatever language the machine is
+     * set to.
+     */
+    fun moodStations(ids: List<String>): List<MoodStation> {
+        if (ids.isEmpty()) return emptyList()
+        val bearer = token() ?: return emptyList()
+        val url = query(
+            "$AMP/$storefront/stations",
+            listOf("ids" to ids.joinToString(","), "extend" to "editorialVideo"),
+        )
+        val records = parse(get(url, bearer))?.get("data")?.jsonArray ?: return emptyList()
+        return records.mapNotNull { row ->
+            val record = row as? JsonObject ?: return@mapNotNull null
+            val attributes = record["attributes"]?.jsonObject ?: return@mapNotNull null
+            val title = attributes.text("name") ?: return@mapNotNull null
+            val pageUrl = attributes.text("url") ?: return@mapNotNull null
+            if (!pageUrl.startsWith("https://music.apple.com/")) return@mapNotNull null
+            val notes = attributes["editorialNotes"]?.jsonObject
+            MoodStation(
+                title = title,
+                blurb = notes?.text("short") ?: notes?.text("standard").orEmpty(),
+                artworkUrl = attributes["artwork"]?.jsonObject?.text("url")
+                    ?.replace("{w}", "400")?.replace("{h}", "400")?.replace("{c}", "bb")?.replace("{f}", "jpg"),
+                motionUrl = attributes["editorialVideo"]?.jsonObject?.let(::motionUrls)?.first,
                 url = pageUrl,
             )
         }

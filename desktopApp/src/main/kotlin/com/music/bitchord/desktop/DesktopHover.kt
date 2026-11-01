@@ -135,18 +135,24 @@ private const val ROW_HOVER_ALPHA = 0.07f
 internal fun Modifier.desktopArtHoverShade(): Modifier = composed {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    this
+        .hoverable(interaction)
+        .desktopArtShade(hovered)
+}
+
+/** The scrim itself, for a tile that already owns the [hoverable] its hover comes from. */
+@Composable
+internal fun Modifier.desktopArtShade(hovered: Boolean): Modifier = composed {
     val shade by animateFloatAsState(
         targetValue = if (hovered) 1f else 0f,
         animationSpec = tween(ART_HOVER_MS),
         label = "artShade",
     )
-    this
-        .hoverable(interaction)
-        .drawWithContent {
-            drawContent()
-            if (shade <= 0.001f) return@drawWithContent
-            drawRect(androidx.compose.ui.graphics.Color.Black.copy(alpha = ART_HOVER_ALPHA * shade))
-        }
+    this.drawWithContent {
+        drawContent()
+        if (shade <= 0.001f) return@drawWithContent
+        drawRect(androidx.compose.ui.graphics.Color.Black.copy(alpha = ART_HOVER_ALPHA * shade))
+    }
 }
 
 /** The site's own artwork scrim: half black. */

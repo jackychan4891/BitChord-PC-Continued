@@ -27,6 +27,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -78,6 +79,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -1691,12 +1693,7 @@ private fun LosslessOrStats(
             artworkUrl = artworkUrl,
             modifier = modifier,
         )
-        nerdStats?.isDolbyAtmos == true -> LosslessLabel(
-            text = "Dolby Atmos",
-            animated = true,
-            iconPainter = painterResource(Res.drawable.ic_dolby_atmos),
-            // Tinted off the sleeve like every other badge, and given the same room as the
-            // lossless mark: an untinted white one read as a sticker laid over the player.
+        nerdStats?.isDolbyAtmos == true -> DolbyAtmosLabel(
             artworkUrl = artworkUrl,
             modifier = modifier,
         )
@@ -1776,6 +1773,58 @@ private fun LosslessLabel(
             )
         }
     }
+}
+
+/**
+ * Dolby's current Atmos logo — the double-D and the "Dolby Atmos" wordmark set as one
+ * row — taken from the press kit's own art rather than redrawn glyph by glyph, and worn
+ * like every other quality badge: tinted to the sleeve, with the shimmer the confirmed
+ * qualities carry sweeping across it.
+ */
+@Composable
+private fun DolbyAtmosLabel(
+    artworkUrl: String?,
+    modifier: Modifier = Modifier,
+) {
+    val palette = artworkUrl?.let { rememberArtworkColors(it) }
+    val badge = palette?.colors?.let(::artworkBadgeColor)
+    val color = (badge ?: Color.White).copy(alpha = 0.85f)
+    val transition = rememberInfiniteTransition(label = "atmos-shimmer")
+    val progress = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "atmos-shimmer-progress",
+    )
+    Image(
+        painter = painterResource(Res.drawable.img_dolby_atmos),
+        contentDescription = "Dolby Atmos",
+        colorFilter = ColorFilter.tint(color),
+        modifier = modifier
+            .height(12.dp)
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val width = size.width
+                val band = width * 0.6f
+                val center = -band + progress.value * (width + 2 * band)
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colorStops = arrayOf(
+                            0f to color,
+                            0.5f to Color.White,
+                            1f to color,
+                        ),
+                        start = Offset(center - band, 0f),
+                        end = Offset(center + band, 0f),
+                    ),
+                    blendMode = BlendMode.SrcIn,
+                )
+            },
+    )
 }
 
 /**

@@ -86,6 +86,7 @@
     <string name="d_name_optional">Nazwa (opcjonalnie)</string>
     <string name="d_new">Nowości</string>
     <string name="d_new_music_moods_and_discoveries">Nowa muzyka, nastroje i odkrycia</string>
+    <string name="d_new_release">Nowość</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">Nie znaleziono profilu przeglądarki na tym komputerze.</string>
     <string name="d_no_downloads">Brak pobranych</string>
     <string name="d_nobody_is_signed_in">Nikt nie jest zalogowany. Twoja biblioteka, playlisty i historia wymagają konta YouTube Music.</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">Ten utwór nie pochodzi z YouTube Music, więc może trafić tylko na playlistę przechowywaną tutaj.</string>
     <string name="d_time">CZAS</string>
     <string name="d_title_bar">Pasek tytułu</string>
+    <string name="d_top_picks_for_you">Najlepsze propozycje dla Ciebie</string>
     <string name="d_top_result">Najlepszy wynik</string>
     <string name="d_track_info_hint">Dotyczy tylko tego utworu. Jeśli wybrane źródło nie ma jego kopii, BitChord wraca do zwykłej kolejności.</string>
     <string name="d_track_information">Informacje o utworze</string>
     <string name="d_about_track">O tej piosence</string>
     <string name="d_artist_signature_service">Usługa podpisu artysty</string>
+    <string name="d_all_playlists">Wszystkie playlisty</string>
     <string name="d_artist_signature_off">Wyłączone. Nic nie jest pobierane, aż dodasz własny link.</string>
     <string name="d_artist_signature_dialog">BitChord prosi wybrany serwis o odręczny podpis i rysuje go na biało w nagłówku artysty. Link musi odpowiadać JSON-em. Wstaw {artist} w miejscu nazwy, albo pomiń ją, a nazwa zostanie dodana jako ?artist=…&amp;type=handwritten. Wyczyść pole, aby nic nie pobierać.</string>
     <string name="hidden_items">Ukryte elementy</string>
@@ -255,6 +258,7 @@
     <string name="d_already_added_as">Dodano już jako %1$s</string>
     <string name="d_count_minutes">%1$s minut</string>
     <string name="d_count_songs">%1$s utworów</string>
+    <string name="d_find_your_mood">Znajdź swój nastrój</string>
     <string name="d_module_index_detected">Indeks modułów · %1$s modułów</string>
     <string name="d_on_this_computer">Na tym komputerze</string>
     <string name="d_one_song">1 utwór</string>

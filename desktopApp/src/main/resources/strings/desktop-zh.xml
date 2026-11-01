@@ -86,6 +86,7 @@
     <string name="d_name_optional">名称（可选）</string>
     <string name="d_new">新音乐</string>
     <string name="d_new_music_moods_and_discoveries">新音乐、心情与发现</string>
+    <string name="d_new_release">新发行</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">在这台机器上未找到浏览器配置文件。</string>
     <string name="d_no_downloads">没有下载</string>
     <string name="d_nobody_is_signed_in">当前没有登录账户。你的音乐库、播放列表和历史记录需要一个 YouTube Music 账户。</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">这首歌曲不来自 YouTube Music，因此只能加入保存在本机的播放列表。</string>
     <string name="d_time">时长</string>
     <string name="d_title_bar">标题栏</string>
+    <string name="d_top_picks_for_you">为你精选</string>
     <string name="d_top_result">最佳结果</string>
     <string name="d_track_info_hint">仅适用于此曲目。如果您选择的来源没有该曲目的副本，BitChord 会回到常用顺序。</string>
     <string name="d_track_information">曲目信息</string>
     <string name="d_about_track">关于此歌曲</string>
     <string name="d_artist_signature_service">艺术家签名服务</string>
+    <string name="d_all_playlists">所有播放列表</string>
     <string name="d_artist_signature_off">已关闭。添加您自己的链接之前不会获取任何内容。</string>
     <string name="d_artist_signature_dialog">BitChord 会向您指定的服务请求手写签名，并以白色绘制在艺术家标题上。链接必须返回 JSON。将 {artist} 放在需要名称的位置；如果省略，名称会作为 ?artist=…&amp;type=handwritten 追加。清空此字段则完全不获取。</string>
     <string name="hidden_items">隐藏的条目</string>
@@ -254,6 +257,7 @@
     <string name="d_already_added_as">已作为 %1$s 添加</string>
     <string name="d_count_minutes">%1$s 分钟</string>
     <string name="d_count_songs">%1$s 首歌曲</string>
+    <string name="d_find_your_mood">找到你的心情</string>
     <string name="d_module_index_detected">模块索引 · %1$s 个模块</string>
     <string name="d_on_this_computer">在这台电脑上</string>
     <string name="d_one_song">1 首歌曲</string>

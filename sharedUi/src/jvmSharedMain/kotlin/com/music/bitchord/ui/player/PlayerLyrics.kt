@@ -269,11 +269,12 @@ private val WIPE_FEATHER = 30.dp
 /**
  * How far the word being sung lifts off the line.
  *
- * Two pixels, and it has to be about two: enough that the eye catches the
- * words moving under the sweep, little enough that nothing appears to come
- * loose from the line it belongs to.
+ * Three pixels. The reader asked for the words to move as they are sung, which
+ * the two-pixel lift never showed at this size, and then asked for the peak back
+ * down from five: it is still enough for the sweep to carry the word visibly with
+ * it, without anything appearing to come loose from the line it belongs to.
  */
-private val WORD_RISE = 2.dp
+private val WORD_RISE = 3.dp
 
 /**
  * How much further up a row is opened when it holds a word being animated
@@ -419,13 +420,11 @@ internal val APPLE_LYRIC_WINDOW =
         appleLyricPitch(APPLE_LYRIC_ROWS) * APPLE_LYRIC_LINES - APPLE_LYRIC_GAP
 
 /**
- * How much of the block the line being sung gives back to the top of it — a little over half
- * a line, asked for as a lowering of the words rather than a raising of the room above them.
- * What it buys is the clearance the line the song has just left was short of: at the inset
- * without it, that line's crown sat on the block's edge and the fade there read as the line
- * going missing rather than letting go.
+ * How much of the block the line being sung gives back to the top of it — asked for as a
+ * lowering of the words rather than a raising of the room above them, so the line the song
+ * has just left keeps a little clearance under the block's fade instead of reading as gone.
  */
-private val APPLE_LYRIC_SUNG_DROP = 40.dp
+private val APPLE_LYRIC_SUNG_DROP = 16.dp
 
 /**
  * How far below the top of the block the line being sung rests: the room its top edge

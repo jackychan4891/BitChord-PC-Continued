@@ -86,6 +86,7 @@
     <string name="d_name_optional">שם (אופציונלי)</string>
     <string name="d_new">חדש</string>
     <string name="d_new_music_moods_and_discoveries">מוזיקה חדשה, מצבי רוח וגילויים</string>
+    <string name="d_new_release">הוצאה חדשה</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">לא נמצא פרופיל דפדפן במחשב הזה.</string>
     <string name="d_no_downloads">אין הורדות</string>
     <string name="d_nobody_is_signed_in">אף אחד לא מחובר. הספרייה, הפלייליסטים וההיסטוריה שלך זקוקים ל חשבון YouTube Music.</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">הרצועה הזו אינה מ-YouTube Music, ולכן היא יכולה להיכנס רק לפלייליסט שנשמר כאן.</string>
     <string name="d_time">משך</string>
     <string name="d_title_bar">שורת הכותרת</string>
+    <string name="d_top_picks_for_you">המלצות מובילות בשבילך</string>
     <string name="d_top_result">התוצאה המובילה</string>
     <string name="d_track_info_hint">חל על הרוצה הזו בלבד. אם למקור שבחרת אין עותק שלה, BitChord חוזר לסדר הרגי.</string>
     <string name="d_track_information">פרטי הרוצה</string>
     <string name="d_about_track">על השיר הזה</string>
     <string name="d_artist_signature_service">שירות חתימת אמן</string>
+    <string name="d_all_playlists">כל הרשימות</string>
     <string name="d_artist_signature_off">כבוי. כלום לא נשלף עד שתוסיף קישור משלך.</string>
     <string name="d_artist_signature_dialog">BitChord מבקש חתימה בכתב יד משירות לבחירתך ומציג אותה בלבן מעל כותרת האמן. על הקישור לענות ב־JSON. שים {artist} במקום שבו צריך להיות השם, או השמט אותו והשם יתווסף כ־?artist=…&amp;type=handwritten. נקה את השדה כדי שלא יישלף כלום.</string>
     <string name="hidden_items">פריטים מוסתרים</string>
@@ -254,6 +257,7 @@
     <string name="d_already_added_as">כבר נוסף בתור %1$s</string>
     <string name="d_count_minutes">%1$s דקות</string>
     <string name="d_count_songs">%1$s שירים</string>
+    <string name="d_find_your_mood">מצאו את מצב הרוח שלכם</string>
     <string name="d_module_index_detected">אינדקס מודולים · %1$s מודולים</string>
     <string name="d_on_this_computer">במחשב הזה</string>
     <string name="d_one_song">שיר אחד</string>

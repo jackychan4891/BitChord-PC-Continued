@@ -16,8 +16,14 @@ internal class DesktopAudioSpeed(
     /** Half a window. */
     private val hop = (sampleRate * 0.028f).roundToInt().coerceAtLeast(64)
 
-    /** How far either side the reader may slide to find a better join. */
-    private val search = (sampleRate * 0.007f).roundToInt().coerceAtLeast(16)
+    /**
+     * How far either side the reader may slide to find a better join.
+     *
+     * Has to clear the drift one hop accumulates at the fastest rate the stretch window allows —
+     * a 25% speed-up moves the nominal read 7 ms past the end of the window before it, and the join
+     * has to reach that far forward to find the true continuation rather than crossfade into silence.
+     */
+    private val search = (sampleRate * 0.012f).roundToInt().coerceAtLeast(16)
 
     private var pending = FloatArray(0)
     private var pendingFrames = 0

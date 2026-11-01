@@ -265,6 +265,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -295,7 +296,6 @@ import bitchord.desktopapp.generated.resources.dm_sans_extrabold
 import bitchord.desktopapp.generated.resources.dm_sans_medium
 import bitchord.desktopapp.generated.resources.dm_sans_regular
 import bitchord.desktopapp.generated.resources.dm_sans_semibold
-import bitchord.desktopapp.generated.resources.logo_mark
 import bitchord.desktopapp.generated.resources.sf_pro_display_bold
 import bitchord.desktopapp.generated.resources.sf_pro_display_heavy
 import bitchord.desktopapp.generated.resources.sf_pro_display_medium
@@ -399,7 +399,6 @@ private val LocalDesktopBottomInset = staticCompositionLocalOf { 0.dp }
 
 /** Android's own edge on these bars: `Color.White.copy(alpha = 0.10f)`. */
 private val DesktopBarEdge = Color(0x1AFFFFFF)
-internal val DesktopAccent = Color(0xFFFA586A)
 
 /** Deleting, signing out, and anything that failed — the one place a colour survives, as on Android. */
 internal val DesktopDestructive = Color(0xFFFF3B30)
@@ -442,6 +441,9 @@ private const val TYPEAHEAD_MEDIA_LIMIT = 8
 
 private const val INITIAL_RADIO_TRACKS = 24
 
+/** How many of an Apple release's rows are looked up on the source at once. */
+private const val APPLE_TRACK_REQUESTS = 5
+
 /** An artist's top songs, capped so the release shelves are not buried. */
 private const val MAX_ARTIST_SONGS = 20
 
@@ -454,8 +456,16 @@ private const val SCROBBLE_THRESHOLD_MS = 180_000L
 /** Used for tracking restart of the current song when previous button is pressed. */
 private const val BACK_RESTARTS_AFTER_MS = 10_000L
 
-/** How long a manual skip takes to blend into the next track when Automix on skip is on. */
-private const val SKIP_MIX_ON_SKIP_SECONDS = 15
+/**
+ * How long a manual skip takes to blend into the next track when Automix on skip is on.
+ *
+ * Short on purpose. A skip is a press asking for the next song, not for the transition the
+ * planner would have chosen at the end of the track: at the old fifteen seconds the outgoing
+ * track stayed loud and on screen through most of a fade the listener had already left, and the
+ * press read as a dead button. The planner's own minimum, a couple of bars, is enough to keep
+ * the seam from being a cut.
+ */
+private const val SKIP_MIX_ON_SKIP_SECONDS = 4
 
 /** A skip made before this many seconds have played cuts instead of blending. */
 private const val DEFAULT_INSTANT_SKIP_SECONDS = 15
@@ -545,7 +555,6 @@ internal fun desktopLyricsFont(): FontFamily {
 internal enum class DesktopDestination(val id: String, private val key: String, private val english: String) {
     LISTEN_NOW("listen-now", "d_home", "Home"),
     EXPLORE("explore", "d_new", "New"),
-    RADIO("radio", "d_radio", "Radio"),
     LIBRARY("library", "library", "Library"),
     SEARCH("search", "search", "Search"),
     HISTORY("history", "d_recently_played", "Recently Played"),
@@ -618,36 +627,29 @@ fun BitChordDesktopApp() {
     var searchTyping by remember { mutableStateOf(false) }
     var searchLoading by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf<String?>(null) }
+    // The dropdown hangs off the field and is up only while the field is being typed into.
+    var searchDropdown by remember { mutableStateOf(false) }
+    val recentSearchTerms by DesktopSearchTermHistory.recent.collectAsState()
     var homeState by remember { mutableStateOf<UiState<List<HomeShelf>>>(UiState.Loading) }
     var appleBrowseState by remember { mutableStateOf<UiState<List<HomeShelf>>>(UiState.Loading) }
     var appleBrowseReloads by remember { mutableStateOf(0) }
-    var appleRadioState by remember { mutableStateOf<UiState<List<HomeShelf>>>(UiState.Loading) }
-    var appleRadioReloads by remember { mutableStateOf(0) }
     var appleActionError by remember { mutableStateOf<String?>(null) }
     var appleCollectionMenu by remember { mutableStateOf<(ShelfItem) -> Unit>({}) }
     val radioOffAir by DesktopRadioNowPlaying.lines.collectAsState()
     LaunchedEffect(radioPlayback.error) {
         radioPlayback.error?.let { appleActionError = it }
     }
-    LaunchedEffect(destination, appleRadioReloads) {
-        if (destination == DesktopDestination.RADIO) {
-            appleRadioState = UiState.Loading
-            DesktopAppleBrowseClient.page("https://music.apple.com/gb/radio", "Radio").fold(
-                onSuccess = { appleRadioState = UiState.Success(DesktopRadioClient.freeShelves(it)) },
-                onFailure = { appleRadioState = UiState.Error(it.message ?: "Could not load radio") },
-            )
-        }
-    }
-    // What a station is carrying is only worth asking for while somebody can see the answer: the radio
-    // page, or a stream in the player. Apple names nothing in a feed a listener may ask for, so the
-    // record is read off the stream itself, on the page's beat. A station still inside its own ttl is
-    // not re-asked, and one that says nothing keeps showing what it said last rather than going blank.
-    LaunchedEffect(destination, appleRadioState, radioPlayback.station) {
-        val onRadioPage = destination == DesktopDestination.RADIO
+    // What a station is carrying is only worth asking for while somebody can see the answer: the
+    // row of stations in the New feed, or a stream in the player. Apple names nothing in a feed a
+    // listener may ask for, so the record is read off the stream itself, on the page's beat. A
+    // station still inside its own ttl is not re-asked, and one that says nothing keeps showing what
+    // it said last rather than going blank.
+    LaunchedEffect(destination, appleBrowseState, radioPlayback.station) {
+        val onStations = destination == DesktopDestination.EXPLORE
         val playing = radioPlayback.station
-        if (!onRadioPage && playing == null) return@LaunchedEffect
+        if (!onStations && playing == null) return@LaunchedEffect
         val stations = buildList {
-            if (onRadioPage) (appleRadioState as? UiState.Success)?.data
+            if (onStations) (appleBrowseState as? UiState.Success)?.data
                 ?.flatMap { it.items }?.mapNotNullTo(this, DesktopRadioClient::station)
             if (playing != null && none { it.id == playing.id }) add(playing)
         }
@@ -663,18 +665,16 @@ fun BitChordDesktopApp() {
             onFailure = { appleBrowseState = UiState.Error(it.message ?: "Could not load Apple Music") },
         )
     }
-    // Radio is the other Apple page that arrives a beat after the click. Fetching it once the New
-    // page is on screen waits on nothing the user is looking at, and the click finds it in the
-    // cache instead of on Apple's servers.
-    LaunchedEffect(appleBrowseState) {
-        if (appleBrowseState is UiState.Success) {
-            DesktopAppleBrowseClient.page("https://music.apple.com/gb/radio", "Radio")
-        }
-    }
     // The home feed is paged: `FEmusic_home` answers with a couple of shelves and a token, and
     // everything else arrives by following it.
     var homeContinuation by remember { mutableStateOf<String?>(null) }
     var homeLoadingMore by remember { mutableStateOf(false) }
+    // Home's two personalised rows, read off Apple's public catalogue for the artists the signed-in
+    // account has been playing. They are kept apart from the feed because they arrive after it —
+    // the picks have to wait to learn who the listener has been listening to — and because the page
+    // puts them at the head rather than in the feed's own running order.
+    var homePicksItems by remember { mutableStateOf<List<ShelfItem>>(emptyList()) }
+    var homeMoodsItems by remember { mutableStateOf<List<ShelfItem>>(emptyList()) }
     // Recently Played has its own request and its own skeleton at the head of the page, as on the
     // phone; it is only asked for with an account to have played on.
     var homeRecentsLoading by remember { mutableStateOf(false) }
@@ -683,7 +683,6 @@ fun BitChordDesktopApp() {
     val exploreListState = rememberLazyListState()
     val moodGenreListState = rememberLazyListState()
     val searchListState = rememberLazyListState()
-    val radioListState = rememberLazyListState()
     val libraryListState = rememberLazyListState()
     val replayListState = rememberLazyListState()
     val libraryGridState = rememberLazyGridState()
@@ -2268,12 +2267,10 @@ fun BitChordDesktopApp() {
         }
     }
 
-    /** The same for an album: a row names it, and the source has to be asked which page that is. */
-    fun openAlbumByName(album: String?, artist: String?) {
-        val name = album?.trim().orEmpty()
-        if (name.isEmpty()) return
+    /** An Apple row's Album cell that named no release of its own: found from its name. */
+    fun openAlbumByName(album: String, artist: String) {
         scope.launch {
-            val match = DesktopSearchClient.search("$name ${artist.orEmpty()}".trim(), SearchFilter.ALBUMS)
+            val match = DesktopSearchClient.search("$album $artist".trim(), SearchFilter.ALBUMS)
                 .getOrDefault(emptyList())
                 .filterIsInstance<SearchResult.Browse>()
                 .map { it.item }
@@ -2281,6 +2278,29 @@ fun BitChordDesktopApp() {
                 ?: return@launch
             openCollection(match.browseId, match)
         }
+    }
+
+    /**
+     * A playlist row's Album cell: the release the track came from. The row already carries that
+     * release's id, so it opens straight away; a row that only knows the name is found by it.
+     */
+    fun openSongAlbum(song: Song) {
+        val albumId = song.albumId
+        if (!albumId.isNullOrBlank()) {
+            openCollection(
+                albumId,
+                BrowseItem(
+                    browseId = albumId,
+                    title = song.albumName.orEmpty(),
+                    subtitle = song.artist,
+                    thumbnailUrl = song.thumbnailUrl,
+                    type = BrowseType.ALBUM,
+                ),
+            )
+            return
+        }
+        val albumName = song.albumName?.takeIf(String::isNotBlank) ?: return
+        openAlbumByName(albumName, song.artist)
     }
 
     LaunchedEffect(openedArtist, artistReloads) {
@@ -2347,21 +2367,67 @@ fun BitChordDesktopApp() {
             .firstOrNull { it.browseId.isNotBlank() }
     }
 
+    /**
+     * An Apple release played from the music source: the page's own track list, each row found by
+     * its title and credit and queued in the page's order.
+     *
+     * This used to look the collection up by name on the source and play whatever it found, which
+     * is a different set of songs whenever a like-named playlist exists. Apple's page is the
+     * running order; the source only supplies each row of it.
+     */
     fun playAppleCollection(item: ShelfItem, shuffle: Boolean) {
         scope.launch {
-            val match = appleCatalogMatch(item)
-            if (match == null) {
+            val url = item.browseId.orEmpty().removePrefix(DesktopAppleBrowseClient.PAGE_PREFIX)
+            val tracks = DesktopAppleBrowseClient.releaseTracks(url, item.title).getOrElse { failure ->
+                appleActionError = failure.message ?: "Could not load ${item.title}"
+                return@launch
+            }
+            if (tracks.isEmpty()) {
+                appleActionError = "${item.title} has no playable tracks"
+                return@launch
+            }
+            // A row costs one search, so they run a few at a time — kept in the page's order
+            // rather than the order their answers happen to arrive in.
+            val gate = Semaphore(APPLE_TRACK_REQUESTS)
+            val found = coroutineScope {
+                tracks.map { track -> async { gate.withPermit { DesktopAppleBrowseClient.resolveSong(track) } } }
+                    .map { it.await() }
+            }
+            val songs = found.mapNotNull { it.getOrNull() }
+            if (songs.size < tracks.size) {
+                val missing = tracks.zip(found).filter { (_, result) -> result.isFailure }.map { (track, _) -> track }
+                DesktopTrackLog.log(
+                    "apple collection '${item.title}': found ${songs.size} of ${tracks.size} tracks, " +
+                        "missing ${missing.joinToString("; ") { "${it.title} — ${it.subtitle}" }}",
+                )
+            }
+            if (songs.isEmpty()) {
                 appleActionError = "${item.title} is not available from the current music source"
                 return@launch
             }
-            DesktopSearchClient.browse(match.browseId, match).fold(
-                onSuccess = { collection ->
-                    val songs = collection.songs
-                    if (songs.isEmpty()) appleActionError = "${item.title} has no playable tracks"
-                    else playSongs(if (shuffle) songs.shuffled() else songs, 0, collectionSource(collection))
-                },
-                onFailure = { appleActionError = it.message ?: "Could not play ${item.title}" },
+            playSongs(
+                if (shuffle) songs.shuffled() else songs,
+                0,
+                DesktopQueueSource(item.title, PlaybackSourceType.BROWSE, item.browseId),
             )
+        }
+    }
+
+    /**
+     * A mood tile, played.
+     *
+     * Apple's mood stations stream only to its subscribers, so the tile plays what the station is
+     * built from — Apple's own curated list for that mood, found row by row on the music source —
+     * and AutoPlay carries it on once the list runs out.
+     */
+    fun playMood(item: ShelfItem) {
+        scope.launch {
+            val playlist = DesktopApplePersonalFeed.playlistFor(item)
+            if (playlist == null) {
+                appleActionError = "Nothing to play for ${item.title}"
+                return@launch
+            }
+            playAppleCollection(playlist, shuffle = true)
         }
     }
 
@@ -2397,6 +2463,7 @@ fun BitChordDesktopApp() {
                     radioPlayer.start(station)
                 }
             }
+            item.isAppleMoodTile() -> playMood(item)
             item.isAppleSong() -> resolveAppleSong(item) { song ->
                 playSong(song, source = shelfTitle?.let { DesktopQueueSource(it, PlaybackSourceType.HOME) })
             }
@@ -2472,6 +2539,8 @@ fun BitChordDesktopApp() {
         destination = DesktopDestination.SEARCH
         searchTyping = false
         searchSuggestions = emptyList()
+        searchDropdown = false
+        DesktopSearchTermHistory.record(query)
         // Submitting is picking the first track the typeahead offered, as on the phone — or, with
         // none, the first the results bring back.
         val typedHit = searchTypeahead.firstNotNullOfOrNull { row ->
@@ -2504,7 +2573,10 @@ fun BitChordDesktopApp() {
                 if (rows == null) {
                     searchError = result.exceptionOrNull()?.message ?: "Search failed"
                 } else if (query == term) {
-                    searchRows = rows + apple.await().map { SearchResult.Browse(it) }
+                    // Apple's editorial playlists lead the source's: they are the ones the source
+                    // cannot return at all, so they are put at the head of the Playlists section
+                    // rather than buried under the YouTube row it already has.
+                    searchRows = apple.await().map { SearchResult.Browse(it) } + rows
                     if (typedHit == null) {
                         rows.firstNotNullOfOrNull { row ->
                             when (row) {
@@ -2590,10 +2662,33 @@ fun BitChordDesktopApp() {
         destination = DesktopDestination.LIBRARY
     }
 
+    /**
+     * The Library's "On device" shelf: the playlists kept on this computer rather than on the
+     * account — the desktop's counterpart of the phone's downloaded releases, and like them
+     * reachable from nowhere else.
+     */
+    val libraryDeviceItems = remember(playlists) {
+        playlists.map { playlist ->
+            ShelfItem(
+                title = playlist.title,
+                subtitle = DesktopStrings.format(
+                    "d_playlist_songs",
+                    playlist.songs.size,
+                    fallback = "Playlist • ${playlist.songs.size} songs",
+                ),
+                thumbnailUrl = playlist.songs.firstOrNull()?.thumbnailUrl,
+                videoId = null,
+                browseId = LOCAL_PLAYLIST_PREFIX + playlist.id,
+            )
+        }
+    }
+
     /** The rows behind the open shortcut, re-read as the feeds it borrows arrive. */
     fun libraryShortcutItems(title: String): List<ShelfItem> = when (title) {
         "Artists", "Albums" ->
             (libraryState as? UiState.Success)?.data?.shelves?.firstOrNull { it.title == title }?.items.orEmpty()
+        "Playlists" -> (libraryState as? UiState.Success)?.data?.shelves
+            ?.firstOrNull { it.title == PLAYLISTS_SHELF }?.items.orEmpty() + libraryDeviceItems
         "Songs" -> (libraryState as? UiState.Success)?.data?.let { page ->
             (page.librarySongs + page.likedSongs).distinctBy(Song::videoId).map { song ->
                 ShelfItem(song.title, song.artist, song.thumbnailUrl, song.videoId, null)
@@ -2611,7 +2706,7 @@ fun BitChordDesktopApp() {
 
     // The shortcut's page follows its source: an account whose library is still
     // loading fills the grid in rather than leaving an empty page behind.
-    LaunchedEffect(libraryShortcut, libraryState, homeState) {
+    LaunchedEffect(libraryShortcut, libraryState, homeState, playlists) {
         val title = libraryShortcut ?: return@LaunchedEffect
         libraryShowAll = HomeShelf(title, libraryShortcutItems(title))
     }
@@ -2655,27 +2750,6 @@ fun BitChordDesktopApp() {
         )
     }
 
-    /**
-     * The Library's "On device" shelf: the playlists kept on this computer rather than on the
-     * account — the desktop's counterpart of the phone's downloaded releases, and like them
-     * reachable from nowhere else.
-     */
-    val libraryDeviceItems = remember(playlists) {
-        playlists.map { playlist ->
-            ShelfItem(
-                title = playlist.title,
-                subtitle = DesktopStrings.format(
-                    "d_playlist_songs",
-                    playlist.songs.size,
-                    fallback = "Playlist • ${playlist.songs.size} songs",
-                ),
-                thumbnailUrl = playlist.songs.firstOrNull()?.thumbnailUrl,
-                videoId = null,
-                browseId = LOCAL_PLAYLIST_PREFIX + playlist.id,
-            )
-        }
-    }
-
     /** A Library card: a folder is a page of this app's, a local playlist is opened from here. */
     fun openLibraryItem(item: ShelfItem) {
         val browseId = item.browseId.orEmpty()
@@ -2685,6 +2759,23 @@ fun BitChordDesktopApp() {
             browseId.startsWith(LOCAL_PLAYLIST_PREFIX) ->
                 playlists.firstOrNull { it.id == browseId.removePrefix(LOCAL_PLAYLIST_PREFIX) }?.let(::openPlaylist)
             else -> openShelfItem(item)
+        }
+    }
+
+    /**
+     * Home's picks row, for whoever the listener has been playing.
+     *
+     * Apple computes its own version of this row against a subscriber's catalogue; there is nothing
+     * public to ask, so the row is read off the artists this account has played lately and answered
+     * with those artists' Apple pages — Essentials lists and newest records — which is the same
+     * thing the site shows under a different name.
+     */
+    fun loadHomePicks(recent: List<ShelfItem>) {
+        val generation = homeGeneration
+        val artists = recent.map { it.subtitle }.filter { it.isNotBlank() }
+        scope.launch {
+            val tiles = runCatching { DesktopApplePersonalFeed.picks(artists) }.getOrDefault(emptyList())
+            if (generation == homeGeneration && tiles.isNotEmpty()) homePicksItems = tiles
         }
     }
 
@@ -2724,7 +2815,13 @@ fun BitChordDesktopApp() {
         homeSeenTitles.clear()
         homeLoadingMore = false
         homeRecentsLoading = signedIn
+        if (!signedIn) homePicksItems = emptyList()
         scope.launch {
+            launch {
+                // The mood row needs nothing but a storefront, so it is asked for signed out too.
+                val tiles = runCatching { DesktopApplePersonalFeed.moods() }.getOrDefault(emptyList())
+                if (generation == homeGeneration) homeMoodsItems = tiles
+            }
             launch {
                 DesktopSearchClient.home().fold(
                     onSuccess = { feed ->
@@ -2745,7 +2842,10 @@ fun BitChordDesktopApp() {
                         .onSuccess { shelf ->
                             if (generation != homeGeneration) return@onSuccess
                             homeRecentsLoading = false
-                            shelf?.let { publishHomeShelves(listOf(it), prepend = true) }
+                            shelf?.let {
+                                publishHomeShelves(listOf(it), prepend = true)
+                                loadHomePicks(it.items)
+                            }
                         }
                         .onFailure { if (generation == homeGeneration) homeRecentsLoading = false }
                 }
@@ -2782,8 +2882,7 @@ fun BitChordDesktopApp() {
     }
 
     fun openPlayerFromUser() {
-        if (radioPlayer.state.value.station != null) selectDestination(DesktopDestination.RADIO)
-        else overlays.nowPlaying = true
+        overlays.nowPlaying = true
     }
 
     // The tray icon speaks StatusNotifierItem rather than going through AWT, which only implements
@@ -2924,7 +3023,7 @@ fun BitChordDesktopApp() {
     }
 
     LaunchedEffect(destination, exploreReloads) {
-        if (destination in listOf(DesktopDestination.EXPLORE, DesktopDestination.SEARCH, DesktopDestination.RADIO) &&
+        if (destination in listOf(DesktopDestination.EXPLORE, DesktopDestination.SEARCH) &&
             (exploreState is UiState.Loading || exploreReloads > 0)
         ) {
             loadExplore()
@@ -3463,10 +3562,14 @@ fun BitChordDesktopApp() {
         partySyncHolder[0]?.onLocalIntent()
     }
 
+    // The accent the theme below is built from: a colour from Settings, or the playing cover's.
+    DesktopAccentSource(selectedSong?.thumbnailUrl)
+
     MaterialTheme(
         colorScheme = desktopColorScheme(),
         typography = desktopTypography(),
     ) {
+
         val ambientBackdrop by DesktopAppearanceSettings.ambientBackdrop.collectAsState()
         val windowActions = LocalDesktopWindowActions.current
         val lyricsFont = desktopLyricsFont()
@@ -3497,7 +3600,6 @@ fun BitChordDesktopApp() {
                     selectedMoodGenre != null -> moodGenreListState
                     destination == DesktopDestination.LISTEN_NOW -> homeListState
                     destination == DesktopDestination.EXPLORE -> exploreListState
-                    destination == DesktopDestination.RADIO -> radioListState
                     destination == DesktopDestination.LIBRARY && libraryShowAll == null -> libraryListState
                     else -> null
                 },
@@ -3557,6 +3659,32 @@ fun BitChordDesktopApp() {
                             overlays.quickSearch = false
                             overlays.shortcuts = false
                             openSettings()
+                            true
+                        }
+                        // The queue and the lyric sheet, without reaching for a menu. Ctrl alone,
+                        // so a Mac keeps ⌘Q for quitting. Over the full player they switch its own
+                        // pane and pressing the same key again puts that pane away; anywhere else
+                        // they work on the column beside the page.
+                        event.isCtrlPressed && !event.isMetaPressed && event.key == Key.Q -> {
+                            overlays.quickSearch = false
+                            overlays.shortcuts = false
+                            if (overlays.nowPlaying) {
+                                webPlayerPanelState.value =
+                                    if (webPlayerPanelState.value == WebPanel.QUEUE) null else WebPanel.QUEUE
+                            } else {
+                                overlays.toggleSidePanel(DesktopSidePanel.QUEUE)
+                            }
+                            true
+                        }
+                        event.isCtrlPressed && !event.isMetaPressed && event.key == Key.L -> {
+                            overlays.quickSearch = false
+                            overlays.shortcuts = false
+                            if (overlays.nowPlaying) {
+                                webPlayerPanelState.value =
+                                    if (webPlayerPanelState.value == WebPanel.LYRICS) null else WebPanel.LYRICS
+                            } else {
+                                overlays.toggleSidePanel(DesktopSidePanel.LYRICS)
+                            }
                             true
                         }
                         DesktopPlatform.isMac && event.isMetaPressed && event.key == Key.W -> {
@@ -3674,6 +3802,7 @@ fun BitChordDesktopApp() {
                         libraryShelf = libraryShowAll?.title,
                         onDestinationSelected = ::selectDestination,
                         onOpenLibraryShelf = ::openLibraryShortcut,
+                        onOpenAllPlaylists = { openLibraryShortcut(PLAYLISTS_SHELF) },
                         onOpenAccountPlaylist = { openShelfItem(it, PLAYLISTS_SHELF) },
                         onOpenLocalPlaylist = ::openPlaylist,
                         onOpenSettings = ::openSettings,
@@ -3756,7 +3885,10 @@ fun BitChordDesktopApp() {
                             durationMs = playback.durationMs,
                             transitionWindow = playback.transitionWindow?.let { it.start..it.end },
                             previousEnabled = liveQueue.hasPrevious || playback.positionMs > BACK_RESTARTS_AFTER_MS,
-                            nextEnabled = liveQueue.hasNext,
+                            // Repeat ALL wraps at the end, so Next still has somewhere to go there:
+                            // greyed out, it read as a dead button on the last song of the queue.
+                            nextEnabled = liveQueue.hasNext ||
+                                (repeatMode == DesktopRepeatMode.ALL && liveQueue.songs.isNotEmpty()),
                             shuffleEnabled = shuffle,
                             repeatMode = repeatMode,
                             liked = current.videoId in likedIds,
@@ -3777,12 +3909,6 @@ fun BitChordDesktopApp() {
                                 persistence.saveString("repeat_mode", repeatMode.name)
                             },
                             onSeek = ::seekPlayer,
-                            volume = volume,
-                            onVolumeChange = {
-                                volume = it
-                                persistence.saveString("volume", it.toString())
-                            },
-                            onOpenAudioOutput = { overlays.audioOutput = true },
                             onOpenTrackInfo = { overlays.pipeline = true },
                             onOpenMenu = { playerMenuOpen = true },
                             menu = {
@@ -4142,6 +4268,25 @@ fun BitChordDesktopApp() {
                 // floating player/navigation bar at the bottom in compact windows.
                 val sharedPagePadding = PaddingValues(bottom = contentPadding.calculateBottomPadding())
                 val appleShelves = (appleBrowseState as? UiState.Success)?.data.orEmpty()
+                // The two rows Home builds for this listener. The page puts them at the head of its
+                // own running order, so they only have to be on the list — not filed in the right
+                // place within it.
+                val personalShelves = buildList {
+                    if (homePicksItems.isNotEmpty()) add(
+                        HomeShelf(
+                            DesktopStrings["d_top_picks_for_you", "Top Picks for You"],
+                            homePicksItems,
+                            layout = DesktopApplePersonalFeed.PICKS_LAYOUT,
+                        ),
+                    )
+                    if (homeMoodsItems.isNotEmpty()) add(
+                        HomeShelf(
+                            DesktopStrings["d_find_your_mood", "Find Your Mood"],
+                            homeMoodsItems,
+                            layout = DesktopApplePersonalFeed.MOODS_LAYOUT,
+                        ),
+                    )
+                }
                 // Apple's charts and its editorial playlists belong on the home page; the
                 // music source's own mix and playlist rows are dropped in their place,
                 // since they are the same kind of row with art and titles of another
@@ -4149,7 +4294,8 @@ fun BitChordDesktopApp() {
                 val homeWithCharts = (homeState as? UiState.Success)?.let {
                     UiState.Success(
                         it.data.filterNot { shelf -> shelf.isAppleChartShelf() || shelf.isSourcePlaylistShelf() } +
-                            appleShelves.filter { shelf -> shelf.isAppleChartShelf() || shelf.isApplePlaylistShelf() },
+                            appleShelves.filter { shelf -> shelf.isAppleChartShelf() || shelf.isApplePlaylistShelf() } +
+                            personalShelves,
                     )
                 } ?: homeState
                 val appleCategories = DesktopAppleBrowseClient.categories(appleShelves)
@@ -4185,6 +4331,11 @@ fun BitChordDesktopApp() {
                             onToggleLike = { toggleLike(song) },
                             onRevertToOriginal = null,
                             onUpgradeQuality = null,
+                            // The playlist page's own rows are the one place a track can be taken
+                            // out of a list: the page's removal needs the entry's own id, which
+                            // only a row read from the playlist carries.
+                            onRemoveFromPlaylist = { removeFromOpenPlaylist(song) }
+                                .takeIf { openedCollection?.owned == true && song.setVideoId != null },
                             onDismiss = onDismiss,
                         )
                     },
@@ -4557,7 +4708,7 @@ fun BitChordDesktopApp() {
                             downloadInProgress = downloadInProgress,
                             contentPadding = contentPadding,
                             onArtistClick = ::openArtistByName,
-                            onAlbumClick = ::openAlbumByName,
+                            onAlbumClick = ::openSongAlbum,
                         )
                         selectedMoodGenre != null -> {
                             val genre = selectedMoodGenre!!
@@ -4595,35 +4746,8 @@ fun BitChordDesktopApp() {
                                     onItemMenu = ::openShelfMenu,
                                     onRetry = { moodGenreShelves = UiState.Loading; moodGenreReloads++ },
                                     onArtistClick = ::openArtistByName,
-                                    // The album cell opens the release it names: the page's own
-                                    // link when the table carried one, and Apple's search for
-                                    // the album when it did not.
-                                    onAlbumClick = { track ->
-                                        val detail = DesktopAppleBrowseClient.trackDetail(track)
-                                        val album = detail?.album
-                                        val url = detail?.albumUrl
-                                        if (!album.isNullOrBlank()) {
-                                            val open = { page: String ->
-                                                openShelfItem(
-                                                    ShelfItem(
-                                                        title = album,
-                                                        subtitle = track.subtitle,
-                                                        thumbnailUrl = track.thumbnailUrl,
-                                                        videoId = null,
-                                                        browseId = DesktopAppleBrowseClient.PAGE_PREFIX + page,
-                                                    ),
-                                                )
-                                            }
-                                            if (url != null) {
-                                                open(url)
-                                            } else {
-                                                scope.launch {
-                                                    DesktopApplePageSearch.albumPage(album, track.subtitle)
-                                                        ?.let(open)
-                                                }
-                                            }
-                                        }
-                                    },
+                                    onAlbumByName = ::openAlbumByName,
+                                    showsAlbum = !genre.browseId.contains("/album/"),
                                 )
                             } else {
                                 DesktopAppleFeedPage(
@@ -4634,6 +4758,7 @@ fun BitChordDesktopApp() {
                                     onItemMenu = ::openShelfMenu,
                                     onRetry = { moodGenreShelves = UiState.Loading; moodGenreReloads++ },
                                     contentPadding = sharedPagePadding,
+                                    gridded = true,
                                 )
                             }
                         }
@@ -4657,28 +4782,42 @@ fun BitChordDesktopApp() {
                             onItemClick = ::openShelfItem,
                             onRetry = { appleBrowseReloads++ },
                             onItemMenu = ::openShelfMenu,
-                        )
-                        destination == DesktopDestination.RADIO -> DesktopAppleRadioPage(
-                            shelves = appleRadioState,
-                            listState = radioListState,
-                            contentPadding = sharedPagePadding,
-                            onItemClick = ::openShelfItem,
-                            onItemMenu = ::openShelfMenu,
-                            onRetry = { appleRadioReloads++ },
                             playingRadioKey = radioPlayback.station?.id,
                         )
-                        destination == DesktopDestination.SEARCH -> Column(Modifier.fillMaxSize().background(DesktopPageGround())) {
+                        destination == DesktopDestination.SEARCH -> Box(Modifier.fillMaxSize().background(DesktopPageGround())) {
                             val fieldFocus = remember { FocusRequester() }
+                            val fieldFocusOwner = LocalFocusManager.current
                             LaunchedEffect(searchFocusRequested) {
                                 if (searchFocusRequested) {
                                     fieldFocus.requestFocus()
                                     searchFocusRequested = false
                                 }
                             }
-                            Box(Modifier.fillMaxWidth().padding(top = 32.dp, bottom = 28.dp), contentAlignment = Alignment.Center) {
-                                DesktopSearchField(query, ::editQuery, ::search, Modifier.widthIn(max = 347.dp), focusRequester = fieldFocus)
+                            // The dropdown closes by taking the caret away, and taking the caret away
+                            // has to close the dropdown; the two are the same event seen from either
+                            // side, so both directions set the one flag.
+                            fun closeSearchDropdown() {
+                                searchDropdown = false
+                                fieldFocusOwner.clearFocus()
                             }
-                            if (query.isBlank()) AppleScrollbarBox(searchListState, Modifier.fillMaxSize()) {
+                            Column(Modifier.fillMaxSize()) {
+                                DesktopAppleSearchBar(
+                                    query = query,
+                                    onQueryChange = ::editQuery,
+                                    onSubmit = ::search,
+                                    focusRequester = fieldFocus,
+                                    // Only the arrival of the caret opens the list. Losing it does not
+                                    // close the list: pressing a row takes the caret away on the way
+                                    // down, and a list that folded at that moment would be gone before
+                                    // the release the row is waiting for, swallowing every pick. An
+                                    // outside press closes it through the dropdown's own dismiss layer.
+                                    onFocusedChange = { focused -> if (focused) searchDropdown = true },
+                                )
+                            // Where a search has not been asked for yet, the page stays on its
+                            // categories grid while the field is being typed into: the dropdown
+                            // over the field carries the completions, and the page beneath it has
+                            // nothing better to say until something is actually searched.
+                            if (!searchCommitted) AppleScrollbarBox(searchListState, Modifier.fillMaxSize()) {
                                 DesktopAppleCategories(
                                     state = browseCategories,
                                     listState = searchListState,
@@ -4733,15 +4872,10 @@ fun BitChordDesktopApp() {
                                 openBrowseItem(item)
                             },
                             history = searchHistory,
-                            // The typed text leads the list, put there by the keystroke rather than
-                            // taken from the response — the page drops it, as the phone's does.
-                            suggestions = if (searchTyping && query.isNotBlank()) {
-                                listOf(query) +
-                                    searchSuggestions.filterNot { it.equals(query, ignoreCase = true) }
-                            } else {
-                                emptyList()
-                            },
-                            typeaheadResults = if (searchTyping && query.isNotBlank()) searchTypeahead else emptyList(),
+                            // The completions and their media rows belong to the dropdown over the
+                            // field now, so the page beneath stays on results and recent picks.
+                            suggestions = emptyList(),
+                            typeaheadResults = emptyList(),
                             onSubmit = ::search,
                             onSuggestionClick = ::runSearch,
                             onHistoryClick = { entity ->
@@ -4770,11 +4904,51 @@ fun BitChordDesktopApp() {
                             },
                             onHistoryRemove = DesktopSearchHistory::remove,
                             onHistoryClear = DesktopSearchHistory::clear,
-                            onTypeaheadLongPress = ::openMenu,
                             contentPadding = sharedPagePadding,
                             topPadding = 0.dp,
                             showField = false,
                         )
+                            }
+                            if (searchDropdown) {
+                                val typing = searchTyping && query.isNotBlank()
+                                DesktopAppleSearchTypeahead(
+                                    query = query,
+                                    // The typed text leads the completions, put there by the
+                                    // keystroke rather than taken from the response.
+                                    terms = if (!typing) emptyList() else
+                                        listOf(query) + searchSuggestions.filterNot { it.equals(query, ignoreCase = true) },
+                                    recentTerms = recentSearchTerms,
+                                    results = if (typing) searchTypeahead else emptyList(),
+                                    onTerm = { term ->
+                                        closeSearchDropdown()
+                                        runSearch(term)
+                                    },
+                                    onClearTerms = { DesktopSearchTermHistory.clear() },
+                                    onPickEntity = { row ->
+                                        closeSearchDropdown()
+                                        when (row) {
+                                            is SearchResult.TopTrack -> {
+                                                recordSongSearch(row.song)
+                                                playSong(row.song, source = DesktopQueueSource(DesktopStrings["search", "Search"], PlaybackSourceType.SEARCH))
+                                            }
+                                            is SearchResult.Track -> {
+                                                recordSongSearch(row.song)
+                                                playSong(row.song, source = DesktopQueueSource(DesktopStrings["search", "Search"], PlaybackSourceType.SEARCH))
+                                            }
+                                            is SearchResult.Browse -> {
+                                                recordBrowseSearch(row.item)
+                                                val id = row.item.browseId
+                                                if (id.startsWith(LOCAL_PLAYLIST_PREFIX)) {
+                                                    playlists.firstOrNull { it.id == id.removePrefix(LOCAL_PLAYLIST_PREFIX) }
+                                                        ?.let(::openPlaylist)
+                                                } else openBrowseItem(row.item)
+                                            }
+                                        }
+                                    },
+                                    onDismiss = { closeSearchDropdown() },
+                                    modifier = Modifier.align(Alignment.TopCenter),
+                                )
+                            }
                         }
                         destination == DesktopDestination.LIBRARY && libraryShowAll != null -> Column(Modifier.fillMaxWidth().fillMaxSize()) {
                             // Every page's header, in every state of this one: the sidebar
@@ -4821,7 +4995,7 @@ fun BitChordDesktopApp() {
                             history = remoteHistory.ifEmpty { history },
                             onSongClick = { playSong(it, source = DesktopQueueSource(DesktopStrings["history", "History"], PlaybackSourceType.HISTORY)) },
                             contentPadding = contentPadding,
-                            menu = { song -> songMenu(song) },
+                            onMenu = ::openShelfMenu,
                         )
                         destination == DesktopDestination.DOWNLOADS -> Box(Modifier.fillMaxSize()) {
                             DesktopDownloadsPage(
@@ -5074,7 +5248,6 @@ private fun DesktopFloatingNavigation(
     val tabs = listOf(
         DesktopDestination.LISTEN_NOW to BitChordIcons.Home,
         DesktopDestination.EXPLORE to BitChordIcons.Explore,
-        DesktopDestination.RADIO to BitChordIcons.Radio,
         DesktopDestination.LIBRARY to BitChordIcons.Library,
         DesktopDestination.SEARCH to BitChordIcons.Search,
     )
@@ -5336,7 +5509,7 @@ private const val MESH_SOURCE_PX = 120
 /** The Library's "On device" cards — the phone's ids for the two folders, so their cards draw alike. */
 private const val LOCAL_DOWNLOADS_ID = "local:downloads"
 private const val LOCAL_MUSIC_ID = "local:all"
-private const val LOCAL_PLAYLIST_PREFIX = "desktop-playlist:"
+internal const val LOCAL_PLAYLIST_PREFIX = "desktop-playlist:"
 
 
 
@@ -5505,27 +5678,35 @@ private fun DesktopHistoryPage(
     history: List<Song>,
     onSongClick: (Song) -> Unit,
     contentPadding: PaddingValues,
-    menu: (@Composable (Song) -> Unit)? = null,
+    onMenu: ((ShelfItem) -> Unit)? = null,
 ) {
-    val listState = rememberLazyListState()
-    DesktopPageScaffold(contentPadding, listState) {
+    val gridState = rememberLazyGridState()
+    // The plays wear the site's square covers — art, name, artist — laid down the page in
+    // columns, rather than the row list this page used to be.
+    val tiles = remember(history) {
+        history.map { song ->
+            ShelfItem(
+                title = song.title,
+                subtitle = song.artist,
+                thumbnailUrl = song.thumbnailUrl,
+                videoId = song.videoId,
+                browseId = null,
+            )
+        }
+    }
+    DesktopPageScaffold(contentPadding) {
         Column(Modifier.fillMaxSize()) {
-            // Every other page opens with its name over a rule; this one was a bare list, and the
-            // row buttons made it read as a toolbar rather than a history.
             AppleBrowsePageTitle(DesktopDestination.HISTORY.label)
-            LazyColumn(
-                state = listState,
-                contentPadding = pagePadding(start = DesktopPageGutter, end = DesktopPageGutter, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                if (history.isEmpty()) item { DesktopEmptyPage(BitChordIcons.Clock, "Nothing played yet", "Songs you play will show up here.") }
-                else items(history, key = Song::videoId) {
-                    DesktopSongRow(
-                        song = it,
-                        liked = false,
-                        onClick = onSongClick,
-                        onToggleLike = null,
-                        menu = menu,
+            if (tiles.isEmpty()) {
+                DesktopEmptyPage(BitChordIcons.Clock, "Nothing played yet", "Songs you play will show up here.")
+            } else {
+                AppleScrollbarBox(gridState, Modifier.weight(1f).fillMaxWidth()) {
+                    AppleFeedLazyCoverGrid(
+                        items = tiles,
+                        gridState = gridState,
+                        contentPadding = pagePadding(bottom = 32.dp),
+                        onClick = { item -> onSongClick(item.toSong()) },
+                        onMenu = onMenu,
                     )
                 }
             }
@@ -6274,6 +6455,14 @@ private fun DesktopSettingsScreen(
             }
             if (section == DesktopSettingsGroup.APPEARANCE) item {
                 SettingsGroup(DesktopStrings["appearance", "Appearance"]) {
+                    val accentTitle = DesktopStrings["d_accent_colour", "Accent colour"]
+                    val accentSubtitle = DesktopStrings[
+                        "d_accent_colour_subtitle",
+                        "Buttons, switches and the selected row",
+                    ]
+                    if (settingsRowVisible(accentTitle, accentSubtitle)) {
+                        DesktopAccentSetting(accentTitle, accentSubtitle)
+                    }
                     val reduceDynamicBlur by DesktopAppearanceSettings.reduceDynamicBlur.collectAsState()
                     SettingsToggle(
                         BitChordIcons.EyeOff,
@@ -7080,9 +7269,10 @@ private fun DesktopCollectionPage(
     downloadedIds: Set<String>,
     downloadInProgress: Set<String>,
     contentPadding: PaddingValues,
-    /** A row's artist or album is a link, as it is on Apple's own tables. */
+    /** A row's artist is a link, as it is on Apple's own tables. */
     onArtistClick: ((String) -> Unit)? = null,
-    onAlbumClick: ((String, String) -> Unit)? = null,
+    /** A row's album is a link too, opening the release that track is from. */
+    onAlbumClick: ((Song) -> Unit)? = null,
 ) {
     val songs = collection.songs
     // The phone's "search this list": a filter over the rows already loaded.
@@ -7097,6 +7287,10 @@ private fun DesktopCollectionPage(
         }
     }
     var moreOpen by remember(collection.browseId) { mutableStateOf(false) }
+    // A release page is the album its rows sit on; a playlist's rows come from all over, so the
+    // album each one is from gets a column of its own — but only when the rows can name one, since
+    // a column of dashes says less than no column at all.
+    val showsAlbum = collection.type != BrowseType.ALBUM && songs.any { !it.albumName.isNullOrBlank() }
     val subtitleParts = collection.subtitle
         .split(" • ", " · ", " | ")
         .map(String::trim)
@@ -7107,172 +7301,176 @@ private fun DesktopCollectionPage(
             !it.matches(Regex("\\d{1,2}:\\d{2}(?::\\d{2})?")) &&
             !it.matches(Regex("[0-9,.]+\\s*(?:songs?|tracks?)", RegexOption.IGNORE_CASE))
     }.orEmpty()
-    val typeLabel = when (collection.type) {
-        BrowseType.ALBUM -> "Album"
-        BrowseType.PLAYLIST -> "Playlist"
-        BrowseType.ARTIST -> "Artist"
-        BrowseType.OTHER -> "Collection"
-    }
-    val metadata = buildList {
-        add(typeLabel.uppercase())
-        subtitleParts.firstOrNull { it.matches(Regex("\\d{4}")) }?.let(::add)
-        if (songs.isNotEmpty()) add("${songs.size} songs")
-        val seconds = songs.sumOf { it.durationText.durationMillis() / 1_000L }
-        if (seconds > 0) add(formatCollectionDuration(seconds))
-    }.joinToString(" • ").uppercase()
+    // The site paints a release's whole table — its headings, its artist cells, its lengths and
+    // the line it signs off with — from the cover rather than from the page's generic gray, so the
+    // release reads as one colour top to bottom.
+    val tint = rememberDesktopArtworkTint(collection.thumbnailUrl)
+    val totalMs = songs.sumOf { it.durationText.durationMillis() }
     val listState = rememberLazyListState()
     DesktopPageScaffold(contentPadding, listState) {
+        // The gutter belongs to each section rather than to the list, because the table's head, its
+        // rows and its sign-off are the parts Apple measures from the page edge.
         LazyColumn(
             state = listState,
-            contentPadding = pagePadding(
-                start = DesktopPageGutter,
-                top = DesktopPageGutter,
-                end = DesktopPageGutter,
-                bottom = 32.dp,
-            ),
+            contentPadding = PaddingValues(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
             item {
-                Row(
-                    Modifier.fillMaxWidth().padding(bottom = 36.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                // Apple tints the top of a release page with its own cover: the average of that
+                // cover, laid over the page ground and gone by the first row.
+                Box(
+                    Modifier.fillMaxWidth().background(
+                        Brush.verticalGradient(listOf(tint.copy(alpha = 0.5f), tint.copy(alpha = 0f))),
+                    ),
                 ) {
-                    // The services hang motion artwork off the release, so a page for one asks for
-                    // it directly rather than picking a track and hoping it sits on the right
-                    // edition.
-                    val albumCanvas by produceState<DesktopCanvasArtwork?>(null, collection.title, animatedCanvas) {
-                        value = if (!animatedCanvas) {
-                            null
-                        } else {
-                            withContext(Dispatchers.IO) {
-                                DesktopCanvasClient.lookupAlbum(
-                                    collection.title,
-                                    songs.firstOrNull()?.artist.orEmpty(),
-                                )
-                            }
-                        }
-                    }
-                    Box(Modifier.size(286.dp).clip(RoundedCornerShape(8.dp))) {
-                        DesktopArtwork(
-                            collection.thumbnailUrl ?: songs.firstOrNull()?.thumbnailUrl,
-                            Modifier.fillMaxSize(),
-                        )
-                        albumCanvas?.let {
-                            DesktopCanvasView(it.url, Modifier.fillMaxSize(), fallbackUrl = it.fallbackUrl)
-                        }
-                    }
-                    Spacer(Modifier.width(30.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            typeLabel.uppercase(),
-                            color = DesktopSecondary,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            letterSpacing = 1.2.sp,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            collection.title,
-                            style = MaterialTheme.typography.displaySmall,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (credit.isNotBlank()) {
-                            Spacer(Modifier.height(6.dp))
-                            if (onArtistClick != null) {
-                                CollectionNameLink(
-                                    credit,
-                                    onClick = { onArtistClick(credit) },
-                                    color = DesktopAccent,
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
+                    // The sleeve and its copy share a baseline: the buttons under the title sit
+                    // level with the bottom of the cover rather than being spaced from the text.
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter)
+                            .padding(top = 28.dp, bottom = 30.dp),
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
+                        // The services hang motion artwork off the release, so a page for one asks
+                        // for it directly rather than picking a track and hoping it sits on the
+                        // right edition.
+                        val albumCanvas by produceState<DesktopCanvasArtwork?>(null, collection.title, animatedCanvas) {
+                            value = if (!animatedCanvas) {
+                                null
                             } else {
-                                Text(
-                                    credit,
-                                    color = DesktopAccent,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                withContext(Dispatchers.IO) {
+                                    DesktopCanvasClient.lookupAlbum(
+                                        collection.title,
+                                        songs.firstOrNull()?.artist.orEmpty(),
+                                    )
+                                }
                             }
                         }
-                        if (metadata.isNotBlank()) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(metadata, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Spacer(Modifier.height(24.dp))
-                        // The phone's release controls, in its order: Shuffle, Play, search this
-                        // list, and everything else behind the overflow — downloading a release is
-                        // done once, finding a track on it is done while reading the page.
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            DesktopCircleButton(BitChordIcons.Shuffle, DesktopStrings["shuffle", "Shuffle"], onClick = { onShuffle(songs) })
-                            DesktopPlayPill(
-                                label = DesktopStrings["play", "Play"],
-                                onClick = { if (songs.isNotEmpty()) onPlaySongs(songs, 0) },
-                                iconOnly = true,
+                        Box(Modifier.size(238.dp)) {
+                            DesktopArtwork(
+                                collection.thumbnailUrl ?: songs.firstOrNull()?.thumbnailUrl,
+                                Modifier.fillMaxSize(),
+                                px = 600,
                             )
-                            DesktopCircleButton(
-                                if (searching) BitChordIcons.Close else BitChordIcons.Search,
-                                if (searching) DesktopStrings["close_search", "Close search"] else DesktopStrings["search_this_list", "Search this list"],
-                                onClick = {
+                            albumCanvas?.let {
+                                DesktopCanvasView(it.url, Modifier.fillMaxSize(), fallbackUrl = it.fallbackUrl)
+                            }
+                        }
+                        Spacer(Modifier.width(50.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                collection.title,
+                                color = DesktopAppleText,
+                                fontSize = 26.sp,
+                                lineHeight = 30.sp,
+                                fontWeight = FontWeight.W700,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (credit.isNotBlank()) {
+                                val creditStyle = TextStyle(
+                                    fontSize = 12.sp,
+                                    lineHeight = 15.sp,
+                                    fontWeight = FontWeight.W600,
+                                )
+                                if (onArtistClick != null) {
+                                    CollectionNameLink(
+                                        credit,
+                                        onClick = { onArtistClick(credit) },
+                                        modifier = Modifier.padding(top = 12.dp),
+                                        color = AppleReleaseMeta,
+                                        style = creditStyle,
+                                    )
+                                } else {
+                                    Text(
+                                        credit,
+                                        color = AppleReleaseMeta,
+                                        style = creditStyle,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 12.dp),
+                                    )
+                                }
+                            }
+                            // Play is the release's own white stadium and everything else takes the
+                            // site's round shape after it: searching this list and the edits a
+                            // playlist's owner is offered are ours, not Apple's, but they sit here
+                            // as its shuffle would.
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.padding(top = 32.dp),
+                            ) {
+                                AppleReleasePlay(
+                                    DesktopStrings["play", "Play"],
+                                    BitChordIcons.TransportPlay,
+                                ) { if (songs.isNotEmpty()) onPlaySongs(songs, 0) }
+                                AppleReleaseRound(
+                                    DesktopStrings["shuffle", "Shuffle"],
+                                    BitChordIcons.TransportShuffle,
+                                    onClick = { onShuffle(songs) },
+                                )
+                                AppleReleaseRound(
+                                    if (searching) DesktopStrings["close_search", "Close search"]
+                                    else DesktopStrings["search_this_list", "Search this list"],
+                                    if (searching) BitChordIcons.Close else BitChordIcons.Search,
+                                ) {
                                     searching = !searching
                                     if (!searching) listQuery = ""
-                                },
-                            )
-                            Box {
-                                DesktopCircleButton(BitChordIcons.Ellipsis, DesktopStrings["more", "More"], onClick = { moreOpen = true })
-                                DesktopDropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
-                                    DropdownMenuItem(
-                                        text = { Text(DesktopStrings["download_all", "Download all"]) },
-                                        leadingIcon = { Icon(BitChordIcons.Download, null) },
-                                        onClick = {
-                                            moreOpen = false
-                                            onDownloadAll(songs)
-                                        },
+                                }
+                                Box {
+                                    AppleReleaseRound(
+                                        DesktopStrings["more", "More"],
+                                        BitChordIcons.Ellipsis,
+                                        onClick = { moreOpen = true },
                                     )
-                                    onShare?.let { share ->
+                                    DesktopDropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
                                         DropdownMenuItem(
-                                            text = { Text(DesktopStrings["share", "Share"]) },
-                                            leadingIcon = { Icon(BitChordIcons.ArrowUpRight, null) },
+                                            text = { Text(DesktopStrings["download_all", "Download all"]) },
+                                            leadingIcon = { Icon(BitChordIcons.Download, null) },
                                             onClick = {
                                                 moreOpen = false
-                                                share()
+                                                onDownloadAll(songs)
                                             },
                                         )
-                                    }
-                                    onRename?.let { rename ->
-                                        DropdownMenuItem(
-                                            text = { Text(DesktopStrings["rename", "Rename"]) },
-                                            leadingIcon = { Icon(BitChordIcons.Pencil, null) },
-                                            onClick = {
-                                                moreOpen = false
-                                                rename()
-                                            },
-                                        )
-                                    }
-                                    onReorder?.let { reorder ->
-                                        DropdownMenuItem(
-                                            text = { Text(DesktopStrings["reorder_playlist", "Edit order"]) },
-                                            leadingIcon = { Icon(BitChordIcons.Grip, null) },
-                                            onClick = {
-                                                moreOpen = false
-                                                reorder()
-                                            },
-                                        )
-                                    }
-                                    onDelete?.let { delete ->
-                                        DropdownMenuItem(
-                                            text = { Text(DesktopStrings["delete", "Delete"]) },
-                                            leadingIcon = { Icon(BitChordIcons.Trash, null) },
-                                            onClick = {
-                                                moreOpen = false
-                                                delete()
-                                            },
-                                        )
+                                        onShare?.let { share ->
+                                            DropdownMenuItem(
+                                                text = { Text(DesktopStrings["share", "Share"]) },
+                                                leadingIcon = { Icon(BitChordIcons.ArrowUpRight, null) },
+                                                onClick = {
+                                                    moreOpen = false
+                                                    share()
+                                                },
+                                            )
+                                        }
+                                        onRename?.let { rename ->
+                                            DropdownMenuItem(
+                                                text = { Text(DesktopStrings["rename", "Rename"]) },
+                                                leadingIcon = { Icon(BitChordIcons.Pencil, null) },
+                                                onClick = {
+                                                    moreOpen = false
+                                                    rename()
+                                                },
+                                            )
+                                        }
+                                        onReorder?.let { reorder ->
+                                            DropdownMenuItem(
+                                                text = { Text(DesktopStrings["reorder_playlist", "Edit order"]) },
+                                                leadingIcon = { Icon(BitChordIcons.Grip, null) },
+                                                onClick = {
+                                                    moreOpen = false
+                                                    reorder()
+                                                },
+                                            )
+                                        }
+                                        onDelete?.let { delete ->
+                                            DropdownMenuItem(
+                                                text = { Text(DesktopStrings["delete", "Delete"]) },
+                                                leadingIcon = { Icon(BitChordIcons.Trash, null) },
+                                                onClick = {
+                                                    moreOpen = false
+                                                    delete()
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -7286,18 +7484,18 @@ private fun DesktopCollectionPage(
                         query = listQuery,
                         onQueryChange = { listQuery = it },
                         onSearch = {},
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter)
+                            .padding(bottom = 14.dp),
                         placeholder = DesktopStrings["search_this_list", "Search this list"],
                     )
                 }
             }
-            itemsIndexed(shownSongs, key = { _, (index, song) -> "${song.videoId}-$index" }) { position, (index, song) ->
+            item(key = "collection-table-head") { DesktopCollectionTableHead(tint, showsAlbum = showsAlbum) }
+            itemsIndexed(shownSongs, key = { _, (index, song) -> "${song.videoId}-$index" }) { _, (index, song) ->
                 DesktopCollectionSongRow(
-                    // Striped by place on screen, not track number, so a filtered list still
-                    // alternates.
-                    striped = position % 2 == 1,
                     song = song,
                     collectionType = collection.type,
+                    tint = tint,
                     liked = song.videoId in likedIds,
                     onClick = { _ -> onPlaySongs(songs, index) },
                     onToggleLike = onToggleLike,
@@ -7305,10 +7503,10 @@ private fun DesktopCollectionPage(
                     onAddToPlaylist = onAddToPlaylist,
                     downloaded = song.videoId in downloadedIds,
                     downloadInProgress = song.videoId in downloadInProgress,
-                    number = index + 1,
                     onRemove = onRemoveFromPlaylist?.takeIf { song.setVideoId != null },
                     onArtistClick = onArtistClick,
                     onAlbumClick = onAlbumClick,
+                    showsAlbum = showsAlbum,
                 )
             }
             if (collection.continuation != null) {
@@ -7329,22 +7527,22 @@ private fun DesktopCollectionPage(
                     }
                 }
             }
+            if (shownSongs.isNotEmpty()) {
+                // The count and the running time, in the same colour the cover gave the table.
+                item(key = "collection-footer") {
+                    Text(
+                        appleReleaseFooter(songs.size, totalMs),
+                        color = tint,
+                        fontSize = 13.sp,
+                        lineHeight = 16.sp,
+                        modifier = Modifier.padding(horizontal = DesktopPageGutter + 7.dp)
+                            .padding(top = 20.dp, bottom = 8.dp),
+                    )
+                }
+            }
         }
     }
 }
-
-/**
- * The width of a collection row's action cluster, fixed so the duration column lines up down the
- * table whichever rows can be removed.
- */
-private fun collectionActionsWidth(hasRemove: Boolean): Dp =
-    if (hasRemove) 136.dp else 102.dp
-
-/**
- * How far the pointer lifts a row's ground. Deliberately under the 0.08 state layer it replaces:
- * the row was asked to stop shouting, not to go dark.
- */
-private const val ROW_HOVER_ALPHA = 0.045f
 
 /**
  * A name in a collection row that opens somewhere. Under the pointer it underlines the way the
@@ -7373,10 +7571,63 @@ private fun CollectionNameLink(
     )
 }
 
+/**
+ * The table's own headings, in the colour its cover gave them. Unlike Apple's release page — which
+ * leaves the album out because it is the page — a playlist's rows come from all over, so the album
+ * each one sits on is a column of its own.
+ */
+@Composable
+private fun DesktopCollectionTableHead(tint: Color, showsAlbum: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = DesktopPageGutter).height(32.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DesktopCollectionHeading("Song", if (showsAlbum) 42f else 50f, tint, Modifier.padding(start = 7.dp))
+        DesktopCollectionHeading("Artist", if (showsAlbum) 26f else 32f, tint, Modifier.padding(end = 10.dp))
+        if (showsAlbum) DesktopCollectionHeading("Album", 20f, tint)
+        DesktopCollectionHeading("Time", if (showsAlbum) 12f else 18f, tint, Modifier.fillMaxWidth().padding(end = 18.dp), TextAlign.End)
+    }
+}
+
+@Composable
+private fun RowScope.DesktopCollectionHeading(
+    label: String,
+    share: Float,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    align: TextAlign = TextAlign.Start,
+) {
+    Text(
+        label,
+        color = tint,
+        fontSize = 12.sp,
+        lineHeight = 15.sp,
+        fontWeight = FontWeight.W600,
+        maxLines = 1,
+        textAlign = align,
+        modifier = Modifier.weight(share).then(modifier),
+    )
+}
+
+/**
+ * The wash a song row takes under the pointer. Thin enough to read as the row lifting off the page
+ * rather than as a block of grey laid over it.
+ */
+private const val ROW_WASH_ALPHA = 0.045f
+
+/**
+ * One row of a release's table, in Apple's columns.
+ *
+ * The site answers the pointer in two places at once — the row takes a wash, a play triangle comes
+ * up over the cover and the length is replaced by whatever the row can be acted on with — while the
+ * names under the cursor underline the way a link does.
+ */
 @Composable
 private fun DesktopCollectionSongRow(
     song: Song,
     collectionType: BrowseType,
+    /** The colour this release's cover gave its table. */
+    tint: Color,
     liked: Boolean,
     onClick: (Song) -> Unit,
     onToggleLike: ((Song) -> Unit)?,
@@ -7384,139 +7635,142 @@ private fun DesktopCollectionSongRow(
     onAddToPlaylist: ((Song) -> Unit)?,
     downloaded: Boolean,
     downloadInProgress: Boolean,
-    number: Int,
-    /** Every other row is shaded, so a wide row can be followed across to its buttons. */
-    striped: Boolean,
     /** Takes this row out of the playlist being read. */
     onRemove: ((Song) -> Unit)? = null,
     onArtistClick: ((String) -> Unit)? = null,
-    onAlbumClick: ((String, String) -> Unit)? = null,
+    /** A row's album is a link too: the release the track came from, opened from its name. */
+    onAlbumClick: ((Song) -> Unit)? = null,
+    /** Whether the table this row belongs to has an Album column, so the cells line up with it. */
+    showsAlbum: Boolean = collectionType != BrowseType.ALBUM,
 ) {
     val openContextMenu = LocalDesktopContextMenu.current
-    // The row lights up under the pointer, but only just: the name under it underlines, and a
-    // full state layer on top of a striped row read as a second, louder selection.
-    val rowInteraction = remember { MutableInteractionSource() }
-    val hovered by rowInteraction.collectIsHoveredAsState()
-    val hoverWash by animateFloatAsState(
-        targetValue = if (hovered) ROW_HOVER_ALPHA else 0f,
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val reveal by animateFloatAsState(
+        targetValue = if (hovered) 1f else 0f,
         animationSpec = tween(140),
-        label = "collectionRowHover",
+        label = "collectionRowReveal",
     )
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .contextClick { openContextMenu(song) }
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (striped) Color.White.copy(alpha = 0.04f) else Color.Transparent)
-            .background(Color.White.copy(alpha = hoverWash))
-            .clickable(interactionSource = rowInteraction, indication = null) { onClick(song) }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        val nowPlaying = song.isNowPlaying()
-        Text(
-            number.toString(),
-            Modifier.width(28.dp),
-            color = DesktopSecondary,
-            textAlign = TextAlign.Center,
-            style = MaterialTheme.typography.labelSmall,
-        )
-        Spacer(Modifier.width(12.dp))
-        // No sleeve on an album's rows.
-        if (collectionType != BrowseType.ALBUM) {
-            DesktopArtwork(song.thumbnailUrl, Modifier.size(44.dp).clip(RoundedCornerShape(6.dp)), px = ROW_ART_PX)
-            Spacer(Modifier.width(12.dp))
-        }
-        Text(
-            song.title,
-            Modifier.weight(0.42f),
-            color = if (nowPlaying) Color.White else Color.White.copy(alpha = 0.75f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            fontWeight = FontWeight.Medium,
-        )
-        if (onArtistClick != null && song.artist.isNotBlank()) {
-            CollectionNameLink(
-                song.artist,
-                onClick = { onArtistClick(song.artist) },
-                modifier = Modifier.weight(0.20f).padding(horizontal = 8.dp),
-            )
-        } else {
-            Text(
-                song.artist,
-                Modifier.weight(0.20f).padding(horizontal = 8.dp),
-                color = DesktopSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        // Every row of an album is on that album; the column would only repeat the page's title.
-        if (collectionType != BrowseType.ALBUM) {
-            val album = song.albumName ?: "—"
-            if (onAlbumClick != null && !song.albumName.isNullOrBlank()) {
-                CollectionNameLink(
-                    album,
-                    onClick = { onAlbumClick(song.albumName.orEmpty(), song.artist) },
-                    modifier = Modifier.weight(0.25f).padding(horizontal = 8.dp),
-                )
-            } else {
-                Text(
-                    album,
-                    Modifier.weight(0.25f).padding(horizontal = 8.dp),
-                    color = DesktopSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        Text(
-            song.durationText ?: "—",
-            Modifier.width(58.dp),
-            color = DesktopSecondary,
-            textAlign = TextAlign.End,
-            style = MaterialTheme.typography.bodySmall,
+    val menu = { openContextMenu(song) }
+    // A library playlist is favourited from a star of its own, set outside the three columns; an
+    // album's rows have nothing to favourite.
+    val favouritable = onToggleLike != null && collectionType != BrowseType.ALBUM
+    Column(Modifier.padding(horizontal = DesktopPageGutter)) {
+        // The hairline above a row, which goes when the pointer is on it, so a hovered row reads
+        // as one block rather than as two halves.
+        Box(
+            Modifier.fillMaxWidth().height(0.5.dp).background(Color.White.copy(alpha = 0.12f * (1f - reveal))),
         )
         Row(
-            Modifier.width(collectionActionsWidth(onRemove != null)),
-            horizontalArrangement = Arrangement.End,
+            Modifier.fillMaxWidth().height(TRACK_ROW_HEIGHT)
+                .background(Color.White.copy(alpha = ROW_WASH_ALPHA * reveal))
+                .hoverable(interaction)
+                .clickable(interactionSource = interaction, indication = null) { onClick(song) }
+                .contextClick(menu),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            onRemove?.let { remove ->
-                IconButton(onClick = { remove(song) }, modifier = Modifier.size(34.dp)) {
-                    Icon(
-                        BitChordIcons.Minus,
-                        DesktopStrings["d_remove_from_playlist", "Remove from playlist"],
-                        tint = DesktopSecondary,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-            onToggleLike?.let { onLike ->
-                IconButton(onClick = { onLike(song) }, modifier = Modifier.size(34.dp)) {
+            if (favouritable) {
+                Box(
+                    Modifier.size(28.dp).clip(CircleShape)
+                        .clickable(onClickLabel = "Favorite", onClick = { onToggleLike?.invoke(song) }),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Icon(
                         if (liked) BitChordIcons.StarFilled else BitChordIcons.Star,
                         "Favorite",
-                        tint = if (liked) DesktopAccent else DesktopSecondary,
-                        modifier = Modifier.size(18.dp),
+                        // The site keeps this column empty until the row is pointed at: one that has
+                        // been set stays set, and one that has not is the pointer's business only.
+                        tint = if (liked) DesktopAccent else DesktopAppleText.copy(alpha = reveal),
+                        modifier = Modifier.size(15.dp),
                     )
                 }
+                Spacer(Modifier.width(6.dp))
             }
-            onDownload?.let { onSave ->
-                IconButton(onClick = { if (!downloaded) onSave(song) }, modifier = Modifier.size(34.dp)) {
-                    if (downloadInProgress) {
-                        CircularProgressIndicator(Modifier.size(16.dp), color = DesktopAccent, strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            if (downloaded) BitChordIcons.Download else BitChordIcons.Download,
-                            if (downloaded) "Downloaded" else "Download",
-                            tint = if (downloaded) DesktopAccent else DesktopSecondary,
-                            modifier = Modifier.size(18.dp),
-                        )
+            Row(
+                Modifier.weight(if (showsAlbum) 42f else 50f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // No sleeve on an album's rows: every one of them is the cover the page already
+                // shows.
+                if (collectionType != BrowseType.ALBUM) {
+                    Box(Modifier.padding(start = 7.dp).size(40.dp).clip(RoundedCornerShape(5.dp))) {
+                        DesktopArtwork(song.thumbnailUrl, Modifier.fillMaxSize(), px = ROW_ART_PX)
+                        if (reveal > 0.01f) {
+                            Box(
+                                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f * reveal)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    BitChordIcons.TransportPlay,
+                                    "Play",
+                                    tint = Color.White.copy(alpha = reveal),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                     }
                 }
+                Text(
+                    song.title,
+                    color = if (song.isNowPlaying()) Color.White else DesktopAppleText,
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp)
+                        .then(if (collectionType == BrowseType.ALBUM) Modifier.padding(start = 7.dp) else Modifier),
+                )
             }
-            onAddToPlaylist?.let { onAdd ->
-                IconButton(onClick = { onAdd(song) }, modifier = Modifier.size(34.dp)) {
-                    Icon(BitChordIcons.Plus, DesktopStrings["add_to_playlist", "Add to playlist"], tint = DesktopSecondary, modifier = Modifier.size(18.dp))
+            // The artist cell takes the press itself, so a click here opens the artist rather than
+            // playing the row.
+            AppleTableLink(
+                song.artist,
+                tint,
+                canOpen = onArtistClick != null && song.artist.isNotBlank(),
+                onClick = { onArtistClick?.invoke(song.artist) },
+                modifier = Modifier.weight(if (showsAlbum) 26f else 32f).padding(end = 10.dp),
+            )
+            if (showsAlbum) {
+                val albumName = song.albumName?.takeIf(String::isNotBlank) ?: "—"
+                val albumLink = onAlbumClick
+                // The Album cell is a link wherever the row knows where it came from, the way
+                // Apple's own playlist table opens the release from the row.
+                AppleTableLink(
+                    albumName,
+                    tint,
+                    canOpen = albumLink != null && albumName != "—",
+                    onClick = { albumLink?.invoke(song) },
+                    modifier = Modifier.weight(20f).padding(end = 10.dp),
+                )
+            }
+            Box(Modifier.weight(if (showsAlbum) 12f else 18f).fillMaxHeight()) {
+                Text(
+                    song.durationText ?: "—",
+                    color = tint,
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 1,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxWidth().padding(end = 18.dp)
+                        .alpha(1f - reveal),
+                )
+                if (reveal > 0.01f) {
+                    // One button, and behind it the same menu the row's right-click opens — the
+                    // whole list of what can be done to this track, including the way out of the
+                    // playlist its row was read from. The menu is the app's, drawn in the page's
+                    // own popup layer, so nothing here has to hold the row open for it.
+                    IconButton(
+                        onClick = { menu() },
+                        modifier = Modifier.align(Alignment.CenterEnd).size(28.dp).alpha(reveal),
+                    ) {
+                        Icon(
+                            BitChordIcons.Ellipsis,
+                            DesktopStrings["more", "More"],
+                            tint = DesktopAppleText,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
             }
         }
@@ -8173,6 +8427,54 @@ private fun SettingsBlockHeading(
     }
 }
 
+/**
+ * The accent picker: a row of swatches, and the playing cover as a source of its own. It writes
+ * straight to [DesktopAccentSettings], which every `DesktopAccent` read follows, rather than
+ * threading another value through the Settings signature.
+ */
+@Composable
+private fun DesktopAccentSetting(title: String, subtitle: String) {
+    val choice by DesktopAccentSettings.choice.collectAsState()
+    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+        SettingsBlockHeading(BitChordIcons.Palette, title, subtitle)
+        Spacer(Modifier.height(12.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DesktopAccentSettings.colours.forEach { option ->
+                val selected = choice == option.key
+                Box(
+                    Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .border(
+                            width = if (selected) 2.dp else 1.dp,
+                            color = if (selected) Color.White else Color.White.copy(alpha = 0.18f),
+                            shape = CircleShape,
+                        )
+                        .clickable { DesktopAccentSettings.setChoice(option.key) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier
+                            .size(if (selected) 18.dp else 20.dp)
+                            .clip(CircleShape)
+                            .background(option.colour),
+                    )
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+            FilterChip(
+                colors = desktopChipColors(),
+                selected = choice == DesktopAccentSettings.SONG,
+                onClick = { DesktopAccentSettings.setChoice(DesktopAccentSettings.SONG) },
+                label = { Text(DesktopStrings["d_song_colour", "Song's colour"]) },
+            )
+        }
+    }
+}
+
 /** The title a page of Settings shows beside the back arrow; the main page keeps its own. */
 @Composable
 private fun DesktopSettingsPage.settingsTitle(): String = when (this) {
@@ -8397,15 +8699,6 @@ private val SHELF_TYPE_WORDS = setOf("song", "video", "album", "ep", "single", "
 private fun formatTime(ms: Long): String {
     val totalSeconds = (ms / 1_000L).coerceAtLeast(0L)
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
-}
-
-private fun formatCollectionDuration(totalSeconds: Long): String {
-    val minutes = totalSeconds / 60L
-    return if (minutes < 60L) {
-        "$minutes min"
-    } else {
-        "${minutes / 60L} hr ${minutes % 60L} min"
-    }
 }
 
 private fun formatSleepTimer(ms: Long): String = formatTime(ms)

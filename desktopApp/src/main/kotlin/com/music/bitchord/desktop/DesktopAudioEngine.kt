@@ -9,6 +9,8 @@ import com.music.bitchord.data.settings.TransitionWindow
 import com.music.bitchord.playback.EqCurve
 import com.music.bitchord.playback.TransitionFilter
 import com.music.bitchord.playback.smart.CrossfadeMode
+import com.music.bitchord.playback.smart.MAX_INCOMING_RATE
+import com.music.bitchord.playback.smart.MIN_INCOMING_RATE
 import com.music.bitchord.playback.smart.TransitionPlan
 import com.music.bitchord.playback.smart.TransitionStyle
 import com.music.bitchord.playback.smart.TransitionTrackInfo
@@ -35,6 +37,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
+import kotlin.math.abs
 import kotlin.math.ceil
 
 /** Playback, decoded here rather than behind JavaFX. */
@@ -196,6 +199,12 @@ class DesktopPlaybackEngine(
     @Volatile private var blendActive = false
 
     /**
+     * Until when the hand-over out of the last blend is still settling — see [awaitMixEnd], which
+     * keeps a quality search from installing on the seam's heels.
+     */
+    @Volatile private var mixSettledAtNs = 0L
+
+    /**
      * A [nextSong] an addon may serve, not yet resolved: it is held until the transition into it
      * is close, then armed by [armAddonUpcoming].
      */
@@ -248,8 +257,12 @@ class DesktopPlaybackEngine(
         /** A better copy of the incoming track, found after it was opened; see [upgradeIncoming]. */
         class ReplaceUpcoming(val track: Track) : Command
         class SeekTo(val millis: Long) : Command
-        /** Blend into the already-prepared next track right now, over [fadeSeconds]. */
-        class MixNow(val fadeSeconds: Int) : Command
+        /**
+         * Blend into the already-prepared next track right now, over [fadeSeconds]. [onUnable]
+         * runs when the mix cannot happen after all — the deck this press was promised is gone —
+         * so the press still skips instead of being swallowed.
+         */
+        class MixNow(val fadeSeconds: Int, val onUnable: (() -> Unit)? = null) : Command
         data object ClearUpcoming : Command
         data object Reconfigure : Command
         data object Flush : Command
@@ -454,6 +467,10 @@ class DesktopPlaybackEngine(
             )
             return false
         }
+        // Asked again rather than trusting the wait the caller did before this: a skip arms a seam
+        // at any moment, and opening the better rendition is a network read and a demuxer.
+        awaitMixEnd()
+        if (_state.value.song?.videoId != song.videoId) return true
         DesktopTrackLog.log(
             "upgrading '${song.title}' to ${better.format.summary.ifBlank { "another rendition" }}" +
                 " from ${DesktopMusicSources.sourceNameFor(better)}",
@@ -542,11 +559,6 @@ class DesktopPlaybackEngine(
     }
 
     fun seekTo(positionMs: Long) {
-        // TEMP seek diagnostics: who asked, so a seek undone by a second one shows up.
-        DesktopTrackLog.log(
-            "seek requested: ${positionMs}ms (at ${_state.value.positionMs}ms) from " +
-                Throwable().stackTrace.drop(1).take(6).joinToString(" < ") { "${it.fileName}:${it.lineNumber}" },
-        )
         commands += Command.SeekTo(positionMs.coerceAtLeast(0))
     }
 
@@ -617,7 +629,7 @@ class DesktopPlaybackEngine(
         if (blendActive) return false
         val fade = fadeSeconds.coerceIn(2, MAX_CROSSFADE_SECONDS * 2)
         if (nextDeckOpenId == nextVideoId) {
-            commands += Command.MixNow(fade)
+            commands += Command.MixNow(fade, onUnable)
             return true
         }
         val held = awaitingArm.get()?.takeIf { it.videoId == nextVideoId } ?: return false
@@ -647,7 +659,7 @@ class DesktopPlaybackEngine(
             }
             if (skipMixToken !== token) return@launch
             if (ready == true) {
-                commands += Command.MixNow(fadeSeconds)
+                commands += Command.MixNow(fadeSeconds, onUnable)
             } else if (ready == null && !blendActive) {
                 // Nothing answered in time, and the planner did not open a transition of its own
                 // while this waited: do the skip the ordinary way after all.
@@ -902,8 +914,10 @@ class DesktopPlaybackEngine(
                 settleIncomingSearch(song)
                 return@launch
             }
-            // Not heard yet: the incoming deck itself is replaced, with nothing to interrupt.
-            if (upcoming?.song?.videoId == song.videoId && fadeRemaining <= 0 && !displaySwitched) {
+            // Not heard yet: the incoming deck itself is replaced, with nothing to interrupt — as
+            // long as the seam is not already holding that deck. An immersive mix swapped into the
+            // armed incoming track is heard as a dropout over the transition.
+            if (upcoming?.song?.videoId == song.videoId && !DesktopSourceRegistry.mixEngaged) {
                 openTrack(song, better, startAtMs = 0).fold(
                     onSuccess = { commands += Command.ReplaceUpcoming(it) },
                     onFailure = { settleIncomingSearch(song) },
@@ -923,21 +937,28 @@ class DesktopPlaybackEngine(
 
     /**
      * Hands a better copy of [song] to the ordinary playing-track upgrade, once the blend into it
-     * has finished — [replaceCurrent] refuses anything mid-blend.
+     * has finished — [replaceCurrent] refuses anything mid-blend, and the seam's arming lead holds
+     * the incoming deck.
      */
     private fun playingUpgrade(song: Song, better: DesktopStream) {
         scope.launch {
             repeat(BLEND_WAIT_POLLS) {
                 val playing = _state.value.song?.videoId == song.videoId
-                if (playing && !displaySwitched && fadeRemaining <= 0) {
+                if (playing && !DesktopSourceRegistry.mixEngaged) {
                     // Handed over: from here the search is the playing track's, and ends with it.
                     searchingBetterFor = song.videoId
                     if (incomingSearchingFor == song.videoId) incomingSearchingFor = null
                     watchForUpgrade(song, kotlinx.coroutines.CompletableDeferred(better))
                     return@launch
                 }
-                // Skipped past, or never reached.
-                if (!playing && upcoming?.song?.videoId != song.videoId) {
+                // Skipped past, or never reached. The deck this copy is for may not have been
+                // installed yet — the audio thread only takes [Command.Upcoming] when it next
+                // drains, which is after this poll's first turn — so the queue still holding the
+                // song is as good as a deck in hand. Abandoning on that first turn is how every
+                // seam's better copy was thrown away before it had a chance to be heard.
+                if (!playing && upcoming?.song?.videoId != song.videoId &&
+                    nextSong?.videoId != song.videoId
+                ) {
                     settleIncomingSearch(song)
                     return@launch
                 }
@@ -1094,6 +1115,9 @@ class DesktopPlaybackEngine(
      */
     private var deferredUpgrade: Track? = null
 
+    /** The deck [installUpgrade] just started, waiting to be measured against the audio it hands over. */
+    private var cueCheck: Track? = null
+
     /**
      * An incoming deck re-opened mid-mix, held for [replayDeferredUpcoming] to install once the
      * seam is behind it. The deck a live blend is reading is the one this command replaces, so
@@ -1124,7 +1148,7 @@ class DesktopPlaybackEngine(
     /** Holds a quality search until the seam is behind it; the caller re-checks its song after. */
     private suspend fun awaitMixEnd() {
         var polls = 0
-        while (blending() && polls < BLEND_WAIT_POLLS) {
+        while ((blending() || System.nanoTime() < mixSettledAtNs) && polls < BLEND_WAIT_POLLS) {
             delay(BLEND_WAIT_POLL_MS)
             polls++
         }
@@ -1136,6 +1160,14 @@ class DesktopPlaybackEngine(
 
     /** The plan the running fade was started from, for the filter ride. */
     private var activePlan: TransitionPlan? = null
+
+    /**
+     * Where in the running blend the display moves onto the incoming song, when the fade cannot
+     * answer that itself. A manual skip sets it to zero: the press asked for the next song, so the
+     * player shows it at once instead of waiting out half a blend the listener did not ask for.
+     * Audio-thread only, like [activePlan].
+     */
+    private var blendDisplaySwitchAt: Float? = null
 
     /**
      * A skip-mix whose join falls on a beat the playhead has not reached yet, held here until it
@@ -1188,6 +1220,22 @@ class DesktopPlaybackEngine(
             return
         }
         if (count == 0) return
+
+        // The once-per-song check on a deck this song was restarted on: a stream that landed
+        // somewhere other than the position asked of it plays from where it landed, and a position
+        // counted from the ask runs that far ahead of the audio — the scrubber, and with it the
+        // lyrics, for the rest of the track.
+        if (cueCheck === track && track.decoder.landedUs != null) {
+            cueCheck = null
+            val before = track.startUs
+            correctCueFromDeck(track)
+            val moved = track.startUs - before
+            if (moved != 0L) {
+                // The playhead was reset against the ask; rebase it onto the landing, so the
+                // position follows the singing from here instead of jumping to the ask.
+                resetPlayhead(track, (playhead.peek(framesWritten) + moved).coerceAtLeast(0L))
+            }
+        }
 
         val (blended, blendedCount) = blend(track, block, count)
         val quiet = silence?.also { it.enabled = skipSilenceEnabled }
@@ -1257,7 +1305,11 @@ class DesktopPlaybackEngine(
 
     /** The beatmatch stretch [track] is actually rendered at — [DesktopTempoBuffer]'s clamp included. */
     private fun deckRate(track: Track): Double =
-        if (track.tempo != null && !track.tempoDrained) track.tempoRate.coerceIn(1.0, 1.1) else 1.0
+        if (track.tempo != null && !track.tempoDrained) {
+            track.tempoRate.coerceIn(MIN_INCOMING_RATE, MAX_INCOMING_RATE)
+        } else {
+            1.0
+        }
 
     /** Source time each output frame of [track] covers: the listener's speed times the deck's. */
     private fun usPerFrame(track: Track): Double =
@@ -1282,6 +1334,9 @@ class DesktopPlaybackEngine(
         val other = readIncoming(incoming, count)
         val otherCount = incomingReadCount
         val incomingRate = deckRate(incoming)
+        if (incomingSourceFrames == 0.0 && otherCount > 0) {
+            correctCueFromDeck(incoming)
+        }
         incomingSourceFrames += otherCount.toDouble() / sink.format.channels.coerceAtLeast(1) * incomingRate
         if (other != null) {
             widen(spatialIncoming, incoming, other, otherCount)
@@ -1390,7 +1445,9 @@ class DesktopPlaybackEngine(
             fadeRemaining -= span
         }
         val progress = ((transitionTotal - fadeRemaining).toFloat() / fadeTotal.coerceAtLeast(1))
-        val handoffAt = plan?.let(DesktopTransitionRide::handoffAt) ?: DISPLAY_SWITCH_AT
+        val handoffAt = blendDisplaySwitchAt
+            ?: plan?.let(DesktopTransitionRide::handoffAt)
+            ?: DISPLAY_SWITCH_AT
         if (!displaySwitched && progress >= handoffAt && fadeRemaining > 0) switchDisplay(incoming)
         if (fadeRemaining <= 0) promoteUpcoming() else publishBlend(playing = true)
         return mixed to count
@@ -1421,7 +1478,7 @@ class DesktopPlaybackEngine(
         val block = tempo.take(DEFAULT_TEMPO_OUTPUT_SAMPLES)
         currentReadCount = tempo.outputCount
         advanceTempoEase(track, currentReadCount / sink.format.channels.coerceAtLeast(1))
-        if (track.tempoRate <= 1.0 && !track.tempoDrained) {
+        if (track.tempoRate == 1.0 && !track.tempoDrained) {
             // Nothing more is pushed from here; what the stretcher holds is queued unstretched and
             // the decoder takes over once it has played.
             tempo.finish()
@@ -1487,15 +1544,17 @@ class DesktopPlaybackEngine(
         return converted
     }
 
-    /** Eases a promoted beatmatch stretch back by at most 0.75% on each beat. */
+    /** Eases a promoted beatmatch stretch back to the song's own tempo by at most 0.75% on each beat. */
     private fun advanceTempoEase(track: Track, outputFrames: Int) {
         if (track.tempoEaseStep <= 0.0 || outputFrames <= 0) return
         track.tempoOutputFrames += outputFrames
-        while (track.tempoOutputFrames >= track.tempoEaseNextFrame && track.tempoRate > 1.0) {
-            track.tempoRate = (track.tempoRate - track.tempoEaseStep).coerceAtLeast(1.0)
+        while (track.tempoOutputFrames >= track.tempoEaseNextFrame && track.tempoRate != 1.0) {
+            track.tempoRate =
+                if (track.tempoRate > 1.0) (track.tempoRate - track.tempoEaseStep).coerceAtLeast(1.0)
+                else (track.tempoRate + track.tempoEaseStep).coerceAtMost(1.0)
             track.tempoEaseNextFrame += track.tempoEaseEveryFrames
         }
-        if (track.tempoRate <= 1.0001) track.tempoRate = 1.0
+        if (abs(track.tempoRate - 1.0) <= TEMPO_UNITY_EPSILON) track.tempoRate = 1.0
     }
 
     /** Widens one track's samples, unless the audio is Dolby Atmos. */
@@ -1554,9 +1613,10 @@ class DesktopPlaybackEngine(
         incomingFilter.open()
         current?.decoder?.close()
         current = incoming
-        if (incoming.tempo != null && incoming.tempoRate > 1.0) {
-            val steps = ceil((incoming.tempoRate - 1.0) / TEMPO_STEP_PER_BEAT).toInt().coerceAtLeast(1)
-            incoming.tempoEaseStep = (incoming.tempoRate - 1.0) / steps
+        if (incoming.tempo != null && abs(incoming.tempoRate - 1.0) > TEMPO_UNITY_EPSILON) {
+            val gap = abs(incoming.tempoRate - 1.0)
+            val steps = ceil(gap / TEMPO_STEP_PER_BEAT).toInt().coerceAtLeast(1)
+            incoming.tempoEaseStep = gap / steps
             incoming.tempoEaseEveryFrames = (
                 (plan?.beatSeconds ?: 0.0).takeIf { it > 0.0 } ?: EASE_FALLBACK_SECONDS
                 ).times(sink.format.sampleRate).toLong().coerceAtLeast(1L)
@@ -1580,6 +1640,7 @@ class DesktopPlaybackEngine(
         // audio, which only a manual seek could put right.
         // Less what is still queued in the sink: [playhead] restarts from the played-frame count
         // here, so the queued audio — this track's — is counted again as it plays out.
+        reconcileIncomingFromDeck(incoming)
         val handoverUs = incoming.startUs + incomingElapsedUs() - queuedSourceUs(deckRate(incoming))
         resetPlayhead(incoming, handoverUs)
         DesktopTrackLog.log(
@@ -1609,6 +1670,7 @@ class DesktopPlaybackEngine(
     private fun switchDisplay(incoming: Track) {
         synchronized(blendLock) { displaySwitched = true }
         DesktopTrackLog.log("blend midpoint: showing '${incoming.song.title}'")
+        reconcileIncomingFromDeck(incoming)
         publishTrack(incoming, isPlaying = !paused, positionUs = incomingHeardUs(incoming))
         onCrossfaded(incoming.song)
     }
@@ -1619,6 +1681,11 @@ class DesktopPlaybackEngine(
      */
     private fun endBlend() {
         DesktopPlayerSettings.smartMixBlend.value = null
+        blendDisplaySwitchAt = null
+        // The seam is behind it, so the searches may look at a deck again — after the hand-over has
+        // settled, which is the window [awaitMixEnd] still holds them through.
+        DesktopSourceRegistry.mixEngaged = false
+        mixSettledAtNs = System.nanoTime() + UPGRADE_AFTER_MIX_DELAY_MS * 1_000_000L
         var had = false
         var next: Song? = null
         synchronized(blendLock) {
@@ -1645,11 +1712,13 @@ class DesktopPlaybackEngine(
         deferredUpcoming = null
         val latest = _state.value
         when {
-            // The blend went into this very song, so the deck is now an upgrade of what is
-            // playing. [replaceCurrent] applies its own guard and its own re-cue.
+            // The blend went into this very song, so the deck is now an upgrade of what is playing —
+            // and it waits for the settle like any other: installing on the seam's heels is the
+            // re-cue that moves the song's position, and its lyrics, for the rest of the track.
             latest.song?.videoId == track.song.videoId -> {
                 DesktopTrackLog.log("the mix is behind us: '${track.song.title}' upgrades instead")
-                replaceCurrent(track, playWhenReady = !paused)
+                deferredUpgrade = track
+                replayDeferredUpgrade()
             }
             // Still the song waiting its turn, and nothing has armed a deck for it since.
             upcoming == null && nextSong?.videoId == track.song.videoId -> {
@@ -1685,17 +1754,38 @@ class DesktopPlaybackEngine(
             track.decoder.close()
             return
         }
-        // The deck was opened against the playhead of the song as it stood when the upgrade was
-        // offered; the blend has moved on since, so cue it to where the track really is, as
-        // [swapStream] does for one that took its time resolving.
-        if (kotlin.math.abs(latest.positionMs - track.startUs / 1_000) >= UPGRADE_RESEEK_THRESHOLD_MS) {
-            track.decoder.seek(latest.positionMs * 1_000)
-            track.startUs = latest.positionMs * 1_000
+        // The upgrade waits until the Automix is well and truly over. Installing it on the seam's
+        // heels flushed the sink and re-cued the deck while the transition was still settling, and
+        // that re-cue is what moved the song's position — and with it the lyrics — for the rest of
+        // the track. The song plays on in the meantime; only the swap waits.
+        scope.launch {
+            delay(UPGRADE_AFTER_MIX_DELAY_MS)
+            val now = _state.value
+            if (now.song?.videoId != track.song.videoId) {
+                track.decoder.close()
+                return@launch
+            }
+            if (blending()) {
+                deferredUpgrade?.decoder?.close()
+                deferredUpgrade = track
+                return@launch
+            }
+            if (!DesktopMusicSources.worthSwapping(track.stream.format, now.streamFormat)) {
+                track.decoder.close()
+                return@launch
+            }
+            // The deck was opened against the playhead of the song as it stood when the upgrade was
+            // offered; the song has moved on since, so cue it to where the track really is, as
+            // [swapStream] does for one that took its time resolving.
+            if (kotlin.math.abs(now.positionMs - track.startUs / 1_000) >= UPGRADE_RESEEK_THRESHOLD_MS) {
+                track.decoder.seek(now.positionMs * 1_000)
+                track.startUs = now.positionMs * 1_000
+            }
+            DesktopTrackLog.log(
+                "installing the upgrade of '${track.song.title}' after the mix — ${track.stream.format.summary}",
+            )
+            installUpgrade(track, playWhenReady = now.isPlaying)
         }
-        DesktopTrackLog.log(
-            "installing the upgrade of '${track.song.title}' after the mix — ${track.stream.format.summary}",
-        )
-        installUpgrade(track, playWhenReady = latest.isPlaying)
     }
 
     /** Source time of audio written to the sink but not yet heard. */
@@ -1709,6 +1799,64 @@ class DesktopPlaybackEngine(
     /** Where in the incoming track the listener is right now, mid-blend. */
     private fun incomingHeardUs(incoming: Track): Long =
         (incoming.startUs + incomingElapsedUs() - queuedSourceUs(deckRate(incoming))).coerceAtLeast(incoming.startUs)
+
+    /**
+     * Measures the incoming deck from the audio it actually handed over rather than from the cue it
+     * was asked for, on the first block it gives.
+     *
+     * A seek asks for a position and the decoder cuts the seconds between its landing point and that
+     * ask out of the audio. Where it could not — a stream with no timestamps, or a landing point
+     * further before the target than its guard allows — the cut is abandoned and the deck plays from
+     * where it landed. Counting from the ask anyway ran every position of that track after it: the
+     * scrubber, and with it the lyrics of a song Automix had entered mid-way, which read as the words
+     * running ahead of the singing for as long as the song lasted.
+     */
+    private fun correctCueFromDeck(incoming: Track) {
+        val landed = incoming.decoder.landedUs ?: return
+        if (kotlin.math.abs(landed - incoming.startUs) < CUE_CORRECTION_US) return
+        DesktopTrackLog.log(
+            "'${incoming.song.title}' was cued for ${"%.1f".format(incoming.startUs / 1_000_000.0)}s but " +
+                "its stream starts at ${"%.1f".format(landed / 1_000_000.0)}s; measuring from there",
+        )
+        incoming.startUs = landed
+    }
+
+    /**
+     * Measures the incoming deck against the audio it is actually handing over, once a blend is
+     * far enough along to have shown up any disagreement, and moves the start every position of
+     * that song is counted from.
+     *
+     * The blend counts the frames it takes from the incoming deck. The deck's head — where the
+     * block it last gave the audio thread begins, less what the sink still holds — says where in
+     * the song the audio being heard actually is. On a deck that was opened and cued cleanly the
+     * two agree to a tenth of a second; on one whose stretch buffer still held audio from before
+     * the cue it was moved to, the frames mixed were the song's own past counted as its present,
+     * and the scrubber — and with it the lyrics — ran that far ahead of the singing for the rest
+     * of the track. The start is moved rather than the count, so one correction fixes the position
+     * at the handover and every one published after it.
+     */
+    private fun reconcileIncomingFromDeck(incoming: Track) {
+        val head = incoming.decoder.headUs ?: return
+        // The sink is left out of both sides: it holds the same audio whichever way the song is
+        // measured, so the drift is between the count and the head alone.
+        val heard = head - queuedSourceUs(deckRate(incoming))
+        val counted = incomingHeardUs(incoming)
+        val drift = counted - heard
+        if (kotlin.math.abs(drift) <= DECK_RECONCILE_US) return
+        if (kotlin.math.abs(drift) > DECK_RECONCILE_MAX_US) {
+            DesktopTrackLog.log(
+                "leaving '${incoming.song.title}' measured from its cue: the deck's own head puts it " +
+                    "${"%.1f".format(drift / 1_000_000.0)}s away, which is too far to believe",
+            )
+            return
+        }
+        DesktopTrackLog.log(
+            "'${incoming.song.title}' was counted ${"%.1f".format(drift / 1_000_000.0)}s away from the " +
+                "audio its deck handed over; measuring from " +
+                "${"%.1f".format((incoming.startUs - drift) / 1_000_000.0)}s instead",
+        )
+        incoming.startUs = (incoming.startUs - drift).coerceAtLeast(0L)
+    }
 
     /**
      * Tells the shared scrubber where the blend's beats fall — see Android's
@@ -1778,7 +1926,7 @@ class DesktopPlaybackEngine(
                 }
                 is Command.ReplaceUpcoming -> {
                     val track = command.track
-                    if (upcoming?.song?.videoId == track.song.videoId && !blending()) {
+                    if (upcoming?.song?.videoId == track.song.videoId && !DesktopSourceRegistry.mixEngaged) {
                         DesktopTrackLog.log(
                             "incoming '${track.song.title}' upgraded to " +
                                 "${track.stream.format.summary.ifBlank { "another rendition" }} before its transition",
@@ -1787,13 +1935,13 @@ class DesktopPlaybackEngine(
                         upcoming = track
                         settleIncomingSearch(track.song)
                     } else {
-                        // The blend began while it was opening: it is heard on the playing deck instead.
+                        // The seam holds this deck: it is heard on the playing deck instead.
                         track.decoder.close()
                         playingUpgrade(track.song, track.stream)
                     }
                 }
                 is Command.SeekTo -> performSeek(command.millis)
-                is Command.MixNow -> startSkipMix(command.fadeSeconds)
+                is Command.MixNow -> startSkipMix(command.fadeSeconds, command.onUnable)
                 Command.Reconfigure -> reconfigureSink()
                 Command.ClearUpcoming -> {
                     upcoming?.decoder?.close()
@@ -1832,9 +1980,19 @@ class DesktopPlaybackEngine(
      * — immediately when it was already, or after arming one that was held back; this gets the plan
      * for it and hands it to the same [armIncomingBlend] the automatic transition arms with.
      */
-    private fun startSkipMix(fadeSeconds: Int) {
-        val outgoing = current ?: return
-        val incoming = upcoming ?: return
+    private fun startSkipMix(fadeSeconds: Int, onUnable: (() -> Unit)? = null) {
+        val outgoing = current
+        val incoming = upcoming
+        if (outgoing == null || incoming == null) {
+            // The deck this press was promised is gone — the outgoing track ended, the queue
+            // changed, the engine was flushed. The press still has to skip, so the caller's own
+            // cut runs; swallowing it here is what made a skip sometimes need a second press.
+            DesktopTrackLog.log("skip-mix: no deck to mix into, cutting instead")
+            if (onUnable != null) scope.launch { onUnable() }
+            return
+        }
+        // A mix is already running — into this same next song, since that is the one the press
+        // asked for. It carries the skip; cutting on top would tear it in half.
         if (fadeRemaining > 0) return
         val positionMs = _state.value.positionMs
         val plan = contextualSkipPlan(outgoing, incoming, positionMs / 1000.0, fadeSeconds.toDouble())
@@ -1855,9 +2013,10 @@ class DesktopPlaybackEngine(
         // [maybeStartCrossfade] takes it off the audio thread's own position tick.
         if (plan.transitionStart <= positionMs / 1000.0 + 0.02) {
             pendingSkipPlan = null
-            armIncomingBlend(incoming, plan)
+            armIncomingBlend(incoming, plan, displaySwitchAt = 0f)
         } else {
             pendingSkipPlan = plan
+            DesktopSourceRegistry.mixEngaged = true
         }
     }
 
@@ -1930,7 +2089,12 @@ class DesktopPlaybackEngine(
         // and it must not be thrown away either: the deck is held here and installed by
         // [replayDeferredUpgrade] once the crossfade is over, so the better rendition arrives after
         // the seam instead of stuttering through it.
-        if (blending()) {
+        //
+        // The seam's arming lead counts too, which is why this asks [DesktopSourceRegistry.mixEngaged]
+        // rather than only whether a fade is running: re-opening the playing deck also clears the plan
+        // the blend is about to run from, and the deck that was to be blended in belongs to a song the
+        // listener has not heard yet.
+        if (blending() || DesktopSourceRegistry.mixEngaged) {
             if (deferredUpgrade !== track) deferredUpgrade?.decoder?.close()
             deferredUpgrade = track
             DesktopTrackLog.log("holding the upgrade of '${track.song.title}' until the mix ends")
@@ -1957,6 +2121,7 @@ class DesktopPlaybackEngine(
         outgoingFilter.open()
         incomingFilter.open()
         startTrack(track, playWhenReady)
+        cueCheck = track
     }
 
     private fun startTrack(track: Track, playWhenReady: Boolean) {
@@ -1965,6 +2130,7 @@ class DesktopPlaybackEngine(
         if (current !== track) current?.decoder?.close()
         current = track
         fadeRemaining = 0
+        cueCheck = null
 
         val decoded = track.decoder.outputFormat
         // Only renegotiate when the device would actually have to change.
@@ -2061,7 +2227,7 @@ class DesktopPlaybackEngine(
         val track = current ?: return
         pendingSkipPlan = null
         val landed = track.decoder.seek(millis * 1_000)
-        // TEMP seek diagnostics.
+        // Whether the seek moved at all is the first thing to know when a position looks wrong.
         DesktopTrackLog.log("seek performed: ${millis}ms on '${track.song.title}' ${if (landed) "ok" else "FAILED"}")
         // The stretcher still holds audio from before the seek, which would play first; and a
         // listener who has moved the playhead is past the handoff, so the ease ends here — as it
@@ -2197,11 +2363,12 @@ class DesktopPlaybackEngine(
             val duration = (track.decoder.durationUs ?: 0L) / 1_000
             if (held == null || duration <= 0) {
                 _state.update { it.copy(transitionWindow = null) }
+                DesktopSourceRegistry.mixEngaged = blending()
                 return
             }
             val nextMs = (held.durationText.durationSeconds() * 1_000).toLong()
             val plan = transitionPlan(track, held, nextMs, positionMs, duration)
-            publishTransitionWindow(track, plan, duration)
+            publishTransitionWindow(track, held, plan, positionMs, duration)
             armAddonUpcoming(held, plan, positionMs, duration)
             return
         }
@@ -2210,9 +2377,10 @@ class DesktopPlaybackEngine(
         // A skip-mix plan is waiting for its beat: check it before the natural planner.
         val pending = pendingSkipPlan
         if (pending != null) {
+            DesktopSourceRegistry.mixEngaged = true
             if (positionMs >= pending.transitionStart * 1000) {
                 pendingSkipPlan = null
-                armIncomingBlend(incoming, pending)
+                armIncomingBlend(incoming, pending, displaySwitchAt = 0f)
             }
             return
         }
@@ -2221,7 +2389,7 @@ class DesktopPlaybackEngine(
         if (duration <= 0) return
 
         val plan = transitionPlan(track, incoming.song, (incoming.decoder.durationUs ?: 0L) / 1_000, positionMs, duration)
-        publishTransitionWindow(track, plan, duration)
+        publishTransitionWindow(track, incoming.song, plan, positionMs, duration)
 
         if (plan.blocked) return
         if (!plan.shouldStart && !mustLeaveSilence(plan, positionMs, duration)) return
@@ -2250,18 +2418,24 @@ class DesktopPlaybackEngine(
      * Open the blend that is already armed on both decks. Shared by the position-gated planner and
      * by a manual skip that asks to mix now: the only difference is which [TransitionPlan] is handed
      * in, so both routes get the same cue, tempo, echo and texture arming.
+     *
+     * [displaySwitchAt] overrides where in the blend the player moves onto the incoming song — see
+     * [blendDisplaySwitchAt]. Left null, the plan's own handover decides.
      */
-    private fun armIncomingBlend(incoming: Track, plan: TransitionPlan) {
+    private fun armIncomingBlend(incoming: Track, plan: TransitionPlan, displaySwitchAt: Float? = null) {
         val seconds = plan.fadeSeconds.takeIf { it > 0 } ?: return
+        DesktopSourceRegistry.mixEngaged = true
         // A planned transition says where the incoming track should be entered, which is the whole
         // difference between Automix and a crossfade.
         if (plan.incomingCueTime > 0) {
             val cueUs = (plan.incomingCueTime * 1_000_000).toLong()
-            incoming.decoder.seek(cueUs)
             // The track now begins here, and every position reported for it is measured from it.
             // Left at zero, the scrubber and the lyrics ran the whole cue behind the audio for the
-            // rest of the track — which only a manual seek could put right.
-            incoming.startUs = cueUs
+            // rest of the track — which only a manual seek could put right. Claiming a cue the deck
+            // never moved to is the same mistake pointing the other way, so a refused seek keeps the
+            // start of a freshly opened deck, and [correctCueFromDeck] measures from wherever its
+            // first block really begins.
+            incoming.startUs = if (incoming.decoder.seek(cueUs)) cueUs else 0L
         }
         DesktopTrackLog.log(
             "transition into '${incoming.song.title}': ${"%.1f".format(seconds)}s" +
@@ -2309,20 +2483,26 @@ class DesktopPlaybackEngine(
                 (if (textureActive) TEXTURE_TAIL_SECONDS else 0.0)
             ).let { (it * sink.format.sampleRate * sink.format.channels).toInt() }
         transitionTotal = fadeTotal + echoTail + fxTail
-        fadeRemaining = transitionTotal
-        incomingSourceFrames = 0.0
-        activePlan = plan
-        incoming.tempo = if (plan.incomingPlaybackRate > 1.0001) {
+        // The incoming deck is re-armed before the blend is let loose: [fadeRemaining] going
+        // positive is what makes the audio thread read it, and a stretch buffer left over from an
+        // earlier life of this deck would be mixed, and counted, as though it were audio from the
+        // cue the deck has just been moved to.
+        incoming.tempo = if (abs(plan.incomingPlaybackRate - 1.0) > TEMPO_UNITY_EPSILON) {
             DesktopTempoBuffer(sink.format.channels, sink.format.sampleRate).also {
                 it.speed = plan.incomingPlaybackRate.toFloat()
             }
         } else null
-        incoming.tempoRate = plan.incomingPlaybackRate.coerceAtLeast(1.0)
+        incoming.tempoRate = plan.incomingPlaybackRate
+        incoming.tempoDrained = false
+        incomingSourceFrames = 0.0
+        fadeRemaining = transitionTotal
+        activePlan = plan
         transitionEcho = if (plan.echoSeconds > 0.0) {
             DesktopTransitionEcho(sink.format.sampleRate, sink.format.channels).also { it.configure(plan.echoSeconds) }
         } else null
         outgoingFilter.flush()
         incomingFilter.flush()
+        blendDisplaySwitchAt = displaySwitchAt
         blendActive = true
     }
 
@@ -2362,7 +2542,16 @@ class DesktopPlaybackEngine(
     }
 
     /** The marker on the scrubber, showing where the mix will happen before it happens. */
-    private fun publishTransitionWindow(track: Track, plan: TransitionPlan, duration: Long) {
+    private fun publishTransitionWindow(
+        track: Track,
+        next: Song,
+        plan: TransitionPlan,
+        positionMs: Long,
+        duration: Long,
+    ) {
+        // The searches for a better rendition ask this before they touch a deck: from here the seam
+        // owns them, and it lets go at [endBlend].
+        DesktopSourceRegistry.mixEngaged = blending() || seamDueSoon(plan, next, positionMs, duration)
         val status = analysisStatus(track)
         val markable = !plan.blocked &&
             plan.markerVisible &&
@@ -2392,11 +2581,7 @@ class DesktopPlaybackEngine(
      */
     private fun armAddonUpcoming(song: Song, plan: TransitionPlan, positionMs: Long, duration: Long) {
         if (awaitingArm.get() !== song) return
-        val startMs = if (!plan.blocked && plan.fadeSeconds > 0) {
-            (plan.transitionStart * 1_000).toLong()
-        } else {
-            duration - transitionSecondsFor(song) * 1_000L
-        }
+        val startMs = seamStartMs(plan, song, duration)
         if (startMs - positionMs > ADDON_ARM_LEAD_MS) return
         // Whichever of this thread and a newer [prepareNext] gets there first owns it.
         if (!awaitingArm.compareAndSet(song, null)) return
@@ -2405,6 +2590,25 @@ class DesktopPlaybackEngine(
                 "before its transition",
         )
         resolveUpcoming(song, race = true)
+    }
+
+    /** Where the seam into [next] falls, measured on the outgoing track's clock. */
+    private fun seamStartMs(plan: TransitionPlan, next: Song, durationMs: Long): Long =
+        if (!plan.blocked && plan.fadeSeconds > 0) {
+            (plan.transitionStart * 1_000).toLong()
+        } else {
+            durationMs - transitionSecondsFor(next) * 1_000L
+        }
+
+    /**
+     * Whether the hand-over into [next] is close enough that its decks must be left alone — the same
+     * lead on which the incoming track is armed, so a deck is never re-opened for a better copy in
+     * the seconds before it is blended.
+     */
+    private fun seamDueSoon(plan: TransitionPlan, next: Song, positionMs: Long, durationMs: Long): Boolean {
+        val seconds = transitionSecondsFor(next)
+        if (seconds <= 0) return false
+        return seamStartMs(plan, next, durationMs) - positionMs <= ADDON_ARM_LEAD_MS
     }
 
     /** What the shared planner makes of this pair. */
@@ -2546,6 +2750,16 @@ class DesktopPlaybackEngine(
         /** Avoid a decoder seek for sub-tick drift while an upgraded rendition is opening. */
         private const val UPGRADE_RESEEK_THRESHOLD_MS = 250L
 
+        /**
+         * How long after a mix ends the held upgrade installs, so the swap is clear of the seam.
+         *
+         * Long enough for the hand-over's numbers to settle — a swap landing on the seam's heels
+         * re-cues a song the blend has only just counted from, which moves its lyrics for the rest
+         * of the track — and no longer: five seconds read as "it never upgrades", which is what the
+         * listener heard it as.
+         */
+        private const val UPGRADE_AFTER_MIX_DELAY_MS = 1_500L
+
         /** Enough of a measurement on the incoming track to cue into it. */
         val MEASURED_ENOUGH_TO_ENTER_ON = setOf(
             TrackAnalysisState.ANALYSED,
@@ -2555,6 +2769,22 @@ class DesktopPlaybackEngine(
         /** Where in a blend the player moves to the incoming song: halfway, as on Android. */
         private const val DISPLAY_SWITCH_AT = 0.5f
 
+        /**
+         * A cue's landing point this far off is taken as the deck's real start instead of the ask;
+         * see [correctCueFromDeck]. Shorter than this is a block's own granularity, not a desync.
+         */
+        private const val CUE_CORRECTION_US = 150_000L
+
+        /**
+         * How far the blend's frame count may sit from the deck's own timestamps before the start
+         * is moved; see [reconcileIncomingFromDeck]. A clean pair agrees to a tenth of a second,
+         * which is a block's granularity and the resampler's own latency.
+         */
+        private const val DECK_RECONCILE_US = 250_000L
+
+        /** Beyond this the deck's stamps are the thing that is wrong, and are left alone. */
+        private const val DECK_RECONCILE_MAX_US = 30_000_000L
+
         /** Jitter tolerated in a republished beat anchor; see [publishBlend]. */
         private const val ANCHOR_TOLERANCE_NANOS = 25_000_000L
 
@@ -2562,6 +2792,9 @@ class DesktopPlaybackEngine(
         private const val DEFAULT_TEMPO_OUTPUT_SAMPLES = 4_096
         private const val TEMPO_STEP_PER_BEAT = 0.0075
         private const val EASE_FALLBACK_SECONDS = 0.5
+
+        /** A stretch this close to unity is treated as having come home, so the stretcher can be dropped. */
+        private const val TEMPO_UNITY_EPSILON = 0.0001
 
         /**
          * How far ahead of its transition a held-back addon track is resolved and opened. Android

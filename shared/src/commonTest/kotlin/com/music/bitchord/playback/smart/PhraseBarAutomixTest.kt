@@ -122,11 +122,11 @@ class PhraseBarAutomixTest {
     @Test
     fun anAutomaticMixKeepsTheAdaptiveShapeAcrossATempoItCannotLock() {
         val current = track("a", 120.0, "C major", vocal = 0.1)
-        val next = track("b", 97.0, "C major", vocal = 0.1)
+        val next = track("b", 94.0, "C major", vocal = 0.1)
         val plan = plan(current, next, phraseBars = 0)
 
         assertEquals(1.0, plan.incomingPlaybackRate, "no deck is asked to stretch for a phrase")
-        assertFalse(plan.reason.contains("phrase"), "no phrase across a 24% gap: ${plan.reason}")
+        assertFalse(plan.reason.contains("phrase"), "no phrase across a tempo past the stretch window: ${plan.reason}")
     }
 
     @Test

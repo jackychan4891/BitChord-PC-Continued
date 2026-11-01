@@ -1,66 +1,42 @@
 package com.music.bitchord.desktop
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.music.bitchord.ui.components.contextClick
+import com.music.bitchord.ui.icons.BitChordIcons
 
-/** Apple's radio page keeps its squares 20 apart across, and a little more from one row to the next. */
-private val RadioTileGap = 20.dp
-private val RadioRowGap = 24.dp
-
-/**
- * A station square is never smaller than this, nor asked to grow past that.
- *
- * The upper bound is what the page looks like at a wide window: three squares of this carry the
- * row across the whole content width, and past it the row would stop filling rather than become a
- * wall of artwork. Two rows of these, plus the names under them, are about a screen tall.
- */
-private val MinRadioTile = 140.dp
-private val MaxRadioTile = 420.dp
-
-/**
- * The words under a square, held to one height so the grid can count them.
- *
- * A station name is one line and what it is carrying is two, and without a fixed box the row height
- * follows whichever the stream happens to be reporting — which is how the page came to scroll by a
- * few pixels at some window sizes and not others.
- */
-private val RadioCaption = 66.dp
-
-/** What the grid shares the window with: the page title over its rule, the grid's own paddings, the
- * row gap, and the inset the mini player reserves at the foot of every page. */
-private val RadioChrome = 236.dp
-
-/** One station on the radio page, with whatever is known about what it is carrying. */
+/** One station on the radio row, with whatever is known about what it is carrying. */
 internal data class DesktopRadioTile(
     val key: String,
     val title: String,
@@ -71,40 +47,39 @@ internal data class DesktopRadioTile(
 )
 
 /**
- * The radio page's stations: squares in a grid that wraps.
+ * The stations as the site draws them: a sideways row of squares, captioned underneath.
  *
- * Three to a row, so the six free stations make two even rows and the page is filled. Six across —
- * which is what fits the width — left the whole lower half of it empty, with squares too small to
- * read the name under. A tile takes whatever the width offers up to [MaxRadioTile], and a narrow
- * window drops to two columns.
+ * Apple does not give radio a page of its own — the stations are one shelf in the New feed, the
+ * same shape as every other row of covers, so this borrows the shelf's own measures rather than
+ * inventing a grid. The square is where the station is started; the name and the programme under it
+ * start it too, as they do on the site.
  */
 @Composable
-internal fun DesktopRadioTileGrid(
-    /** Null on a page that already names itself, which the radio page does. */
-    heading: String?,
+internal fun DesktopRadioShelf(
+    title: String,
     tiles: List<DesktopRadioTile>,
     onOpen: (DesktopRadioTile) -> Unit,
     onHide: (DesktopRadioTile) -> Unit,
+    showHeading: Boolean = true,
+    topPadding: Dp = 36.dp,
+    /** Where the row's own page is, when the source names one; null leaves the name a label. */
+    onOpenHeading: (() -> Unit)? = null,
 ) {
-    Column(Modifier.padding(top = if (heading != null) 25.dp else 22.dp, bottom = 5.dp)) {
-        heading?.let { DesktopAppleHeading(it, Modifier.padding(horizontal = DesktopPageGutter, vertical = 12.dp)) }
-        BoxWithConstraints(Modifier.padding(horizontal = DesktopPageGutter)) {
-            val columns = if (maxWidth < 620.dp) 2 else 3
-            val rows = tiles.chunked(columns).size.coerceAtLeast(1)
-            val byWidth = (maxWidth - RadioTileGap * (columns - 1)) / columns
-            // Height gets the last word. Measured from the width alone, a wide window grew the
-            // squares until the last caption hung past the bottom and the page scrolled a few pixels
-            // to reach it — not something a page of six stations should ever need to do.
-            val viewport = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
-            val byHeight = (viewport - RadioChrome - RadioRowGap * (rows - 1) - RadioCaption * rows) / rows
-            val tile = minOf(byWidth, byHeight).coerceIn(MinRadioTile, MaxRadioTile)
-            Column(verticalArrangement = Arrangement.spacedBy(RadioRowGap)) {
-                tiles.chunked(columns).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(RadioTileGap)) {
-                        row.forEach { item ->
-                            DesktopRadioTileView(item, tile, { onOpen(item) }, { onHide(item) })
-                        }
-                    }
+    if (tiles.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(top = topPadding)) {
+        if (showHeading) {
+            AppleFeedShelfHeading(
+                title,
+                Modifier.padding(horizontal = DesktopPageGutter),
+                onOpenHeading,
+            )
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val columns = appleFeedColumns(AppleFeedLayout.Square, maxWidth)
+            val width = appleFeedTileWidth(AppleFeedLayout.Square, maxWidth, columns)
+            DesktopScrollableRow(gutter = DesktopPageGutter, spacing = AppleShelfGap) {
+                items(tiles, key = { it.key }) { tile ->
+                    DesktopRadioTileView(tile, width, { onOpen(tile) }, { onHide(tile) })
                 }
             }
         }
@@ -114,45 +89,59 @@ internal fun DesktopRadioTileGrid(
 @Composable
 private fun DesktopRadioTileView(
     tile: DesktopRadioTile,
-    size: Dp,
+    width: Dp,
     onOpen: () -> Unit,
     onHide: () -> Unit,
 ) {
-    val pressed = remember { MutableInteractionSource() }
-    val hovered by pressed.collectIsHoveredAsState()
-    // The station's own menu, opened where its square was right-clicked. A tile is not a row, so it
-    // carries no ⋯ of its own; holding the pointer on it is what asks, and the answer is a single
-    // thing: this station need not be on the page.
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    // The station's own menu, opened where its square was right-clicked. A tile carries no ⋯ of its
+    // own: holding the pointer on it is what asks, and the answer is a single thing — this station
+    // need not be on the page.
     var menu by remember(tile.key) { mutableStateOf(false) }
     Box {
-        Column(Modifier.width(size).hoverable(pressed)) {
-            // Only the square takes the wash — the words belong to the tile and start the station like
-            // the square does, but they are not the thing being pointed at.
+        Column(Modifier.width(width).hoverable(interaction)) {
             Box(
-                Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(8.dp))
-                    .desktopArtHoverShade().desktopQuietClick(onClick = onOpen)
+                Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(7.dp))
+                    .clickable(interaction, indication = null, onClick = onOpen)
                     .contextClick { menu = true },
             ) {
-                DesktopArtwork(tile.artworkUrl, Modifier.fillMaxSize(), px = 600)
+                DesktopArtwork(tile.artworkUrl, Modifier.fillMaxSize(), px = 400)
+                // The site's squares answer the pointer with a play button over the art; a station
+                // is played the same way a song is.
+                if (hovered) {
+                    Box(
+                        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            BitChordIcons.TransportPlay,
+                            null,
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
             }
-            Column(Modifier.width(size).height(RadioCaption).desktopQuietClick(onClick = onOpen)) {
+            Column(Modifier.fillMaxWidth().clickable(interaction, indication = null, onClick = onOpen)) {
                 Text(
                     tile.title,
-                    fontSize = 15.sp,
-                    fontWeight = if (tile.playing) FontWeight.Bold else FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    fontWeight = if (tile.playing) FontWeight.Bold else FontWeight.Normal,
                     color = if (tile.playing) DesktopAccent else DesktopAppleText,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 9.dp),
+                    modifier = Modifier.padding(top = 8.dp),
                 )
                 tile.subtitle?.takeIf { it.isNotBlank() }?.let {
                     Text(
                         it,
                         fontSize = 12.sp,
+                        lineHeight = 15.sp,
                         color = DesktopAppleSecondary,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp),
                     )
                 }
             }

@@ -45,18 +45,18 @@ internal object DesktopRadioClient {
         )
     }
 
-    /** Only the stations that stream free in-app; everything else on Apple's radio page needs a subscription. */
-    fun freeShelves(shelves: List<HomeShelf>): List<HomeShelf> = shelves
-        .map { shelf -> shelf.copy(items = shelf.items.filter { station(it) != null }) }
-        .filter { it.items.isNotEmpty() }
-
     /** What a station hides under: its own id, which a page reload keeps. */
     fun keyOf(item: ShelfItem): String = station(item)?.id ?: item.browseId.orEmpty()
 
-    /** The page with the stations the listener has hidden left off, and any row that emptied removed. */
-    fun visible(shelves: List<HomeShelf>): List<HomeShelf> = shelves
-        .map { shelf -> shelf.copy(items = shelf.items.filterNot { DesktopRadioVisibility.isHidden(keyOf(it)) }) }
-        .filter { it.items.isNotEmpty() }
+    /**
+     * A station row as this player can show it: only what streams free in-app — everything else on
+     * Apple's radio needs a subscription — and none of what the listener has hidden. A row emptied
+     * by either is null, since the feed it sits in has no reason to draw a heading with nothing
+     * under it.
+     */
+    fun playableStations(shelf: HomeShelf): HomeShelf? = shelf
+        .copy(items = shelf.items.filter { item -> station(item) != null && !DesktopRadioVisibility.isHidden(keyOf(item)) })
+        .takeIf { it.items.isNotEmpty() }
 
     fun resolveStream(station: DesktopRadioStation): Result<DesktopStream> = runCatching {
         val tuneId = appleStations[station.id] ?: error("This station needs the Apple Music player")

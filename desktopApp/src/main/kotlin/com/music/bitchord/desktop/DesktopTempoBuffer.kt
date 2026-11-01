@@ -1,11 +1,15 @@
 package com.music.bitchord.desktop
 
+import com.music.bitchord.playback.smart.MAX_INCOMING_RATE
+import com.music.bitchord.playback.smart.MIN_INCOMING_RATE
+
 /**
  * Keeps a deck's pitch-preserving stretcher and its surplus output together.
  *
- * A sped-up decoder does not produce exactly one output block for every input block. The FIFO lets
- * the mixer request exactly the outgoing block size without allocating or dropping the excess,
- * and survives promotion so the incoming song continues seamlessly after the handoff.
+ * A deck whose rate differs from unity does not produce exactly one output block for every input
+ * block, faster or slower. The FIFO lets the mixer request exactly the outgoing block size without
+ * allocating or dropping the excess, and survives promotion so the incoming song continues
+ * seamlessly after the handoff.
  */
 internal class DesktopTempoBuffer(channels: Int, sampleRate: Int) {
     private val processor = DesktopAudioSpeed(channels, sampleRate)
@@ -14,10 +18,11 @@ internal class DesktopTempoBuffer(channels: Int, sampleRate: Int) {
     private var queuedCount = 0
     private var output = FloatArray(0)
 
+    /** The planner's stretch window, in both directions: a deck may be slowed as well as sped up. */
     var speed: Float
         get() = processor.speed
         set(value) {
-            processor.speed = value.coerceIn(1f, 1.1f)
+            processor.speed = value.coerceIn(MIN_INCOMING_RATE.toFloat(), MAX_INCOMING_RATE.toFloat())
         }
 
     val available: Int get() = queuedCount

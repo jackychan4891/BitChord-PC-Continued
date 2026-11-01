@@ -86,6 +86,7 @@
     <string name="d_name_optional">Название (необязательно)</string>
     <string name="d_new">Новинки</string>
     <string name="d_new_music_moods_and_discoveries">Новая музыка, настроения и открытия</string>
+    <string name="d_new_release">Новинка</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">На этом компьютере не найден профиль браузера.</string>
     <string name="d_no_downloads">Нет загрузок</string>
     <string name="d_nobody_is_signed_in">Никто не вошёл. Вашей медиатеке, плейлистам и истории нужна учётная запись YouTube Music.</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">Этот трек не из YouTube Music, поэтому он может попасть только в плейлист, хранящийся здесь.</string>
     <string name="d_time">ВРЕМЯ</string>
     <string name="d_title_bar">Строка заголовка</string>
+    <string name="d_top_picks_for_you">Лучшие подборки для вас</string>
     <string name="d_top_result">Лучший результат</string>
     <string name="d_track_info_hint">Относится только к этому треку. Если у выбранного источника нет его копии, BitChord вернётся к обычному порядку.</string>
     <string name="d_track_information">Сведения о треке</string>
     <string name="d_about_track">Об этой песне</string>
     <string name="d_artist_signature_service">Сервис подписи артиста</string>
+    <string name="d_all_playlists">Все плейлисты</string>
     <string name="d_artist_signature_off">Выключено. Ничего не загружается, пока вы не добавите свою ссылку.</string>
     <string name="d_artist_signature_dialog">BitChord запрашивает рукописную подпись у выбранного вами сервиса и рисует её белым поверх заголовка артиста. Ссылка должна отвечать JSON. Вставьте {artist} туда, где должно быть имя, или не вставляйте — тогда имя добавится как ?artist=…&amp;type=handwritten. Очистите поле, чтобы не загружать ничего.</string>
     <string name="hidden_items">Скрытые элементы</string>
@@ -254,6 +257,7 @@
     <string name="d_already_added_as">Уже добавлен как %1$s</string>
     <string name="d_count_minutes">%1$s мин</string>
     <string name="d_count_songs">%1$s треков</string>
+    <string name="d_find_your_mood">Найдите своё настроение</string>
     <string name="d_module_index_detected">Индекс модулей · %1$s модулей</string>
     <string name="d_on_this_computer">На этом компьютере</string>
     <string name="d_one_song">1 трек</string>

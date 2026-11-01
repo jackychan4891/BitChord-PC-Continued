@@ -86,6 +86,7 @@
     <string name="d_name_optional">Nom (facultatif)</string>
     <string name="d_new">Nouveautés</string>
     <string name="d_new_music_moods_and_discoveries">Nouveautés, ambiances et découvertes</string>
+    <string name="d_new_release">Nouveauté</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">Aucun profil de navigateur trouvé sur cette machine.</string>
     <string name="d_no_downloads">Aucun téléchargement</string>
     <string name="d_nobody_is_signed_in">Personne n\'est connecté. Ta bibliothèque, tes playlists et ton historique nécessitent une compte YouTube Music.</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">Ce titre ne vient pas de YouTube Music : il ne peut aller que dans une playlist conservée ici.</string>
     <string name="d_time">DURÉE</string>
     <string name="d_title_bar">Barre de titre</string>
+    <string name="d_top_picks_for_you">Nos meilleurs choix pour vous</string>
     <string name="d_top_result">Meilleur résultat</string>
     <string name="d_track_info_hint">S'applique uniquement à cette piste. Si la source choisie n'en a pas de copie, BitChord revient à l'ordre habituel.</string>
     <string name="d_track_information">Informations de la piste</string>
     <string name="d_about_track">À propos de ce titre</string>
     <string name="d_artist_signature_service">Service de signature d'artiste</string>
+    <string name="d_all_playlists">Toutes les listes</string>
     <string name="d_artist_signature_off">Désactivé. Rien n'est récupéré tant qu'aucun lien n'est ajouté.</string>
     <string name="d_artist_signature_dialog">BitChord demande une signature manuscrite à un service de votre choix et l'affiche en blanc sur l'en-tête de l'artiste. Le lien doit répondre en JSON. Placez {artist} là où doit figurer le nom, ou omettez-le : le nom est alors ajouté en ?artist=…&amp;type=handwritten. Videz le champ pour ne rien demander.</string>
     <string name="hidden_items">Éléments masqués</string>
@@ -254,6 +257,7 @@
     <string name="d_already_added_as">Déjà ajoutée sous le nom %1$s</string>
     <string name="d_count_minutes">%1$s minutes</string>
     <string name="d_count_songs">%1$s titres</string>
+    <string name="d_find_your_mood">Trouvez votre ambiance</string>
     <string name="d_module_index_detected">Index de modules · %1$s modules</string>
     <string name="d_on_this_computer">Sur cet ordinateur</string>
     <string name="d_one_song">1 titre</string>

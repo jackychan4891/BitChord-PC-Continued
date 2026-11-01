@@ -33,6 +33,7 @@
     <string name="d_animated_canvas">Animated canvas</string>
     <string name="d_app_background">App background</string>
     <string name="d_artist_signature_dialog">BitChord asks a service of your choosing for a handwritten signature, and draws it in white over the artist header. The link must answer with JSON. Put {artist} where the name should go, or leave it out and the name is appended as ?artist=…&amp;type=handwritten. Clear the field to fetch nothing at all.</string>
+    <string name="d_all_playlists">All Playlists</string>
     <string name="d_artist_signature_off">Off. Nothing is fetched until you add your own link.</string>
     <string name="d_artist_signature_service">Artist signature service</string>
     <string name="d_artists_songs_albums_playlists">Artists, songs, albums, playlists</string>
@@ -103,6 +104,7 @@
     <string name="d_made_for_you">Made for You</string>
     <string name="d_mix_instead_of_cutting_when_you_skip">Mixes into the next song when you skip ahead</string>
     <string name="d_mix_the_order_of_the_current_queue">Mix the order of the current queue</string>
+    <string name="d_find_your_mood">Find Your Mood</string>
     <string name="d_module_index_detected">Module index · %1$s modules</string>
     <string name="d_module_source">Module source</string>
     <string name="d_monthly_listeners">MONTHLY LISTENERS</string>
@@ -112,6 +114,7 @@
     <string name="d_name_optional">Name (optional)</string>
     <string name="d_new">New</string>
     <string name="d_new_music_moods_and_discoveries">New music, moods, and discoveries</string>
+    <string name="d_new_release">New Release</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">No browser profile was found on this machine.</string>
     <string name="d_no_downloads">No downloads</string>
     <string name="d_nobody_is_signed_in">Nobody is signed in. Your library, playlists and history need a YouTube Music account.</string>
@@ -191,6 +194,7 @@
     <string name="d_times_the_mix_without_a_crossfade_slider">Times the mix without a crossfade slider</string>
     <string name="d_tints_the_glass_with_the_current_artwork">Tints the glass with the current artwork</string>
     <string name="d_title_bar">Title bar</string>
+    <string name="d_top_picks_for_you">Top Picks for You</string>
     <string name="d_top_result">Top result</string>
     <string name="d_track_info_hint">Applies to this track only. BitChord falls back to the usual order when the source you picked has no copy of it.</string>
     <string name="d_track_information">Track information</string>

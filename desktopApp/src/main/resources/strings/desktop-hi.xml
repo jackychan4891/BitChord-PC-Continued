@@ -86,6 +86,7 @@
     <string name="d_name_optional">नाम (वैकल्पिक)</string>
     <string name="d_new">नया</string>
     <string name="d_new_music_moods_and_discoveries">नया संगीत, मूड और खोजें</string>
+    <string name="d_new_release">नया रिलीज़</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">इस मशीन पर कोई ब्राउज़र प्रोफ़ाइल नहीं मिली।</string>
     <string name="d_no_downloads">कोई डाउनलोड नहीं</string>
     <string name="d_nobody_is_signed_in">कोई साइन इन नहीं है। आपकी लाइब्रेरी, प्लेलिस्ट और इतिहास के लिए एक YouTube Music खाता चाहिए।</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">यह ट्रैक YouTube Music का नहीं है, इसलिए यह केवल यहाँ रखी प्लेलिस्ट में जा सकता है।</string>
     <string name="d_time">समय</string>
     <string name="d_title_bar">शीर्षक पट्टी</string>
+    <string name="d_top_picks_for_you">आपके लिए टॉप पिक्स</string>
     <string name="d_top_result">शीर्ष परिणाम</string>
     <string name="d_track_info_hint">केवल इस ट्रैक पर लागू होता है। जब आपके चुने हुए स्रोत के पास इसकी प्रति नहीं है, BitChord सामान्य क्रम में लौट आता है।</string>
     <string name="d_track_information">ट्रैक जानकारी</string>
     <string name="d_about_track">इस गाने के बारे में</string>
     <string name="d_artist_signature_service">कलाकार हस्तक्षर सेवा</string>
+    <string name="d_all_playlists">सभी प्लेलिस्ट</string>
     <string name="d_artist_signature_off">बंद। जब तक अपनी लिंक न जोड़ें, कुछ नहीं लाया जाता।</string>
     <string name="d_artist_signature_dialog">BitChord आपकी चुनी सेवा से हस्तलिखित हस्तक्षर माँगता है और उसे कलाकार हेडर पर सफेद में बनाता है। लिंक को JSON में उत्तर देना चाहिए। जहाँ नाम होना चाहिए वहाँ {artist} रखें, या उसे छोड़ दें तो नाम ?artist=…&amp;type=handwritten के रूप में जुड़ेगा। कुछ भी न लाने के लिए फ़ील्ड खाली करें।</string>
     <string name="hidden_items">छिपे हुए आइटम</string>
@@ -254,6 +257,7 @@
     <string name="d_already_added_as">पहले से %1$s के रूप में जोड़े गए</string>
     <string name="d_count_minutes">%1$s मिनट</string>
     <string name="d_count_songs">%1$s गाने</string>
+    <string name="d_find_your_mood">अपना मूड खोजें</string>
     <string name="d_module_index_detected">मॉड्यूल इंडेक्स · %1$s मॉड्यूल</string>
     <string name="d_on_this_computer">इस कंप्यूटर पर</string>
     <string name="d_one_song">1 गाना</string>

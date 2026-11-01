@@ -117,11 +117,37 @@ internal class DesktopAudioDecoder : DesktopSampleSource {
     var positionUs: Long = 0L
         private set
 
+    /**
+     * Where the first block handed over after the last [seek] really begins, or null while nothing
+     * has been delivered since it — or where the stream gave no timestamp to say.
+     *
+     * A seek asks for a position; the container's index point decides what is actually delivered,
+     * and [trimBeforeUs] then cuts the difference out of the audio. Where that could not happen, the
+     * asking position is the wrong one to measure from.
+     */
+    override var landedUs: Long? = null
+        private set
+
     /** The stream's first timestamp: song position 0, which an HLS or MPEG-TS stream puts well past 0. */
     private var streamStartUs = 0L
 
+    /**
+     * Make-up for downmixing an immersive master to stereo, or 1 when nothing was downmixed.
+     *
+     * A Dolby Atmos track arrives as a multichannel (usually 5.1) E-AC-3 bed, and the resampler
+     * folds it to two channels: the centre and surrounds arrive attenuated on top of the fronts,
+     * and the LFE is dropped outright. On top of that the immersive master itself is mixed several
+     * decibels below the stereo one it sits beside in a catalogue, so the same song played
+     * noticeably quieter in Atmos than in stereo. Both are made up here, in the playback path only:
+     * the analyser asks for mono, so Automix keeps measuring the track as served.
+     */
+    private var downmixMakeup = 1f
+
     /** After a seek, decoded audio before this song position is dropped; see [seek]. */
     private var trimBeforeUs: Long? = null
+
+    /** Set by [seek] and cleared by the first block that answers it with audio; see [landedUs]. */
+    private var landingPending = false
 
     /** What is actually being decoded, once [open] has succeeded. */
     var measuredFormat: DesktopStreamFormat? = null
@@ -204,6 +230,13 @@ internal class DesktopAudioDecoder : DesktopSampleSource {
         }
 
         outputFormat = requested.copy(sampleRate = context.sample_rate())
+        downmixMakeup = if (
+            context.ch_layout().nb_channels() > 2 && outputFormat.channels == 2
+        ) {
+            DOWNMIX_MAKEUP_GAIN
+        } else {
+            1f
+        }
         measuredFormat = measure(decoder.name()?.string, context, opened)
         resampler = buildResampler(context, outputFormat)
         packet = av_packet_alloc()
@@ -376,8 +409,25 @@ internal class DesktopAudioDecoder : DesktopSampleSource {
                     (block[at + 3].toInt() shl 24),
             )
         }
+        if (downmixMakeup != 1f) applyDownmixMakeup(count)
         sampleCount = count
         return samples
+    }
+
+    /**
+     * Boosts a downmixed block back toward the level the stereo master would have had. Held under
+     * full scale by the block's own peak, so a loud passage loses the make-up for that block
+     * instead of clipping — a static gain over the whole block, so no waveform is reshaped.
+     */
+    private fun applyDownmixMakeup(count: Int) {
+        var peak = 0f
+        for (index in 0 until count) {
+            val level = kotlin.math.abs(samples[index])
+            if (level > peak) peak = level
+        }
+        if (peak <= 0f) return
+        val gain = if (peak * downmixMakeup > DOWNMIX_CEILING) DOWNMIX_CEILING / peak else downmixMakeup
+        for (index in 0 until count) samples[index] *= gain
     }
 
     /** How much of the array [readSamples] returned is actually this block. */
@@ -433,6 +483,13 @@ internal class DesktopAudioDecoder : DesktopSampleSource {
         }
         if (skip >= produced) return ByteArray(0)
 
+        // The block that answers a seek, in whatever place it really landed: [skip] is zero for the
+        // audio from before the target that could not be trimmed away.
+        if (landingPending) {
+            landingPending = false
+            landedUs = frameUs?.plus(skip * 1_000_000L / target.sampleRate.coerceAtLeast(1))
+        }
+
         val bytes = (produced - skip) * target.frameBytes
         if (scratch.size < bytes) scratch = ByteArray(bytes)
         val buffer = outputBuffer ?: return null
@@ -470,6 +527,8 @@ internal class DesktopAudioDecoder : DesktopSampleSource {
         drained = false
         positionUs = micros
         trimBeforeUs = micros.takeIf { it > 0 }
+        landingPending = true
+        landedUs = null
         return true
     }
 
@@ -512,6 +571,16 @@ internal class DesktopAudioDecoder : DesktopSampleSource {
 
         /** Further apart than any index point, cue or segment lands before its target. */
         const val MAX_SEEK_TRIM_US = 30_000_000L
+
+        /**
+         * Level a multichannel downmix is brought back up by: the immersive master's own make-up
+         * plus what the fold to stereo does not carry. The old figure was none, and the same song
+         * in Atmos played audibly quieter than in stereo.
+         */
+        const val DOWNMIX_MAKEUP_GAIN = 2.0f
+
+        /** Where the make-up stops, so it can never push a block into the ceiling. */
+        const val DOWNMIX_CEILING = 0.98f
 
         /** `whence` values, which FFmpeg takes straight from stdio. */
         const val SEEK_CUR = 1

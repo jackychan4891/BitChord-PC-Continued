@@ -212,6 +212,12 @@ internal fun DesktopSongMenuFor(
      * menu passes it — a list row's menu has no party to host.
      */
     onListenTogether: (() -> Unit)? = null,
+    /**
+     * Takes the track out of the playlist whose row this menu was raised over. Only
+     * a menu over a row of the user's own playlist passes it; Apple's shelves, the
+     * player and a radio queue have nothing to remove.
+     */
+    onRemoveFromPlaylist: (() -> Unit)? = null,
 ) {
     val close = onDismiss
     DesktopSongMenu(
@@ -260,6 +266,7 @@ internal fun DesktopSongMenuFor(
         lyricsOffsetMs = lyricsOffsetMs,
         onSetLyricsOffset = onSetLyricsOffset,
         onListenTogether = onListenTogether?.let { { it(); close() } },
+        onRemoveFromPlaylist = onRemoveFromPlaylist?.let { { it(); close() } },
         onDismiss = close,
     )
 }
@@ -314,6 +321,8 @@ internal fun DesktopSongMenu(
     onSetLyricsOffset: ((Int) -> Unit)? = null,
     /** Starts a Listen Together party for the playing track; null hides the row. */
     onListenTogether: (() -> Unit)? = null,
+    /** Takes the track out of the playlist whose row this menu was raised over; null hides the row. */
+    onRemoveFromPlaylist: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     var pickingSleepTimer by remember { mutableStateOf(false) }
@@ -418,6 +427,15 @@ internal fun DesktopSongMenu(
         }
         if (!isOffline) {
             DesktopMenuRow(BitChordIcons.ListPlus, DesktopStrings["add_to_playlist", "Add to playlist"], onClick = onAddToPlaylist)
+        }
+        // The way back out of the playlist this row was read from, beside the way into one. Only a
+        // menu raised over a row of an owned playlist is given it.
+        onRemoveFromPlaylist?.let {
+            DesktopMenuRow(
+                BitChordIcons.Minus,
+                DesktopStrings["d_remove_from_playlist", "Remove from playlist"],
+                onClick = it,
+            )
         }
         if (signedIn || !isOffline) DesktopMenuDivider()
 

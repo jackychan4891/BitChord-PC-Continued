@@ -13,6 +13,14 @@ internal interface DesktopSampleSource {
 
     fun seek(micros: Long): Boolean
 
+    /**
+     * Where the first block delivered after the last [seek] really begins, or null until one has
+     * answered it. A seek asks for a position but the container's index point decides what is
+     * actually handed over, so a caller that measures the deck from the ask is wrong by the
+     * difference. A source with nothing to say about it leaves this null.
+     */
+    val landedUs: Long? get() = null
+
     fun close()
 }
 
@@ -45,6 +53,10 @@ internal class DesktopDecodeAhead(
     private val wake = lock.newCondition()
 
     private val queue = ArrayDeque<FloatArray>()
+    /** The song position each queued block starts at, kept index-for-index with [queue]. */
+    private val queueStarts = ArrayDeque<Long>()
+    /** The end of the last block appended, so an unstamped block still gets a start. */
+    private var queueEndUs = Long.MIN_VALUE / 4
     private var queuedSamples = 0
     private var ended = false
     private var closed = false
@@ -56,6 +68,17 @@ internal class DesktopDecodeAhead(
 
     /** How much of the array [readSamples] returned is actually this block. */
     var sampleCount: Int = 0
+        private set
+
+    /**
+     * Where the first block since the last [seek] really begins, as the decoder says, or null while
+     * it has not answered. Read from the queue, so it is the deck's own start rather than the ask.
+     */
+    var landedUs: Long? = null
+        private set
+
+    /** Where in the song the block last handed to the caller begins. */
+    var headUs: Long? = null
         private set
 
     private val worker = Thread(::decodeLoop, name).apply {
@@ -76,6 +99,8 @@ internal class DesktopDecodeAhead(
             }
         }
         val block = queue.removeFirstOrNull()
+        val blockStart = queueStarts.removeFirstOrNull()
+        if (blockStart != null) headUs = blockStart
         if (block == null) {
             sampleCount = 0
             return null
@@ -92,9 +117,13 @@ internal class DesktopDecodeAhead(
         lock.withLock {
             generation++
             queue.clear()
+            queueStarts.clear()
             queuedSamples = 0
             ended = false
             started = false
+            landedUs = null
+            headUs = null
+            queueEndUs = Long.MIN_VALUE / 4
             pendingSeekUs = micros
             wake.signal()
         }
@@ -137,6 +166,9 @@ internal class DesktopDecodeAhead(
                     DesktopTrackLog.log("decode-ahead: decoder failed, ending the track: ${failure.message}")
                     null
                 }
+                // Only this thread reads the decoder, so its answer about where this block landed is
+                // taken here and handed to the audio thread through the same lock as the block.
+                val landedFromSource = source.landedUs
                 lock.withLock {
                     // A seek came in while this block was being read; it belongs to the old position.
                     if (decodingFor != generation) return@withLock
@@ -146,10 +178,27 @@ internal class DesktopDecodeAhead(
                     // CI, where scheduling lets the caller's close win this race consistently;
                     // Linux's timing hides it. The block dies with the closed reader.
                     if (closed) return@withLock
+                    if (landedFromSource != null) landedUs = landedFromSource
                     if (decoded == null) {
                         ended = true
                     } else if (decoded.isNotEmpty()) {
                         queue.addLast(decoded)
+                        // A block's start: the decoder's own timestamp for the first block after a
+                        // seek, and otherwise the end of the one before it. A block is always
+                        // recorded, so the starts stay index-for-index with the queue; a missing
+                        // one would leave the two deques one block apart for good, and the
+                        // reported head would then sit permanently behind the audio.
+                        val perChannel = decoded.size / outputFormat.channels.coerceAtLeast(1)
+                        val blockUs = perChannel * 1_000_000L /
+                            outputFormat.sampleRate.coerceAtLeast(1)
+                        val start = when {
+                            queueStarts.isNotEmpty() -> queueEndUs
+                            landedFromSource != null -> landedFromSource
+                            else -> 0L
+                        }
+                        val end = start + blockUs
+                        queueEndUs = end
+                        queueStarts.addLast(start)
                         queuedSamples += decoded.size
                     }
                     ready.signalAll()

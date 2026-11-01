@@ -86,6 +86,7 @@
     <string name="d_name_optional">Nome (opcional)</string>
     <string name="d_new">Novidades</string>
     <string name="d_new_music_moods_and_discoveries">Música nova, ambientes e descobertas</string>
+    <string name="d_new_release">Novo lançamento</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">Não foi encontrado nenhum perfil de navegador nesta máquina.</string>
     <string name="d_no_downloads">Sem transferências</string>
     <string name="d_nobody_is_signed_in">Ninguém tem sessão iniciada. A tua biblioteca, playlists e histórico precisam de uma conta do YouTube Music.</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">Esta faixa não é do YouTube Music, por isso só pode ir para uma playlist guardada aqui.</string>
     <string name="d_time">DURAÇÃO</string>
     <string name="d_title_bar">Barra de título</string>
+    <string name="d_top_picks_for_you">Melhores seleções para você</string>
     <string name="d_top_result">Melhor resultado</string>
     <string name="d_track_info_hint">Vale apenas para esta faixa. Se a fonte escolhida não tiver uma cópia dela, o BitChord volta à ordem habitual.</string>
     <string name="d_track_information">Informações da faixa</string>
     <string name="d_about_track">Sobre esta música</string>
     <string name="d_artist_signature_service">Serviço de assinatura do artista</string>
+    <string name="d_all_playlists">Todas as playlists</string>
     <string name="d_artist_signature_off">Desativado. Nada é obtido até você adicionar seu próprio link.</string>
     <string name="d_artist_signature_dialog">O BitChord pede uma assinatura manuscrita a um serviço à sua escolha e a desenha em branco sobre o cabeçalho do artista. O link deve responder com JSON. Coloque {artist} onde o nome deve aparecer, ou omita e o nome será acrescentado como ?artist=…&amp;type=handwritten. Limpe o campo para nada obter.</string>
     <string name="hidden_items">Itens ocultos</string>
@@ -257,6 +260,7 @@
     <string name="d_already_added_as">Já adicionada como %1$s</string>
     <string name="d_count_minutes">%1$s minutos</string>
     <string name="d_count_songs">%1$s músicas</string>
+    <string name="d_find_your_mood">Encontre o seu humor</string>
     <string name="d_module_index_detected">Índice de módulos · %1$s módulos</string>
     <string name="d_on_this_computer">Neste computador</string>
     <string name="d_one_song">1 música</string>

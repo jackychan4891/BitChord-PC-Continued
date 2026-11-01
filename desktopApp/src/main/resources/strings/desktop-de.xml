@@ -86,6 +86,7 @@
     <string name="d_name_optional">Name (optional)</string>
     <string name="d_new">Neu</string>
     <string name="d_new_music_moods_and_discoveries">Neue Musik, Stimmungen und Entdeckungen</string>
+    <string name="d_new_release">Neue Veröffentlichung</string>
     <string name="d_no_browser_profile_was_found_on_this_machine">Auf diesem Rechner wurde kein Browserprofil gefunden.</string>
     <string name="d_no_downloads">Keine Downloads</string>
     <string name="d_nobody_is_signed_in">Niemand ist angemeldet. Deine Mediathek, Playlists und dein Verlauf brauchen ein YouTube Music-Konto.</string>
@@ -148,11 +149,13 @@
     <string name="d_this_track_is_not_from_youtube_music_so_it_can_only_go_i">Dieser Titel stammt nicht von YouTube Music und kann daher nur in eine hier gespeicherte Playlist.</string>
     <string name="d_time">ZEIT</string>
     <string name="d_title_bar">Titelleiste</string>
+    <string name="d_top_picks_for_you">Top-Auswahlen für dich</string>
     <string name="d_top_result">Bestes Ergebnis</string>
     <string name="d_track_info_hint">Gilt nur für diesen Titel. Wenn die gewählte Quelle keine Kopie davon hat, spielt BitChord sie in der üblichen Reihenfolge.</string>
     <string name="d_track_information">Titelinformationen</string>
     <string name="d_about_track">Über diesen Titel</string>
     <string name="d_artist_signature_service">Künstler-Signaturdienst</string>
+    <string name="d_all_playlists">Alle Wiedergabelisten</string>
     <string name="d_artist_signature_off">Aus. Ohne eigenen Link wird nichts abgerufen.</string>
     <string name="d_artist_signature_dialog">BitChord fragt einen Dienst deiner Wahl nach einer handschriftlichen Signatur und zeichnet sie weiß über den Künstlerkopf. Der Link muss mit JSON antworten. Setze {artist} an die Stelle des Namens, oder lass es weg — dann wird der Name als ?artist=…&amp;type=handwritten angehängt. Lass das Feld leer, um gar nichts abzurufen.</string>
     <string name="hidden_items">Ausgeblendete Elemente</string>
@@ -254,6 +257,7 @@
     <string name="d_already_added_as">Bereits als %1$s hinzugefügt</string>
     <string name="d_count_minutes">%1$s Minuten</string>
     <string name="d_count_songs">%1$s Songs</string>
+    <string name="d_find_your_mood">Finde deine Stimmung</string>
     <string name="d_module_index_detected">Modulindex · %1$s Module</string>
     <string name="d_on_this_computer">Auf diesem Computer</string>
     <string name="d_one_song">1 Song</string>

@@ -370,12 +370,21 @@ internal object DesktopSourceRegistry {
                 "  asking for: " + DesktopTrackMatcher.queries(song).joinToString(" | ").ifBlank { "(nothing)" },
             )
         }
+        // A seam owns the first seconds of this track, so what it is handed is the copy that answers
+        // at once — YouTube Music, which is the one leg that never has to ask a catalogue. The other
+        // leg is left running and comes back as the pending substitute, which the engine installs
+        // once the blend is over: never across it, and never before it is armed.
+        val forSeam = mixEngaged
         val lookup = scope.async {
-            withTimeoutOrNull(SUBSTITUTE_TIMEOUT_MS) { firstSubstitute(higher, song, quality) }
+            // Given the upgrade's patience rather than the race's: this answer is no longer in a
+            // hurry, and a seam plus its settle outlasts the 20s the race is worth.
+            withTimeoutOrNull(if (forSeam) UPGRADE_TIMEOUT_MS else SUBSTITUTE_TIMEOUT_MS) {
+                firstSubstitute(higher, song, quality, bestOfAll = forSeam)
+            }
         }
         val fallback = scope.async { youtube.resolve(song, quality).getOrNull() }
 
-        val quick: DesktopStream? = select {
+        val quick: DesktopStream? = if (forSeam) null else select {
             lookup.onAwait { it }
             // A YouTube leg that finished without a URL has not won anything.
             fallback.onAwait { stream -> if (stream != null) null else lookup.await() }
@@ -394,10 +403,21 @@ internal object DesktopSourceRegistry {
         val youtubeStream = fallback.await()
             ?: lookup.await()
             ?: error("No enabled music source could play this track")
-        // Still running means it lost the race rather than ran out of answers.
-        val pending = lookup.takeIf { it.isActive }
+        // Outside a seam, "still running" is the only answer worth holding: one already in hand had
+        // its turn at the race, and whatever did not win it is not going to. Under a seam every
+        // answer is held, however it landed — the catalogue usually finishes while YouTube is still
+        // fetching its URL, and throwing that copy away for having been early is how a track came
+        // out of the blend in the same quality it went in.
+        val pending = if (forSeam) lookup else lookup.takeIf { it.isActive }
         if (pending != null) {
-            DesktopTrackLog.log("'${song.title}' started on YouTube while the other sources keep looking")
+            DesktopTrackLog.log(
+                if (forSeam) {
+                    "'${song.title}' starts on YouTube Music for its seam; the better copy waits " +
+                        "for the mix to be over"
+                } else {
+                    "'${song.title}' started on YouTube while the other sources keep looking"
+                },
+            )
         }
         DesktopLiveResolution(youtubeStream, pending)
     }
@@ -437,22 +457,54 @@ internal object DesktopSourceRegistry {
         return scope.async { withTimeoutOrNull(UPGRADE_TIMEOUT_MS) { firstSubstitute(better, song, quality) } }
     }
 
-    /** The first usable stream from any of [sources], each asked in parallel. */
+    /**
+     * A usable stream from any of [sources], each asked in parallel.
+     *
+     * By default the first one that answers is the answer, because the track is silent while this
+     * runs. [bestOfAll] is for the copy a seam is holding: nothing is waiting on it, so every
+     * source gets its say and the best of them is what gets handed over.
+     */
     private suspend fun firstSubstitute(
         sources: List<SourceAdapter>,
         song: Song,
         quality: String?,
+        bestOfAll: Boolean = false,
     ): DesktopStream? = coroutineScope {
+        if (bestOfAll) {
+            // The race takes the first copy that beats YouTube because a track is waiting to start.
+            // A seam has already agreed to wait, so the shallow copy that answered in two seconds is
+            // not the answer — taking it anyway was how a track came out of a blend on 16-bit/44.1
+            // from one catalogue while the 24-bit/96 of the same recording had answered a second
+            // later and been cancelled for having been late.
+            val asked = sources.map { source ->
+                async { runCatching { openBest(source, song, quality) }.getOrNull() }
+            }
+            // Every source, up to the race's own patience in total: a source that has stopped
+            // answering does not get to hold the upgrade behind the whole of its timeout.
+            var best: DesktopStream? = null
+            val deadline = System.currentTimeMillis() + SUBSTITUTE_TIMEOUT_MS
+            asked.forEach { answered ->
+                val left = deadline - System.currentTimeMillis()
+                if (left <= 0L) return@forEach
+                val stream = runCatching { withTimeoutOrNull(left) { answered.await() } }.getOrNull()
+                    ?: return@forEach
+                best = betterOf(best, stream)
+            }
+            asked.forEach { it.cancel() }
+            return@coroutineScope best
+        }
         val running = sources
             .map { source ->
                 async { openBest(source, song, quality) }
             }
             .toMutableList()
-        val atmosWanted = wantsAtmos()
         var held: DesktopStream? = null
         var graceEndsAt = 0L
         try {
             while (running.isNotEmpty()) {
+                // Asked again each turn: a seam that comes due part-way through ends the wait, and
+                // the stereo copy that was held is the answer.
+                val atmosWanted = wantsAtmos()
                 val done = if (held == null) {
                     select<Deferred<DesktopStream?>> {
                         running.forEach { candidate -> candidate.onAwait { candidate } }
@@ -462,7 +514,7 @@ internal object DesktopSourceRegistry {
                     // remaining sources a moment to mint the immersive copy before handing
                     // a stereo one back.
                     val left = graceEndsAt - System.currentTimeMillis()
-                    if (left <= 0L) break
+                    if (left <= 0L || mixEngaged) break
                     withTimeoutOrNull(left) {
                         select<Deferred<DesktopStream?>> {
                             running.forEach { candidate -> candidate.onAwait { candidate } }
@@ -620,9 +672,26 @@ internal object DesktopSourceRegistry {
         return ranked.sortedByDescending { it.sourceQuality == DesktopModuleSource.LOSSLESS }
     }
 
-    /** Whether an immersive mix should be preferred right now. */
+    /**
+     * Raised by the playback engine for as long as a transition owns the decks — the arming lead,
+     * the blend itself, and the hand-over out of it.
+     *
+     * Written from the audio thread and read from the searches that wait on it, so it is volatile
+     * rather than confined.
+     */
+    @Volatile internal var mixEngaged = false
+
+    /**
+     * Whether an immersive mix should be preferred right now.
+     *
+     * Waiting for Atmos holds a stereo copy for [ATMOS_GRACE_MS] and, when the mix answers, means
+     * re-opening the deck for it: a network read, a demuxer and a sink flush all at once. Landing
+     * that inside a seam re-cues a song the blend is still counting from, which is what put its
+     * lyrics ahead of the singing for the rest of the track. The immersive mix is asked again as
+     * soon as [mixEngaged] comes down.
+     */
     internal fun wantsAtmos(): Boolean =
-        DesktopCodecs.supportsDolbyAtmos && DesktopAddonSettings.dolbyAtmosEnabled
+        !mixEngaged && DesktopCodecs.supportsDolbyAtmos && DesktopAddonSettings.dolbyAtmosEnabled
 
     /** Which of two renditions of the same recording is the better one. */
     private fun betterOf(current: DesktopStream?, candidate: DesktopStream): DesktopStream {

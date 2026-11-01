@@ -235,10 +235,10 @@ data class LyricLine(
      * bar sliding across the text.
      *
      * How high a word goes is set by how long it is held — see [liftHeight]:
-     * patter barely leaves the line and a carried note goes all the way up,
-     * the same "a note carried is worth more than a note rattled off" that
-     * shapes the glow. It rises over its own length, so a quick word's small
-     * lift is also a quick one.
+     * the "a note carried is worth more than a note rattled off" that shapes
+     * the glow, kept to a small share of the height so the words of one line
+     * still rest on the same lifted row. What the hold really governs is the
+     * pace: a quick word's lift is also a quick one.
      *
      * A sung word then stays up for good: the line carries all of its risen
      * words, which is what makes the row read as sung rather than as a bar
@@ -515,10 +515,13 @@ private const val LINE_HOLD_MS = 800L
 /**
  * How far up a word goes, as a share of the full lift, from how long it is held.
  *
- * A word sung in [LIFT_QUICK_MS] or less only nudges up by [LIFT_FLOOR]; one
- * held for [LIFT_HELD_MS] or more goes the whole way. Eased between the two, so
- * the words of an ordinary line differ from one another by a little rather than
- * falling into "up" and "not up".
+ * Nearly all of it either way. The lift used to be read off the hold at full
+ * strength, which put a spoken syllable a quarter of the way up and a carried
+ * note all the way — and once the peak was big enough to see, that spread was
+ * the whole of what a sung line looked like: a row of words resting at
+ * different heights instead of one line that rose. The hold still sets how
+ * *quickly* each word leaves the line, and [LIFT_FLOOR] keeps the heights
+ * close enough that the line reads as moving together.
  */
 private fun liftHeight(word: LyricWord): Float {
     val held = (word.endMs - word.startMs).toFloat()
@@ -528,7 +531,7 @@ private fun liftHeight(word: LyricWord): Float {
 
 private const val LIFT_QUICK_MS = 150f
 private const val LIFT_HELD_MS = 900f
-private const val LIFT_FLOOR = 0.25f
+private const val LIFT_FLOOR = 0.85f
 
 /** Ease in and out of the ends, so the lift has no corners on it. */
 private fun smooth(fraction: Float) = fraction * fraction * (3f - 2f * fraction)

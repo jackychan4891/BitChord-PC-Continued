@@ -57,27 +57,30 @@ const val MIN_DJ_CONFIDENCE = 0.2
 const val MIN_BPM = 40.0
 const val MAX_BPM = 220.0
 
-/** How far a tempo pairing may drift from unity and still be considered transparent to stretch. */
-const val MAX_STRETCH_DEVIATION = 0.04
+/**
+ * The blend's stretch window: the incoming song may be slowed down by at most
+ * 10% and sped up by at most 25% to meet the outgoing tempo. Asymmetric
+ * because the two directions fail differently: a stretch that speeds up drops
+ * slivers of audio and stays clean far past 10%, while one that slows down has
+ * to repeat them, which is where the metallic smear comes from. Past either
+ * end the pair is not beatmatched (the filter mix).
+ */
+const val MIN_INCOMING_RATE = 0.9
+const val MAX_INCOMING_RATE = 1.25
 
 /**
- * Advanced Automix's window: how far either track may be *sped up* to meet
- * the other. Only ever up — a time-stretch that speeds up drops slivers of
- * audio, which stays clean well past 4%, while one that slows down has to
- * repeat them, which is where the metallic smear comes from. So the slower
- * track is always the one moved: the incoming one when it is slower, the
- * outgoing one (over its last beats, before the blend) when it is.
+ * The rate the incoming song plays at to meet [outgoingBpm] (its tempo folded
+ * into the outgoing octave first): above 1 speeds it up.
  */
-const val MAX_SPEED_UP = 0.10
+fun incomingRateBetween(outgoingBpm: Double, incomingBpm: Double): Double {
+    if (outgoingBpm <= 0 || incomingBpm <= 0) return Double.NaN
+    return outgoingBpm / alignTempoOctave(outgoingBpm, incomingBpm)
+}
 
-/**
- * The speed-up that meets [outgoingBpm] and [incomingBpm] (octave-aligned),
- * as a factor above 1 — whichever track it applies to.
- */
-fun speedUpBetween(outgoingBpm: Double, incomingBpm: Double): Double {
-    if (outgoingBpm <= 0 || incomingBpm <= 0) return Double.POSITIVE_INFINITY
-    val ratio = outgoingBpm / alignTempoOctave(outgoingBpm, incomingBpm)
-    return max(ratio, 1 / ratio)
+/** Whether a blend can beatmatch this pair inside [MIN_INCOMING_RATE]..[MAX_INCOMING_RATE]. */
+fun stretchReachable(outgoingBpm: Double, incomingBpm: Double): Boolean {
+    val rate = incomingRateBetween(outgoingBpm, incomingBpm)
+    return rate.isFinite() && rate >= MIN_INCOMING_RATE - 1e-9 && rate <= MAX_INCOMING_RATE + 1e-9
 }
 
 /**
@@ -523,7 +526,7 @@ fun resolveMixOutAnchor(
 fun assessTransitionTier(
     analysis: TrackAnalysis,
     nextAnalysis: TrackAnalysis,
-    /** Advanced Automix: tempi within [MAX_SPEED_UP] of each other may beat-match, by speeding one up. */
+    /** Both modes stretch across the same window ([stretchReachable]); kept for the callers that vary. */
     advanced: Boolean = false,
 ): TransitionPolicyVerdict {
     val outgoingBpm = analysis.bpm.orZero()
@@ -547,13 +550,7 @@ fun assessTransitionTier(
         )
     }
 
-    val stretchRatio = outgoingBpm / alignTempoOctave(outgoingBpm, incomingBpm)
-    val tempoTooFar = if (advanced) {
-        speedUpBetween(outgoingBpm, incomingBpm) - 1 > MAX_SPEED_UP
-    } else {
-        abs(stretchRatio - 1) > MAX_STRETCH_DEVIATION
-    }
-    if (tempoTooFar) reasons += "tempo-distance"
+    if (!stretchReachable(outgoingBpm, incomingBpm)) reasons += "tempo-distance"
     if (outgoingConfidence < MIN_BEATMATCH_CONFIDENCE || incomingConfidence < MIN_BEATMATCH_CONFIDENCE) {
         reasons += "beat-confidence"
     }

@@ -583,7 +583,8 @@ fun LibraryGridPage(
 /**
  * The site's Library measure. Its breakpoints count the whole window — the 260dp navigation
  * column this page is drawn beside included — and force five columns from 1260dp and six from
- * 1580dp; below that the grid fits as many 170dp cards as the page allows.
+ * 1580dp; below that the grid fits as many 184dp cards as the page allows, which is what the site
+ * lays its own tiles at.
  */
 private fun siteLibraryColumns(contentWidth: Dp): Int {
     val viewport = contentWidth.value + LIBRARY_SIDEBAR_WIDTH
@@ -591,7 +592,7 @@ private fun siteLibraryColumns(contentWidth: Dp): Int {
         viewport >= 1580f -> 6
         viewport >= 1260f -> 5
         else -> (((contentWidth.value + LIBRARY_GRID_SPACING.value) /
-            (170f + LIBRARY_GRID_SPACING.value)).toInt()).coerceIn(2, 6)
+            (184f + LIBRARY_GRID_SPACING.value)).toInt()).coerceIn(2, 6)
     }
 }
 

@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -148,9 +147,6 @@ internal fun DesktopWebPlayer(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onSeek: (Long) -> Unit,
-    volume: Float,
-    onVolumeChange: (Float) -> Unit,
-    onOpenAudioOutput: () -> Unit,
     /** The quality badge opens the audio pipeline readout, as it does on every other player. */
     onOpenTrackInfo: () -> Unit,
     onOpenMenu: () -> Unit,
@@ -393,17 +389,9 @@ internal fun DesktopWebPlayer(
             WebCornerButton(
                 icon = if (panel == WebPanel.LYRICS) BitChordIcons.Lyrics else BitChordIcons.LyricsOff,
                 contentDescription = DesktopStrings["open_lyrics", "Lyrics"],
-                pressed = panel == WebPanel.LYRICS,
                 iconSize = 18.dp,
+                pressed = panel == WebPanel.LYRICS,
                 onClick = { panel = if (panel == WebPanel.LYRICS) null else WebPanel.LYRICS },
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = 20.dp),
-            )
-            WebPlayerActions(
-                volume = volume,
-                onVolumeChange = onVolumeChange,
-                onOpenAudioOutput = onOpenAudioOutput,
-                queueOpen = panel == WebPanel.QUEUE,
-                onToggleQueue = { panel = if (panel == WebPanel.QUEUE) null else WebPanel.QUEUE },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 20.dp),
             )
         }
@@ -411,16 +399,18 @@ internal fun DesktopWebPlayer(
 }
 
 /** The player's two panes, either of which may sit beside the artwork. */
-private enum class WebPanel { LYRICS, QUEUE }
+internal enum class WebPanel { LYRICS, QUEUE }
 
 /**
  * Which pane the player had up when it closed. The player reopens on the same
- * one, so a lyric pane left open is there again on the next visit.
+ * one, so a lyric pane left open is there again on the next visit. Read and
+ * written by the window's Ctrl+Q / Ctrl+L, which switch the same pane the
+ * player's own corner button does.
  */
-private val webPlayerPanelState = mutableStateOf<WebPanel?>(null)
+internal val webPlayerPanelState = mutableStateOf<WebPanel?>(null)
 
 /** How far above the pane's middle the sung line rests — the player's own, smaller raise. */
-private const val PLAYER_LYRICS_CENTRE_RAISE = 0.07f
+private const val PLAYER_LYRICS_CENTRE_RAISE = 0.12f
 
 /** One full turn of the turntable record, in milliseconds. */
 private const val DECK_TURN_MILLIS = 4_800
@@ -1027,88 +1017,6 @@ private fun WebCircleButton(
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription, tint = WebPrimary, modifier = Modifier.size(18.dp))
-    }
-}
-
-/**
- * The bottom-right corner: the queue disc and the volume disc, with the
- * volume slider sliding in between them while the pointer is anywhere over
- * the corner. The queue fades out to make room, exactly as the reference's
- * `--volume-gap:36px` slider replaces it.
- */
-@Composable
-private fun WebPlayerActions(
-    volume: Float,
-    onVolumeChange: (Float) -> Unit,
-    onOpenAudioOutput: () -> Unit,
-    queueOpen: Boolean,
-    onToggleQueue: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val actionsHover = remember { MutableInteractionSource() }
-    val volumeHover = remember { MutableInteractionSource() }
-    val overActions by actionsHover.collectIsHoveredAsState()
-    val overVolume by volumeHover.collectIsHoveredAsState()
-    var sliderOpen by remember { mutableStateOf(false) }
-    var volumeMenu by remember { mutableStateOf(false) }
-    LaunchedEffect(overVolume, overActions) {
-        if (overVolume) sliderOpen = true else if (!overActions) sliderOpen = false
-    }
-    val reveal by animateFloatAsState(if (sliderOpen) 1f else 0f, tween(150), label = "actionsReveal")
-    // 132 wide so the 96dp slider, right-aligned 36dp in from the edge, sits
-    // fully inside and stays hit-testable.
-    Box(modifier.width(132.dp).height(32.dp).hoverable(actionsHover)) {
-        Row(
-            Modifier.align(Alignment.CenterEnd),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.graphicsLayer { alpha = 1f - reveal }) {
-                WebCornerButton(
-                    icon = BitChordIcons.Queue,
-                    contentDescription = DesktopStrings["up_next", "Up next"],
-                    iconSize = 18.dp,
-                    pressed = queueOpen,
-                    onClick = onToggleQueue,
-                )
-            }
-            Box(Modifier.hoverable(volumeHover)) {
-                WebCornerButton(
-                    icon = BitChordIcons.TransportVolume(volume),
-                    contentDescription = DesktopStrings["d_volume_and_audio_output", "Volume and audio output"],
-                    iconSize = 18.dp,
-                    onClick = { volumeMenu = true },
-                )
-            }
-        }
-        if (reveal > 0f) {
-            WebVolumeSlider(
-                value = volume,
-                onValueChange = onVolumeChange,
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .offset(x = (-36).dp)
-                    .graphicsLayer {
-                        alpha = reveal
-                        translationX = (1f - reveal) * 8.dp.toPx()
-                    }
-                    .hoverable(volumeHover),
-            )
-        }
-        // A click on the disc opens the fuller menu — the same slider plus the
-        // audio output row — rather than just the inline bar.
-        DesktopDropdownMenu(volumeMenu, { volumeMenu = false }) {
-            Box(Modifier.width(180.dp).padding(horizontal = 16.dp)) {
-                DesktopThinSlider(volume, onVolumeChange, idleHeight = 4.dp, activeHeight = 8.dp)
-            }
-            DropdownMenuItem(
-                text = { Text(DesktopStrings["audio_output", "Audio output"]) },
-                leadingIcon = { Icon(BitChordIcons.Headphones, null) },
-                onClick = {
-                    volumeMenu = false
-                    onOpenAudioOutput()
-                },
-            )
-        }
     }
 }
 
