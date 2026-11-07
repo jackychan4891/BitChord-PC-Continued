@@ -31,8 +31,8 @@ jobs:
         shell: bash
         run: |
           cargo_ver=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          iss_ver=$(grep -m1 '#define AppVersion' installer/ytm-rs.iss | cut -d'"' -f2)
-          echo "Cargo.toml $cargo_ver, ytm-rs.iss $iss_ver"
+          iss_ver=$(grep -m1 '#define AppVersion' installer/bitchord.iss | cut -d'"' -f2)
+          echo "Cargo.toml $cargo_ver, bitchord.iss $iss_ver"
           [ "$cargo_ver" = "$iss_ver" ] || { echo "version mismatch"; exit 1; }
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$cargo_ver" ]; then
             echo "tag $GITHUB_REF_NAME does not match v$cargo_ver"; exit 1
@@ -51,9 +51,9 @@ jobs:
 
       - name: Build installer
         run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q installer\ytm-rs.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q installer\bitchord.iss
           if ($LASTEXITCODE) { exit 1 }
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DArm64 installer\ytm-rs.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DArm64 installer\bitchord.iss
           if ($LASTEXITCODE) { exit 1 }
 
       # The portable zips: the exe, the marker that makes it portable, README and LICENSE.
@@ -62,8 +62,8 @@ jobs:
           foreach ($b in @(@{ dir = "target\release"; suffix = "" }, @{ dir = "target\aarch64-pc-windows-msvc\release"; suffix = "-arm64" })) {
             $out = "installer\Output\portable$($b.suffix)"
             New-Item -ItemType Directory -Force $out | Out-Null
-            Copy-Item "$($b.dir)\ytm-rs.exe", installer\portable.txt, README.md, LICENSE $out
-            & "$env:SystemRoot\System32\tar.exe" -a -c -f "installer\Output\ytm-rs-portable-$env:VERSION$($b.suffix).zip" -C $out ytm-rs.exe portable.txt README.md LICENSE
+            Copy-Item "$($b.dir)\bitchord.exe", installer\portable.txt, README.md, LICENSE $out
+            & "$env:SystemRoot\System32\tar.exe" -a -c -f "installer\Output\bitchord-portable-$env:VERSION$($b.suffix).zip" -C $out bitchord.exe portable.txt README.md LICENSE
             if ($LASTEXITCODE) { exit 1 }
           }
 
@@ -71,10 +71,10 @@ jobs:
         with:
           name: windows
           path: |
-            installer/Output/ytm-rs-setup-${{ env.VERSION }}.exe
-            installer/Output/ytm-rs-portable-${{ env.VERSION }}.zip
-            installer/Output/ytm-rs-setup-${{ env.VERSION }}-arm64.exe
-            installer/Output/ytm-rs-portable-${{ env.VERSION }}-arm64.zip
+            installer/Output/bitchord-setup-${{ env.VERSION }}.exe
+            installer/Output/bitchord-portable-${{ env.VERSION }}.zip
+            installer/Output/bitchord-setup-${{ env.VERSION }}-arm64.exe
+            installer/Output/bitchord-portable-${{ env.VERSION }}-arm64.zip
           if-no-files-found: error
 
   linux:
@@ -102,24 +102,24 @@ jobs:
       # it portable, README and LICENSE. The updater on Linux reads them too.
       - name: Build tarballs
         run: |
-          dir="ytm-rs-$VERSION-linux-x86_64"
+          dir="bitchord-$VERSION-linux-x86_64"
           mkdir -p "out/$dir"
-          cp target/release/ytm-rs linux/install.sh linux/ytm-rs.desktop README.md LICENSE "out/$dir/"
-          cp assets/icon/icon.png "out/$dir/ytm-rs.png"
-          chmod 755 "out/$dir/ytm-rs" "out/$dir/install.sh"
+          cp target/release/bitchord linux/install.sh linux/bitchord.desktop README.md LICENSE "out/$dir/"
+          cp assets/icon/icon.png "out/$dir/bitchord.png"
+          chmod 755 "out/$dir/bitchord" "out/$dir/install.sh"
           tar -czf "out/$dir.tar.gz" -C out "$dir"
-          dir="ytm-rs-portable-$VERSION-linux-x86_64"
+          dir="bitchord-portable-$VERSION-linux-x86_64"
           mkdir -p "out/$dir"
-          cp target/release/ytm-rs linux/portable.txt README.md LICENSE "out/$dir/"
-          chmod 755 "out/$dir/ytm-rs"
+          cp target/release/bitchord linux/portable.txt README.md LICENSE "out/$dir/"
+          chmod 755 "out/$dir/bitchord"
           tar -czf "out/$dir.tar.gz" -C out "$dir"
 
       - uses: actions/upload-artifact@v5
         with:
           name: linux
           path: |
-            out/ytm-rs-${{ env.VERSION }}-linux-x86_64.tar.gz
-            out/ytm-rs-portable-${{ env.VERSION }}-linux-x86_64.tar.gz
+            out/bitchord-${{ env.VERSION }}-linux-x86_64.tar.gz
+            out/bitchord-portable-${{ env.VERSION }}-linux-x86_64.tar.gz
           if-no-files-found: error
 
   macos:
@@ -153,19 +153,19 @@ jobs:
       - name: Build installers and portable zips
         run: |
           for arch in aarch64 x86_64; do
-            bin="target/$arch-apple-darwin/release/ytm-rs"
+            bin="target/$arch-apple-darwin/release/bitchord"
             stage="out/dmg-$arch"
-            dmg="out/ytm-rs-setup-$VERSION-macos-$arch.dmg"
+            dmg="out/bitchord-setup-$VERSION-macos-$arch.dmg"
             mkdir -p "$stage"
             sh macos/bundle.sh "$bin" "$VERSION" "$stage"
             ln -s /Applications "$stage/Applications"
             # hdiutil on the hosted runners sometimes fails with "Resource busy"; retry.
             for try in 1 2 3; do
-              hdiutil create -volname "YT Music" -srcfolder "$stage" -ov -format UDZO "$dmg" && break
+              hdiutil create -volname "BitChord" -srcfolder "$stage" -ov -format UDZO "$dmg" && break
               sleep 10
             done
             [ -f "$dmg" ]
-            dir="ytm-rs-portable-$VERSION-macos-$arch"
+            dir="bitchord-portable-$VERSION-macos-$arch"
             mkdir -p "out/$dir"
             sh macos/bundle.sh "$bin" "$VERSION" "out/$dir" portable
             cp README.md LICENSE "out/$dir/"
@@ -176,10 +176,10 @@ jobs:
         with:
           name: macos
           path: |
-            out/ytm-rs-setup-${{ env.VERSION }}-macos-aarch64.dmg
-            out/ytm-rs-portable-${{ env.VERSION }}-macos-aarch64.zip
-            out/ytm-rs-setup-${{ env.VERSION }}-macos-x86_64.dmg
-            out/ytm-rs-portable-${{ env.VERSION }}-macos-x86_64.zip
+            out/bitchord-setup-${{ env.VERSION }}-macos-aarch64.dmg
+            out/bitchord-portable-${{ env.VERSION }}-macos-aarch64.zip
+            out/bitchord-setup-${{ env.VERSION }}-macos-x86_64.dmg
+            out/bitchord-portable-${{ env.VERSION }}-macos-x86_64.zip
           if-no-files-found: error
 
   attach:
@@ -202,5 +202,5 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" files/* --clobber
             gh release edit "$GITHUB_REF_NAME" --draft=false --latest
           else
-            gh release create "$GITHUB_REF_NAME" files/* --draft --title "ytm-rs ${GITHUB_REF_NAME#v}" --notes ""
+            gh release create "$GITHUB_REF_NAME" files/* --draft --title "bitchord ${GITHUB_REF_NAME#v}" --notes ""
           fi

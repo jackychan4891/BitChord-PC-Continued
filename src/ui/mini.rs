@@ -18,7 +18,7 @@ use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2, ViewportCommand, WindowLevel, p
 use serde::{Deserialize, Serialize};
 
 use super::widgets::{self, icon_at, named, paint_cover, text_at};
-use super::{Action, App, fmt_time, titlebar};
+use super::{Action, App, fmt_time, glyphs, titlebar};
 use crate::theme::{self, icon};
 
 // Decisions that are easy to change.
@@ -474,9 +474,11 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     if titlebar::drag_strip(ui, r, "mini").double_clicked() {
         app.actions.push(Action::Mini(false));
     }
-    ui.painter().rect_filled(r, 0.0, theme::panel(0.18));
+    ui.painter().rect_filled(r, theme::thumb_radius() + 1.0, theme::panel(0.62));
 
-    let track = app.current().cloned();
+    // An Automix handoff keeps the outgoing song here until the next one is louder.
+    let hold = app.mix_hold().is_some();
+    let track = if hold { app.shown().cloned() } else { app.current().cloned() };
     let pad = 12.0;
     let art = Rect::from_min_size(r.min + Vec2::splat(pad), Vec2::splat(r.height() - 2.0 * pad - 4.0));
     match &track {
@@ -484,6 +486,17 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
         None => {
             ui.painter().rect_filled(art, theme::thumb_radius() + 1.0, theme::glass(0.08));
             icon_at(ui, art.center(), icon::MUSIC, 28.0, theme::text_faint());
+        }
+    }
+    // Apple's motion sleeve, over the still until its first frame arrives.
+    if let Some(t) = &track
+        && let Some(album) = t.album.as_ref().map(|a| a.name.clone()).filter(|a| !a.is_empty())
+    {
+        let artist = t.artists.first().map(|a| a.name.clone()).unwrap_or_else(|| t.artist_line());
+        let px = (art.width() * ctx.pixels_per_point()).round().max(256.0) as u32;
+        app.apple_cover(&album, &artist, Some(&t.title));
+        if let Some(s) = app.apple_sprite(&ctx, &album, &artist, px) {
+            widgets::paint_motion(ui, art, theme::thumb_radius() + 1.0, &s);
         }
     }
 
@@ -499,7 +512,12 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     if let Some(t) = &track {
         named(ui.interact(tr, ui.scope_id().with("mini-title"), Sense::hover()), &t.title).on_hover_text(&t.title);
     }
-    text_at(ui, pos2(x0, art.top() + 22.0), &artists, theme::regular(12.5), theme::text_dim(), text_w);
+    let ar = text_at(ui, pos2(x0, art.top() + 22.0), &artists, theme::regular(12.5), theme::text_dim(), text_w);
+    // The quality glyph follows the artists, centred on their line, when there's room.
+    let bw = super::nowplaying::audio_badge_icon_width(app, true);
+    if bw > 0.0 && ar.right() + 8.0 + bw <= x1 {
+        super::nowplaying::audio_badge_icon(app, ui, pos2(ar.right() + 8.0 + bw / 2.0, ar.center().y), true);
+    }
 
     // Top right: pin, full window, close. They show while the pointer is on the strip (or
     // one of them has the keyboard), over a backdrop, so the title has the whole width.
@@ -550,73 +568,117 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
         app.mini.set_pinned(&ctx, !pinned);
     }
 
-    // One group, centred under the text: like, previous, play, next, volume.
+    // One group, centred under the text: like, previous, play, next, volume. Hovering
+    // the volume slides a volume track over the group, as the player bar's does.
     let cy = art.bottom() - 17.0;
     let cx = (x0 + x1) / 2.0;
     let enabled = track.is_some();
-    let small = |ui: &mut Ui, c: Pos2, glyph: char, name: &str| -> bool {
-        let b = Rect::from_center_size(c, Vec2::splat(34.0));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(b));
-        widgets::icon_button(&mut child, glyph, 18.0, name, false).clicked()
-    };
-    if small(ui, pos2(cx - 44.0, cy), icon::SKIP_BACK, "Previous") && enabled {
-        app.prev();
+    let vol = app.audio.volume();
+    let vpos = pos2(cx + 88.0, cy);
+    let vhit = Rect::from_center_size(vpos, Vec2::splat(32.0));
+    let slider = Rect::from_min_max(pos2(cx - 88.0, cy - 10.0), pos2(cx + 58.0, cy + 10.0));
+    let open_id = ui.scope_id().with("mini-vol-open");
+    let was_open = ui.data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
+    // Pointer position, not `rect_contains_pointer`: layers above the mini player's own
+    // (window chrome, the drag regions) would otherwise hide the pointer from it.
+    let hover = |r: Rect| ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
+    let band = Rect::from_min_max(pos2(slider.left() - 4.0, cy - 14.0), pos2(vhit.right(), cy + 14.0));
+    let open = hover(vhit) || ui.rect_contains_pointer(vhit) || (was_open && (hover(band) || ui.input(|i| i.pointer.any_down())));
+    ui.data_mut(|d| d.insert_temp(open_id, open));
+    if open != was_open {
+        ctx.request_repaint();
     }
-    if small(ui, pos2(cx + 44.0, cy), icon::SKIP_FORWARD, "Next") && enabled {
-        app.next();
-    }
-    let playing = app.playing();
-    let pr = Rect::from_center_size(pos2(cx, cy), Vec2::splat(36.0));
-    let presp = named(ui.interact(pr, ui.scope_id().with("mini-play"), Sense::click()), if playing { "Pause" } else { "Play" }).on_hover_cursor(egui::CursorIcon::PointingHand);
-    let ph = theme::anim_bool(&ctx, presp.id.with("h"), presp.hovered(), 0.15);
-    let scale = if presp.is_pointer_button_down_on() { 0.92 } else { 1.0 + 0.05 * ph };
-    let c = pr.center();
-    ui.painter().circle_filled(c, 18.0 * scale, if theme::light() { theme::text() } else { Color32::WHITE });
-    let glyph = theme::on_text();
-    let morph = theme::anim_bool(&ctx, "mini-play-morph", playing || app.buffering, 0.18);
-    if app.buffering {
-        let a = now as f32 * 6.0;
-        let pts = (0..20).map(|i| c + vec2((a + i as f32 * 0.22).cos(), (a + i as f32 * 0.22).sin()) * 7.0).collect();
-        ui.painter().add(egui::Shape::Path(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(2.0, glyph))));
-        ctx.request_repaint_after(Duration::from_millis(33));
-    } else if morph > 0.5 {
-        widgets::pause_bars(ui, c, 6.5 * (2.0 * morph - 1.0).max(0.4), glyph);
-    } else {
-        widgets::play_triangle(ui, c + vec2(1.2, 0.0), 7.0 * (1.0 - 2.0 * morph).max(0.4), glyph);
-    }
-    if presp.clicked() && enabled {
-        app.toggle();
-    }
+    let reveal = theme::anim_bool(&ctx, "mini-vol-reveal", open, 0.15);
+    if reveal < 0.5 {
+        // The same glyphs the player bar draws, a size down.
+        let small = |ui: &mut Ui, c: Pos2, key: &str, glyph: &'static [u8], name: &str| -> bool {
+            let b = Rect::from_center_size(c, Vec2::splat(34.0));
+            let resp = ui.interact(b, ui.scope_id().with(("mini-t", key)), Sense::click());
+            let resp = named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
+            let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.15);
+            glyphs::draw(ui, c, 20.0, glyph, theme::lerp_color(theme::text_dim(), theme::text(), h));
+            resp.clicked()
+        };
+        if small(ui, pos2(cx - 44.0, cy), "prev", glyphs::PREVIOUS, "Previous") && enabled {
+            app.prev();
+        }
+        if small(ui, pos2(cx + 44.0, cy), "next", glyphs::NEXT, "Next") && enabled {
+            app.next();
+        }
+        let playing = app.playing();
+        let pr = Rect::from_center_size(pos2(cx, cy), Vec2::splat(40.0));
+        let presp = named(ui.interact(pr, ui.scope_id().with("mini-play"), Sense::click()), if playing { "Pause" } else { "Play" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let ph = theme::anim_bool(&ctx, presp.id.with("h"), presp.hovered(), 0.15);
+        let c = pr.center();
+        let morph = theme::anim_bool(&ctx, "mini-play-morph", playing || app.buffering, 0.18);
+        let fg = theme::lerp_color(theme::text_dim(), theme::text(), 0.55 + 0.45 * ph);
+        if app.buffering {
+            let a = now as f32 * 6.0;
+            let pts = (0..20).map(|i| c + vec2((a + i as f32 * 0.22).cos(), (a + i as f32 * 0.22).sin()) * 7.0).collect();
+            ui.painter().add(egui::Shape::Path(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(2.0, fg))));
+            ctx.request_repaint_after(Duration::from_millis(33));
+        } else {
+            if morph < 1.0 {
+                glyphs::draw(ui, c, 26.0, glyphs::PLAY, theme::with_alpha(fg, 1.0 - morph));
+            }
+            if morph > 0.0 {
+                glyphs::draw(ui, c, 26.0, glyphs::PAUSE, theme::with_alpha(fg, morph));
+            }
+        }
+        if presp.clicked() && enabled {
+            app.toggle();
+        }
 
-    if let Some(t) = &track {
-        // What's heard, like Now playing's menu: a song version standing in for the music video.
-        let t = &app.playing_track().cloned().unwrap_or_else(|| t.clone());
-        let liked = app.liked.contains(&t.id);
-        let lpos = pos2(cx - 88.0, cy);
-        let lresp = ui.interact(Rect::from_center_size(lpos, Vec2::splat(32.0)), ui.scope_id().with("mini-like"), Sense::click());
-        let name = if liked { "Remove like" } else { "Like" };
-        let lresp = named(lresp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
-        let lh = theme::anim_bool(&ctx, lresp.id.with("h"), lresp.hovered(), 0.15);
-        let pop = theme::anim_bool(&ctx, ("liked", &t.id), liked, 0.3);
-        ui.painter().circle_filled(lpos, 16.0, theme::glass(0.1 * lh));
-        let size = 17.0 * (1.0 + 0.25 * (pop * std::f32::consts::PI).sin());
-        let outline = theme::lerp_color(theme::lerp_color(theme::text_dim(), theme::text(), lh), theme::RED, pop);
-        widgets::heart(ui, lpos, size, pop, outline, theme::RED);
-        if lresp.clicked() {
-            app.actions.push(Action::Like(t.clone(), !liked));
+        if let Some(t) = &track {
+            // What's heard, like Now playing's menu: a song version standing in for the music video.
+            let t = if hold { t.clone() } else { app.playing_track().cloned().unwrap_or_else(|| t.clone()) };
+            let liked = app.liked.contains(&t.id);
+            let lpos = pos2(cx - 88.0, cy);
+            let lresp = ui.interact(Rect::from_center_size(lpos, Vec2::splat(32.0)), ui.scope_id().with("mini-like"), Sense::click());
+            let name = if liked { "Remove like" } else { "Like" };
+            let lresp = named(lresp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
+            let lh = theme::anim_bool(&ctx, lresp.id.with("h"), lresp.hovered(), 0.15);
+            let pop = theme::anim_bool(&ctx, ("liked", &t.id), liked, 0.3);
+            // A liked song keeps a soft disc behind its star, as the player bar's does.
+            let disc = (0.17 * pop + 0.10 * lh).min(0.30);
+            if disc > 0.0 {
+                ui.painter().circle_filled(lpos, 16.0, theme::glass(disc));
+            }
+            let size = 18.0 * (1.0 + 0.25 * (pop * std::f32::consts::PI).sin());
+            let tint = theme::lerp_color(theme::lerp_color(theme::text_dim(), theme::text(), lh), app.accent_color(), pop);
+            glyphs::draw(ui, lpos, size, glyphs::STAR, tint);
+            if pop > 0.0 {
+                glyphs::draw(ui, lpos, size, glyphs::STAR_FILLED, theme::with_alpha(app.accent_color(), pop));
+            }
+            if lresp.clicked() {
+                app.actions.push(Action::Like(t.clone(), !liked));
+            }
+        }
+    } else {
+        let track_r = Rect::from_center_size(slider.center(), vec2(slider.width(), 4.0));
+        ui.painter().rect_filled(track_r, 2.0, theme::glass(0.16));
+        let fill = Rect::from_min_size(track_r.min, vec2(track_r.width() * vol, 4.0));
+        ui.painter().rect_filled(fill, 2.0, theme::text());
+        ui.painter().circle_filled(pos2(fill.right(), track_r.center().y), 6.0, theme::text());
+        let sresp = ui.interact(slider.expand2(vec2(0.0, 8.0)), ui.scope_id().with("mini-vol-slider"), Sense::click_and_drag());
+        let sresp = sresp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        sresp.widget_info(|| egui::WidgetInfo::slider(true, vol as f64, "Volume"));
+        if let Some(p) = sresp.interact_pointer_pos()
+            && (sresp.clicked() || sresp.dragged())
+        {
+            app.audio.set_volume(((p.x - track_r.left()) / track_r.width()).clamp(0.0, 1.0));
         }
     }
 
-    // Volume: click to mute, scroll to change.
+    // Volume: hover slides the track out, click mutes, scroll to change.
     let vol = app.audio.volume();
-    let vpos = pos2(cx + 88.0, cy);
-    let vresp = ui.interact(Rect::from_center_size(vpos, Vec2::splat(32.0)), ui.scope_id().with("mini-vol"), Sense::click());
+    let vresp = ui.interact(vhit, ui.scope_id().with("mini-vol"), Sense::click());
     let pct = format!("Volume {}%", (vol * 100.0).round());
     let vresp = named(vresp, "Mute").on_hover_text(pct).on_hover_cursor(egui::CursorIcon::PointingHand);
     let vh = theme::anim_bool(&ctx, vresp.id.with("h"), vresp.hovered(), 0.15);
     ui.painter().circle_filled(vpos, 16.0, theme::glass(0.1 * vh));
-    let vglyph = if vol == 0.0 { icon::VOLUME_X } else if vol < 0.5 { icon::VOLUME_1 } else { icon::VOLUME_2 };
-    icon_at(ui, vpos, vglyph, 17.0, theme::lerp_color(theme::text_dim(), theme::text(), vh));
+    let vglyph = glyphs::VOLUME[glyphs::volume_step(vol)];
+    glyphs::draw(ui, vpos, 18.0, vglyph, theme::lerp_color(theme::text_dim(), theme::text(), vh));
     if vresp.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
@@ -639,19 +701,31 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
 /// A line along the bottom; thicker on hover, with the time under the pointer.
 fn seek_line(app: &mut App, ui: &mut Ui, r: Rect, track: Option<&crate::model::Track>) {
     let status = app.audio.status.clone();
-    let total = status.duration().map(|d| d.as_secs_f32()).or(track.and_then(|t| t.duration).map(|d| d as f32)).unwrap_or(0.0);
-    let pos = app.seek_drag.unwrap_or(status.position_smooth().as_secs_f32()).min(total.max(0.0));
-    let hit = Rect::from_min_max(pos2(r.left(), r.bottom() - 10.0), r.max);
-    let resp = ui.interact(hit, ui.scope_id().with("mini-seek"), Sense::click_and_drag());
-    let resp = if total > 0.0 { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
-    resp.widget_info(|| egui::WidgetInfo::slider(total > 0.0, pos as f64, "Seek"));
-    let h = theme::anim_bool(ui.ctx(), "mini-seek-h", total > 0.0 && (resp.hovered() || resp.dragged()), 0.15);
+    let hold = app.mix_hold().map(|h| (h.total, app.mix_hold_pos(h)));
+    let total = match &hold {
+        Some((total, _)) => *total,
+        None => status.duration().map(|d| d.as_secs_f32()).or(track.and_then(|t| t.duration).map(|d| d as f32)).unwrap_or(0.0),
+    };
+    let smooth = match &hold {
+        Some((_, pos)) => *pos,
+        None => status.position_smooth().as_secs_f32(),
+    };
+    let held = hold.is_some();
+    let pos = app.seek_drag.unwrap_or(smooth).min(total.max(0.0));
+    // Runs the window's full width, like Apple's strip; the corner radius is small
+    // enough that the bottom edge rounds it off on its own.
+    let (l, rr) = (r.left(), r.right());
+    let hit = Rect::from_min_max(pos2(l, r.bottom() - 10.0), pos2(rr, r.bottom()));
+    let resp = ui.interact(hit, ui.scope_id().with("mini-seek"), if held { Sense::hover() } else { Sense::click_and_drag() });
+    let resp = if total > 0.0 && !held { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
+    resp.widget_info(|| egui::WidgetInfo::slider(total > 0.0 && !held, pos as f64, "Seek"));
+    let h = theme::anim_bool(ui.ctx(), "mini-seek-h", total > 0.0 && !held && (resp.hovered() || resp.dragged()), 0.15);
     let thick = 4.0 + 2.0 * h;
-    let line = Rect::from_min_max(pos2(r.left(), r.bottom() - thick), r.max);
+    let line = Rect::from_min_max(pos2(l, r.bottom() - thick), pos2(rr, r.bottom()));
     ui.painter().rect_filled(line, 0.0, theme::glass(0.2));
     let frac = if total > 0.0 { pos / total } else { 0.0 };
     ui.painter().rect_filled(Rect::from_min_size(line.min, vec2(line.width() * frac, thick)), 0.0, app.accent_color());
-    let at = |p: Pos2| ((p.x - r.left()) / r.width()).clamp(0.0, 1.0) * total;
+    let at = |p: Pos2| ((p.x - l) / (rr - l).max(1.0)).clamp(0.0, 1.0) * total;
     if h > 0.0
         && let Some(p) = resp.hover_pos().or(resp.interact_pointer_pos())
     {

@@ -184,7 +184,9 @@ fn field_label(ui: &mut Ui, label: &str) {
 /// A labelled text box on a glass fill, like the jam and transfer pages' inputs.
 pub(super) fn text_field(ui: &mut Ui, label: &str, text: &mut String, multiline: bool, hint: &str) -> egui::Response {
     use egui::{Sense, vec2};
-    field_label(ui, label);
+    if !label.is_empty() {
+        field_label(ui, label);
+    }
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), if multiline { 96.0 } else { 42.0 }), Sense::hover());
     // Painted first, so the text box draws over it.
     let bg = ui.painter().add(egui::Shape::Noop);

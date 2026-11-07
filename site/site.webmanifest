@@ -1,6 +1,6 @@
 {
-  "name": "ytm-rs",
-  "short_name": "ytm-rs",
+  "name": "bitchord",
+  "short_name": "bitchord",
   "description": "A fast, native YouTube Music desktop app written in Rust.",
   "start_url": "./",
   "display": "browser",

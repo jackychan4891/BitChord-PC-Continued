@@ -507,7 +507,7 @@
   "id": "fluent",
   "name": "Fluent",
   "creators": [
-   "ytm-rs"
+   "BitChord"
   ],
   "blurb": "Windows 11's Fluent look: Segoe UI Variable, the Windows accent colour, flat layered greys and small corners; now playing keeps a slow, calm cover backdrop.",
   "accent": "system",

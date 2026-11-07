@@ -1,13 +1,13 @@
-; Inno Setup script for ytm-rs.
+; Inno Setup script for BitChord.
 ; Build: cargo build --release, then
-;   iscc installer\ytm-rs.iss
-; Output: installer\Output\ytm-rs-setup-<version>.exe
+;   iscc installer\bitchord.iss
+; Output: installer\Output\bitchord-setup-<version>.exe
 ; ARM64: cargo build --release --target aarch64-pc-windows-msvc, then
-;   iscc /DArm64 installer\ytm-rs.iss  ->  ytm-rs-setup-<version>-arm64.exe
+;   iscc /DArm64 installer\bitchord.iss  ->  bitchord-setup-<version>-arm64.exe
 
-#define AppName "ytm-rs"
-#define AppVersion "0.2.31"
-#define AppExe "ytm-rs.exe"
+#define AppName "BitChord"
+#define AppVersion "2.0.0"
+#define AppExe "bitchord.exe"
 #ifdef Arm64
   #define Arch "arm64"
   #define Suffix "-arm64"
@@ -22,9 +22,9 @@
 AppId={{6E0B7C4A-2D1F-4C8E-9B3A-7F5D1E2A9C40}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=grapedjuice
-AppPublisherURL=https://github.com/grapedjuice/ytm-rs
-AppSupportURL=https://github.com/grapedjuice/ytm-rs/issues
+AppPublisher=jackychan4891
+AppPublisherURL=https://github.com/jackychan4891/BitChord-PC-Continued
+AppSupportURL=https://github.com/jackychan4891/BitChord-PC-Continued/issues
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -34,7 +34,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed={#Arch}
 ArchitecturesInstallIn64BitMode={#Arch}
 MinVersion=10.0
-OutputBaseFilename=ytm-rs-setup-{#AppVersion}{#Suffix}
+OutputBaseFilename=bitchord-setup-{#AppVersion}{#Suffix}
 Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern

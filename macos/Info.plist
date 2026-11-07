@@ -5,17 +5,17 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>YT Music</string>
+	<string>BitChord</string>
 	<key>CFBundleExecutable</key>
-	<string>ytm-rs</string>
+	<string>bitchord</string>
 	<key>CFBundleIconFile</key>
-	<string>ytm-rs</string>
+	<string>bitchord</string>
 	<key>CFBundleIdentifier</key>
-	<string>io.github.grapedjuice.ytm-rs</string>
+	<string>io.github.jackychan4891.bitchord</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>YT Music</string>
+	<string>BitChord</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

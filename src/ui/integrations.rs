@@ -1,6 +1,5 @@
 //! Discord, Last.fm, the system media controls, the app icon, updates and the tray.
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -116,24 +115,8 @@ impl App {
         self.scrobble = None;
     }
 
-    /// Switch the window, tray-to-be and shortcuts to another icon.
-    pub(crate) fn set_app_icon(&mut self, ctx: &egui::Context, id: &'static str) {
-        if id == self.app_icon {
-            return;
-        }
-        self.app_icon = id;
-        let v = crate::appicon::get(id);
-        crate::appicon::save(self.backend.data_dir(), id);
-        if cfg!(windows) {
-            crate::appicon::set_window_icon(v);
-        } else if let Some(icon) = v.icon_data() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(icon))));
-        }
-        crate::appicon::sync_shortcuts(id, self.backend.data_dir());
-        log::info!("app icon: {id}");
-    }
-
-    /// Automatic update checks: shortly after launch, then every six hours.
+    /// Update checks: shortly after launch, then every six hours. A downloaded update is
+    /// only offered as a notice; nothing installs until the user restarts for it.
     pub(super) fn tick_updates(&mut self, ctx: &egui::Context, now: f64) {
         use crate::update::{State, Updater};
         if self.updater.is_none() {
@@ -145,7 +128,7 @@ impl App {
             None => now > 8.0,
             Some(t) => now - t > 6.0 * 3600.0 && !matches!(u.state(), State::Ready { .. }),
         };
-        let enabled = self.auto_update && updatable() && dev_var("YTM_BACKGROUND").is_none_or(|_| dev_var("YTM_UPDATE_FORCE").is_some() || dev_var("YTM_UPDATE_FEED").is_some());
+        let enabled = updatable() && dev_var("YTM_BACKGROUND").is_none_or(|_| dev_var("YTM_UPDATE_FORCE").is_some() || dev_var("YTM_UPDATE_FEED").is_some());
         if enabled && due {
             self.update_checked = Some(now);
             u.check();

@@ -288,6 +288,36 @@ pub fn paint_cover(ui: &Ui, rect: Rect, thumbs: &[Thumb], radius: f32, zoom: f32
     paint_cover_px(ui, rect, thumbs, radius, zoom, px);
 }
 
+/// A [`paint_cover`] that dissolves from the sleeve this slot showed last when the
+/// track changes, the way the reference hands the artwork over. `site` is a stable id
+/// per sleeve.
+pub fn paint_cover_xfade(ui: &Ui, site: egui::Id, rect: Rect, thumbs: &[Thumb], radius: f32, zoom: f32) {
+    let px = (rect.width() * ui.ctx().pixels_per_point()) as u32;
+    paint_cover_xfade_px(ui, site, rect, thumbs, radius, zoom, px);
+}
+
+/// [`paint_cover_xfade`] fetching the image at `px` rather than the drawn size (see
+/// [`paint_cover_px`]).
+pub fn paint_cover_xfade_px(ui: &Ui, site: egui::Id, rect: Rect, thumbs: &[Thumb], radius: f32, zoom: f32, px: u32) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let px = fetch_px(px);
+    ui.painter().rect_filled(rect, radius, theme::glass(0.07));
+    let Some(t) = pick_thumb(thumbs, px.min(544)) else {
+        icon_at(ui, rect.center(), icon::MUSIC, rect.width() * 0.3, theme::text_faint());
+        return;
+    };
+    let mut uv = t.square_uv();
+    if zoom > 1.0 {
+        let c = uv.center();
+        let half = uv.size() / (2.0 * zoom);
+        uv = Rect::from_center_size(c, half * 2.0);
+    }
+    let url = steady_url(ui.ctx(), &t.url, px);
+    cover_xfade(ui, site, rect, radius, &url, uv, Color32::WHITE);
+}
+
 /// [`paint_cover`] fetching the image at `px` rather than the drawn size. A cover that
 /// animates in size must ask for one fixed size: every new size is a new download,
 /// blank until it arrives.
@@ -335,14 +365,23 @@ pub fn preload_cover(ctx: &egui::Context, thumbs: &[Thumb], px: u32) {
 
 /// The cover as a disc rotated by `angle` (radians): a textured triangle fan, since
 /// egui's image rotation doesn't round corners. Fetched at `px` (see [`paint_cover_px`]).
-pub fn paint_disc(ui: &Ui, center: Pos2, r: f32, thumbs: &[Thumb], angle: f32, tint: Color32, px: u32) {
+/// Dissolves between tracks like [`paint_cover_xfade`].
+#[allow(clippy::too_many_arguments)]
+pub fn paint_disc(ui: &Ui, site: egui::Id, center: Pos2, r: f32, thumbs: &[Thumb], angle: f32, tint: Color32, px: u32) {
     ui.painter().circle_filled(center, r, theme::glass(0.07));
     let px = fetch_px(px);
     let Some(t) = pick_thumb(thumbs, px.min(544)) else { return };
     let url = steady_url(ui.ctx(), &t.url, px);
-    // While it loads, the loader wakes the UI once it's ready.
-    let Ok(egui::load::TexturePoll::Ready { texture }) = egui::Image::new(url).load_for_size(ui.ctx(), Vec2::splat(r * 2.0)) else { return };
+    let ready = matches!(egui::Image::new(&url).load_for_size(ui.ctx(), Vec2::splat(r * 2.0)), Ok(egui::load::TexturePoll::Ready { .. }));
     let uv = t.square_uv();
+    dissolve(ui, site, &url, uv, ready, &mut |u, uv, a| {
+        disc_at(ui, center, r, u, uv, angle, tint.gamma_multiply(a));
+    });
+}
+
+/// One disc, if its texture is ready; false while it downloads (the loader wakes the UI).
+fn disc_at(ui: &Ui, center: Pos2, r: f32, url: &str, uv: Rect, angle: f32, tint: Color32) -> bool {
+    let Ok(egui::load::TexturePoll::Ready { texture }) = egui::Image::new(url).load_for_size(ui.ctx(), Vec2::splat(r * 2.0)) else { return false };
     let (uc, uh) = (uv.center(), uv.width() / 2.0);
     let mut mesh = egui::Mesh::with_texture(texture.id);
     mesh.colored_vertex(center, tint);
@@ -358,6 +397,80 @@ pub fn paint_disc(ui: &Ui, center: Pos2, r: f32, thumbs: &[Thumb], angle: f32, t
         }
     }
     ui.painter().add(egui::Shape::mesh(mesh));
+    true
+}
+
+/// Seconds a new sleeve takes to dissolve over the last one.
+const COVER_XFADE: f64 = 0.45;
+
+/// What a sleeve slot last painted: the image on screen, the one dissolving in over it,
+/// and the timestamps that drive the dissolve.
+#[derive(Clone)]
+struct Shown {
+    url: String,
+    uv: Rect,
+    to: Option<String>,
+    /// When the change was first seen, to give up on a cover that never downloads.
+    swap_at: f64,
+    /// When the dissolve started; None while the incoming image downloads.
+    fade_from: Option<f64>,
+}
+
+/// Paint `url` into this slot, dissolving from the cover `site` showed last when it
+/// changes. The last cover stays up until the new one has downloaded, so a track
+/// change never blinks through the placeholder.
+fn dissolve(ui: &Ui, site: egui::Id, url: &str, uv: Rect, ready: bool, paint: &mut dyn FnMut(&str, Rect, f32)) {
+    let ctx = ui.ctx();
+    let now = ctx.input(|i| i.time);
+    let key = site.with("cover-shown");
+    let Some(mut s) = ctx.data(|d| d.get_temp::<Shown>(key)) else {
+        paint(url, uv, 1.0);
+        ctx.data_mut(|d| d.insert_temp(key, Shown { url: url.to_owned(), uv, to: None, swap_at: now, fade_from: None }));
+        return;
+    };
+    if s.url == url {
+        // Back to what's on screen (or never left): drop any dissolve in flight.
+        paint(url, uv, 1.0);
+        if s.to.is_some() {
+            ctx.data_mut(|d| d.insert_temp(key, Shown { url: url.to_owned(), uv, to: None, swap_at: now, fade_from: None }));
+        }
+        return;
+    }
+    if s.to.as_deref() != Some(url) {
+        // A new cover arrived (possibly mid-dissolve): dissolve from what is on screen.
+        s.to = Some(url.to_owned());
+        s.swap_at = now;
+        s.fade_from = None;
+    }
+    if !ready {
+        if now - s.swap_at < 3.0 {
+            paint(&s.url, s.uv, 1.0);
+            ctx.data_mut(|d| d.insert_temp(key, s));
+            ctx.request_repaint();
+            return;
+        }
+        // A cover that never arrives: its placeholder beats freezing the old one.
+        paint(url, uv, 1.0);
+        ctx.data_mut(|d| d.insert_temp(key, Shown { url: url.to_owned(), uv, to: None, swap_at: now, fade_from: None }));
+        return;
+    }
+    let from = *s.fade_from.get_or_insert(now);
+    let p = (((now - from) / COVER_XFADE) as f32).clamp(0.0, 1.0);
+    let e = theme::ease_in_out(p);
+    paint(&s.url, s.uv, 1.0 - e);
+    paint(url, uv, e);
+    if p >= 1.0 {
+        s = Shown { url: url.to_owned(), uv, to: None, swap_at: now, fade_from: None };
+    } else {
+        ctx.request_repaint();
+    }
+    ctx.data_mut(|d| d.insert_temp(key, s));
+}
+
+/// [`paint_remote`] for a sleeve that dissolves between tracks instead of swapping.
+fn cover_xfade(ui: &Ui, site: egui::Id, rect: Rect, radius: f32, url: &str, uv: Rect, tint: Color32) {
+    let ready = matches!(egui::Image::new(url).load_for_size(ui.ctx(), rect.size()), Ok(egui::load::TexturePoll::Ready { .. }));
+    dissolve(ui, site, url, uv, ready, &mut |u, uv, a| paint_remote(ui, u, rect, radius, uv, tint.gamma_multiply(a)));
 }
 
 /// Album/playlist/artist/song card with hover zoom, scrim and a play button.
@@ -403,6 +516,8 @@ pub fn card(ui: &mut Ui, c: &Card, width: f32, liked: bool, acts: &mut Vec<Actio
     let more_rect = Rect::from_center_size(pos2(rect.right() - 16.0, sub_y + 8.0), Vec2::splat(30.0));
     let more = more_button(ui, more_rect, resp.id.with("more"), "Options");
     egui::Popup::menu(&more).show(|ui| card_menu_contents(ui, c, liked, acts));
+    // Right-click anywhere on the tile opens the same menu.
+    egui::Popup::context_menu(&resp).show(|ui| card_menu_contents(ui, c, liked, acts));
 
     if play_hit {
         match &c.target {
@@ -450,21 +565,34 @@ fn more_button(ui: &mut Ui, rect: Rect, id: egui::Id, label: &str) -> Response {
     response
 }
 
-fn menu_action(ui: &mut Ui, glyph: Option<char>, label: &str) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 32.0), Sense::click());
+fn menu_row(ui: &mut Ui, label: &str, draw: impl FnOnce(&Ui, Pos2, Color32)) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
     let response = named(response, label).on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.hovered() {
         ui.painter().rect_filled(rect, 7.0, theme::glass(0.12));
     }
     let color = if response.hovered() { theme::text() } else { theme::text_dim() };
-    if let Some(glyph) = glyph {
-        icon_at(ui, pos2(rect.left() + 19.0, rect.center().y), glyph, 16.0, color);
-    } else {
-        ui.painter().text(pos2(rect.left() + 19.0, rect.center().y), Align2::CENTER_CENTER, "↗", theme::semibold(17.0), color);
-    }
-    ui.painter().text(pos2(rect.left() + 40.0, rect.center().y), Align2::LEFT_CENTER, label, theme::regular(14.0), theme::text());
+    draw(ui, pos2(rect.right() - 19.0, rect.center().y), color);
+    ui.painter().text(pos2(rect.left() + 12.0, rect.center().y), Align2::LEFT_CENTER, label, theme::regular(14.0), theme::text());
     if response.clicked() { ui.close(); }
     response.clicked()
+}
+
+pub fn menu_action(ui: &mut Ui, glyph: Option<char>, label: &str) -> bool {
+    menu_row(ui, label, |ui, at, color| match glyph {
+        Some(glyph) => icon_at(ui, at, glyph, 16.0, color),
+        None => {
+            ui.painter().text(at, Align2::CENTER_CENTER, "↗", theme::semibold(17.0), color);
+        }
+    })
+}
+
+/// A menu row marked with the app's own star, filled once the song is liked.
+fn menu_action_star(ui: &mut Ui, liked: bool, label: &str) -> bool {
+    menu_row(ui, label, |ui, at, color| {
+        let glyph = if liked { super::glyphs::STAR_FILLED } else { super::glyphs::STAR };
+        super::glyphs::draw(ui, at, 16.0, glyph, color);
+    })
 }
 
 /// `remove`: the song's row in the open playlist, when it's yours and the song can come out.
@@ -472,17 +600,31 @@ pub fn song_menu(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, act
     ui.set_width(226.0);
     ui.add_space(3.0);
     song_actions(ui, t, liked, remove, acts);
+    ui.separator();
+    if menu_action(ui, Some(icon::LIST_PLUS), "Play next") {
+        acts.push(Action::PlayNext(t.clone()));
+    }
+    if menu_action(ui, Some(icon::LIST_MUSIC), "Add to queue") {
+        acts.push(Action::Enqueue(t.clone()));
+    }
+    if menu_action(ui, Some(icon::LIST_MUSIC), "View queue") {
+        acts.push(Action::ViewQueue);
+    }
+    if menu_action(ui, Some(icon::RADIO), "Start radio") {
+        acts.push(Action::Radio(t.clone()));
+    }
     ui.add_space(3.0);
 }
 
 /// The song menu's items, for menus that add their own (now playing's options).
 pub fn song_actions(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, acts: &mut Vec<Action>) {
-    if menu_action(ui, Some(icon::HEART), if liked { "Remove like" } else { "Like song" }) {
+    if menu_action_star(ui, liked, if liked { "Remove like" } else { "Like song" }) {
         acts.push(Action::Like(t.clone(), !liked));
     }
-    if menu_action(ui, Some(icon::THUMBS_DOWN), "Dislike song") {
+    if menu_action(ui, Some(icon::THUMBS_DOWN), "Dislike") {
         acts.push(Action::Dislike(t.clone()));
     }
+    ui.separator();
     if menu_action(ui, Some(icon::LIST_PLUS), "Add to playlist") {
         acts.push(Action::AddToPlaylist(vec![t.clone()]));
     }
@@ -490,9 +632,6 @@ pub fn song_actions(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, 
         && menu_action(ui, Some(icon::LIST_MINUS), "Remove from playlist")
     {
         acts.push(Action::RemoveFromPlaylist(vec![i]));
-    }
-    if menu_action(ui, None, "Copy link") {
-        acts.push(Action::Share(Target::Song(t.clone())));
     }
     match crate::downloads::path(&t.id) {
         Some(path) => {
@@ -506,28 +645,6 @@ pub fn song_actions(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, 
             }
         }
     }
-    ui.separator();
-    if menu_action(ui, Some(icon::SKIP_FORWARD), "Play next") {
-        acts.push(Action::PlayNext(t.clone()));
-    }
-    if menu_action(ui, Some(icon::LIST_MUSIC), "Add to queue") {
-        acts.push(Action::Enqueue(t.clone()));
-    }
-    if menu_action(ui, Some(icon::RADIO), "Start radio") {
-        acts.push(Action::Radio(t.clone()));
-    }
-    if t.album.as_ref().and_then(|a| a.id.as_ref()).is_some() || t.first_artist_id().is_some() {
-        ui.separator();
-    }
-    if let Some(id) = t.album.as_ref().and_then(|a| a.id.clone())
-        && menu_action(ui, Some(icon::DISC_3), "Go to album")
-    {
-        acts.push(Action::Open(Target::Album(id)));
-    }
-    if let Some(id) = t.first_artist_id()
-        && menu_action(ui, Some(icon::USER), "Go to artist") {
-            acts.push(Action::Open(Target::Artist(id.to_owned())));
-        }
 }
 
 /// Soft drop shadow under a rounded rect (e.g. artwork).
@@ -589,6 +706,8 @@ pub fn pause_bars(ui: &Ui, center: Pos2, r: f32, color: Color32) {
         ui.painter().rect_filled(bar, 1.5, color);
     }
 }
+
+// ------------------------------------------------------------------ playing bars
 
 /// The playing row's bars: three rounded bars rising and falling at their own slow
 /// pace, settling low when paused. They tell the frame pacing they're on screen, so
@@ -807,7 +926,7 @@ fn checkbox(ui: &Ui, c: Pos2, on: bool) {
 /// Returns (scroll left, scroll right) clicks.
 pub fn shelf_header(ui: &mut Ui, title: &str, strap: Option<&str>, strap_thumb: Option<&str>, arrows: bool) -> (bool, bool) {
     let mut res = (false, false);
-    ui.add_space(26.0);
+    ui.add_space(34.0);
     ui.horizontal(|ui| {
         if let Some(url) = strap_thumb {
             let (r, _) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::hover());
@@ -817,9 +936,9 @@ pub fn shelf_header(ui: &mut Ui, title: &str, strap: Option<&str>, strap_thumb: 
         }
         ui.vertical(|ui| {
             if let Some(s) = strap {
-                ui.label(egui::RichText::new(s.to_uppercase()).font(theme::semibold(12.0)).color(theme::text_dim()));
+                ui.label(egui::RichText::new(s.to_uppercase()).font(theme::semibold(11.5)).color(theme::text_dim()));
             }
-            ui.label(egui::RichText::new(title).font(theme::bold(24.0)).color(theme::text()));
+            ui.label(egui::RichText::new(title).font(theme::bold(21.0)).color(theme::text()));
         });
         if arrows {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -828,7 +947,7 @@ pub fn shelf_header(ui: &mut Ui, title: &str, strap: Option<&str>, strap_thumb: 
             });
         }
     });
-    ui.add_space(12.0);
+    ui.add_space(14.0);
     res
 }
 
@@ -941,6 +1060,29 @@ pub fn paint_remote(ui: &Ui, url: &str, rect: Rect, radius: f32, uv: Rect, tint:
         // A failed image keeps its plain placeholder.
         Err(_) => {}
     }
+}
+
+/// The newest decoded frame of a motion sleeve, uploaded by the player.
+pub struct MotionSprite {
+    pub id: egui::TextureId,
+    pub size: Vec2,
+}
+
+/// Paint a motion frame into `rect`, centre-cropped like the still sleeve it replaces.
+pub fn paint_motion(ui: &Ui, rect: Rect, radius: f32, s: &MotionSprite) {
+    if !ui.is_rect_visible(rect) || rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return;
+    }
+    let tex_aspect = s.size.x / s.size.y;
+    let rect_aspect = rect.width() / rect.height();
+    let uv = if rect_aspect > tex_aspect {
+        Rect::from_center_size(pos2(0.5, 0.5), vec2(1.0, tex_aspect / rect_aspect))
+    } else {
+        Rect::from_center_size(pos2(0.5, 0.5), vec2(rect_aspect / tex_aspect, 1.0))
+    };
+    let shape = egui::epaint::RectShape::filled(rect, CornerRadius::same(radius as u8), Color32::WHITE)
+        .with_texture(s.id, uv);
+    ui.painter().add(shape);
 }
 
 /// Song rows still on their way, at the end of a list that's coming in.

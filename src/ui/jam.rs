@@ -599,7 +599,7 @@ fn dim(ui: &mut Ui, text: &str) {
 }
 
 fn lobby(app: &mut App, ui: &mut Ui) {
-    dim(ui, "Start a jam and friends hear what you play, at the same moment. Everyone listens on their own ytm-rs, and anyone can add songs.");
+    dim(ui, "Start a jam and friends hear what you play, at the same moment. Everyone listens on their own BitChord, and anyone can add songs.");
     section_label(ui, "Start a jam", None);
     settings_card(ui, |ui| {
         let hint = app.account_name.clone().unwrap_or_else(|| "Guest".to_owned());

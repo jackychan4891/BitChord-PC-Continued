@@ -16,8 +16,8 @@ const BG_LIGHT: Color32 = Color32::from_rgb(246, 244, 248);
 const TEXT_LIGHT: Color32 = Color32::from_rgb(22, 20, 26);
 const TEXT_DIM_LIGHT: Color32 = Color32::from_rgb(86, 82, 94);
 const TEXT_FAINT_LIGHT: Color32 = Color32::from_rgb(124, 118, 132);
-/// Default accent until a cover provides one (YouTube Music red, slightly warm).
-pub const RED: Color32 = Color32::from_rgb(255, 48, 72);
+/// Default accent until a cover provides one (BitChord pink).
+pub const RED: Color32 = Color32::from_rgb(0xFA, 0x58, 0x6A);
 
 /// Light or dark, as the app picked it for what's being drawn (see `set_mode`): the
 /// colours below follow it. Now playing always draws dark, over the album art.
@@ -315,15 +315,12 @@ pub mod icon {
     pub const SKIP_BACK: char = '\u{e15f}';
     pub const SKIP_FORWARD: char = '\u{e160}';
     pub const SHUFFLE: char = '\u{e15e}';
-    pub const REPEAT: char = '\u{e146}';
-    pub const REPEAT_1: char = '\u{e1fd}';
     pub const VOLUME_2: char = '\u{e1ab}';
     pub const VOLUME_1: char = '\u{e1aa}';
     pub const VOLUME_X: char = '\u{e1ac}';
     pub const HEART: char = '\u{e0f2}';
     pub const THUMBS_DOWN: char = '\u{e189}';
     pub const LIST_MUSIC: char = '\u{e2e0}';
-    pub const MIC_VOCAL: char = '\u{e349}';
     pub const X: char = '\u{e1b2}';
     pub const HISTORY: char = '\u{e1f5}';
     pub const TRASH_2: char = '\u{e18e}';
@@ -352,7 +349,6 @@ pub mod icon {
     pub const FOLDER_OPEN: char = '\u{e247}';
     pub const PIN: char = '\u{e259}';
     pub const PIN_OFF: char = '\u{e2b6}';
-    pub const PICTURE_IN_PICTURE: char = '\u{e3af}';
     pub const MAXIMIZE_2: char = '\u{e113}';
 }
 
@@ -366,12 +362,17 @@ const INTER: [&[u8]; 3] = [
 ];
 const LUCIDE: &[u8] = include_bytes!("../assets/fonts/lucide.ttf");
 
-/// Lyric typefaces used by theme presets (all SIL OFL 1.1), as static
-/// regular / semibold / bold instances. They cover Latin only (their upstream has no
-/// Vietnamese, Greek or Cyrillic); `lyric_font_for` sets such lines in Inter instead.
+/// Lyric typefaces used by theme presets, as static regular / semibold / bold
+/// instances. They cover Latin only (their upstream has no Vietnamese, Greek or
+/// Cyrillic); `lyric_font_for` sets such lines in Inter instead.
 /// Instrument Sans is only ever used at semibold (one preset), so its bold slot reuses
 /// that instead of shipping a weight nothing draws.
 const LYRIC_FONTS: &[(&str, [&[u8]; 3])] = &[
+    ("sfpro", [
+        include_bytes!("../assets/fonts/SFProDisplay-Regular.otf"),
+        include_bytes!("../assets/fonts/SFProDisplay-SemiBold.otf"),
+        include_bytes!("../assets/fonts/SFProDisplay-Bold.otf"),
+    ]),
     ("dmsans", [
         include_bytes!("../assets/fonts/DMSans-Regular.ttf"),
         include_bytes!("../assets/fonts/DMSans-SemiBold.ttf"),
@@ -395,12 +396,13 @@ const LYRIC_FONTS: &[(&str, [&[u8]; 3])] = &[
 ];
 
 /// The bundled faces, by the names the font setting shows and stores.
-pub const BUNDLED_FONTS: &[&str] = &["Inter", "DM Sans", "Figtree", "Google Sans Flex", "Instrument Sans"];
+pub const BUNDLED_FONTS: &[&str] = &["SF Pro Display", "Inter", "DM Sans", "Figtree", "Google Sans Flex", "Instrument Sans"];
 
-/// The bundled font a preset font name refers to. Fonts that can't be bundled (SF Pro,
-/// Spotify's) map to the closest open one; unknown names to Inter.
+/// The bundled font a preset font name refers to. Fonts that can't be bundled
+/// (Spotify's) map to the closest open one; unknown names to Inter.
 fn lyric_key(name: &str) -> Option<&'static str> {
     Some(match name.to_ascii_lowercase().replace(' ', "").as_str() {
+        "sfprodisplay" | "sfpro" => "sfpro",
         "dmsans" => "dmsans",
         "googlesansflex" | "googlesans" => "googlesansflex",
         "figtree" | "spotifymixuititle" | "spotifymix" | "circular" => "figtree",

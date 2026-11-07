@@ -18,6 +18,10 @@ use serde_json::Value;
 
 const API: &str = "https://lyrics.api.dacubeking.com/";
 const UNISON_API: &str = "https://unison.betterlyrics.org/lyrics";
+const LRCRED_API: &str = "https://lrc.red/";
+
+/// lrc.red's free API asks callers to identify themselves with a link.
+const LRCRED_UA: &str = concat!("BitChord/", env!("CARGO_PKG_VERSION"), " (+https://github.com/jackychan4891/BitChord-PC-Continued)");
 
 /// One source of lyrics, in the extension's default priority order (its
 /// `PROVIDER_CONFIGS`, without the two YouTube sources).
@@ -29,12 +33,14 @@ pub enum Provider {
     UnisonWord,
     PortatoRich,
     MusixmatchRich,
+    LrcredRich,
     BLyricsSynced,
     UnisonSynced,
     BinimumSynced,
     LrclibSynced,
     LegatoSynced,
     MusixmatchSynced,
+    LrcredSynced,
     UnisonPlain,
     LrclibPlain,
 }
@@ -49,19 +55,21 @@ pub enum SyncKind {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 14] = [
+    pub const ALL: [Provider; 16] = [
         Provider::BLyricsRich,
         Provider::UnisonRich,
         Provider::BinimumRich,
         Provider::UnisonWord,
         Provider::PortatoRich,
         Provider::MusixmatchRich,
+        Provider::LrcredRich,
         Provider::BLyricsSynced,
         Provider::UnisonSynced,
         Provider::BinimumSynced,
         Provider::LrclibSynced,
         Provider::LegatoSynced,
         Provider::MusixmatchSynced,
+        Provider::LrcredSynced,
         Provider::UnisonPlain,
         Provider::LrclibPlain,
     ];
@@ -75,12 +83,14 @@ impl Provider {
             Provider::UnisonWord => "unison-wordsynced",
             Provider::PortatoRich => "portato-richsynced",
             Provider::MusixmatchRich => "musixmatch-richsync",
+            Provider::LrcredRich => "lrcred-richsynced",
             Provider::BLyricsSynced => "bLyrics-synced",
             Provider::UnisonSynced => "unison-synced",
             Provider::BinimumSynced => "binimum-synced",
             Provider::LrclibSynced => "lrclib-synced",
             Provider::LegatoSynced => "legato-synced",
             Provider::MusixmatchSynced => "musixmatch-synced",
+            Provider::LrcredSynced => "lrcred-synced",
             Provider::UnisonPlain => "unison-plain",
             Provider::LrclibPlain => "lrclib-plain",
         }
@@ -98,6 +108,7 @@ impl Provider {
             Provider::PortatoRich => "Better Lyrics Portato",
             Provider::MusixmatchRich | Provider::MusixmatchSynced => "Musixmatch",
             Provider::LrclibSynced | Provider::LrclibPlain => "LRCLib",
+            Provider::LrcredRich | Provider::LrcredSynced => "lrc.red",
             Provider::LegatoSynced => "Better Lyrics Legato",
         }
     }
@@ -105,13 +116,14 @@ impl Provider {
     pub fn sync(self) -> SyncKind {
         match self {
             Provider::BLyricsRich | Provider::UnisonRich | Provider::BinimumRich => SyncKind::Syllable,
-            Provider::UnisonWord | Provider::PortatoRich | Provider::MusixmatchRich => SyncKind::Word,
+            Provider::UnisonWord | Provider::PortatoRich | Provider::MusixmatchRich | Provider::LrcredRich => SyncKind::Word,
             Provider::BLyricsSynced
             | Provider::UnisonSynced
             | Provider::BinimumSynced
             | Provider::LrclibSynced
             | Provider::LegatoSynced
-            | Provider::MusixmatchSynced => SyncKind::Line,
+            | Provider::MusixmatchSynced
+            | Provider::LrcredSynced => SyncKind::Line,
             Provider::UnisonPlain | Provider::LrclibPlain => SyncKind::Unsynced,
         }
     }
@@ -241,12 +253,12 @@ impl Client {
         }
     }
 
-    /// Every source's lyrics for a song: the Better Lyrics stream and Unison, together.
+    /// Every source's lyrics for a song: the Better Lyrics stream, Unison and lrc.red, together.
     pub async fn fetch(&self, q: &Query<'_>) -> anyhow::Result<LyricsSet> {
         if let Some((_, l)) = self.recent.lock().unwrap().iter().find(|(id, _)| id == q.video_id) {
             return Ok(l.clone());
         }
-        let (stream, unison) = tokio::join!(self.fetch_stream(q), self.fetch_unison(q));
+        let (stream, unison, lrcred) = tokio::join!(self.fetch_stream(q), self.fetch_unison(q), self.fetch_lrcred(q));
         let mut sources = Vec::new();
         match stream {
             Ok(s) => sources.extend(s),
@@ -255,6 +267,10 @@ impl Client {
         match unison {
             Ok(s) => sources.extend(s),
             Err(e) => log::info!("unison: {e:#}"),
+        }
+        match lrcred {
+            Ok(s) => sources.extend(s),
+            Err(e) => log::info!("lrc.red: {e:#}"),
         }
         if sources.is_empty() {
             return Ok(LyricsSet::default());
@@ -310,6 +326,55 @@ impl Client {
         }
         let v: Value = resp.error_for_status()?.json().await?;
         Ok(from_unison(&v["data"], q.duration.unwrap_or(0) as i32 * 1000))
+    }
+
+    /// lrc.red: find the track in its catalogue, then fetch its TTML (word or line timed).
+    async fn fetch_lrcred(&self, q: &Query<'_>) -> anyhow::Result<Vec<Lyrics>> {
+        if q.song.trim().is_empty() {
+            return Ok(vec![]);
+        }
+        let query = match q.artist.trim().is_empty() {
+            true => q.song.to_owned(),
+            false => format!("{} {}", q.song, q.artist),
+        };
+        let hits: Value = self
+            .http
+            .get(format!("{LRCRED_API}search.json"))
+            .query(&[("q", query)])
+            .header(reqwest::header::USER_AGENT, LRCRED_UA)
+            .timeout(Duration::from_secs(8))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let Some(hit) = best_lrcred_hit(hits["hits"].as_array().map(Vec::as_slice).unwrap_or_default(), q) else {
+            return Ok(vec![]);
+        };
+        let Some(isrc) = hit["isrc"].as_str().filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric())) else {
+            return Ok(vec![]);
+        };
+        let text = self
+            .http
+            .get(format!("{LRCRED_API}s/{isrc}.ttml"))
+            .header(reqwest::header::USER_AGENT, LRCRED_UA)
+            .timeout(Duration::from_secs(8))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        let t = parse_ttml(&text, q.duration.unwrap_or(0) as i32 * 1000);
+        // lrc.red declares its own timing on the root; fall back to the parsed spans.
+        let word = if text.contains("lrc:timing=\"Line\"") {
+            false
+        } else if text.contains("lrc:timing=\"Word\"") || text.contains("lrc:timing=\"Syllable\"") {
+            true
+        } else {
+            t.word_synced
+        };
+        let p = if word { Provider::LrcredRich } else { Provider::LrcredSynced };
+        Ok(Lyrics::new(p, t.lines, t.language, t.songwriters).into_iter().collect())
     }
 
     /// A valid JWT, from cache or by running the Turnstile challenge.
@@ -471,6 +536,50 @@ fn from_unison(data: &Value, dur_ms: i32) -> Vec<Lyrics> {
         _ => None,
     };
     lyrics.into_iter().collect()
+}
+
+/// The lrc.red search hit closest to the track: same title (a remaster or live
+/// suffix aside), a matching artist, and within twenty seconds of the known length.
+fn best_lrcred_hit<'a>(hits: &'a [Value], q: &Query<'_>) -> Option<&'a Value> {
+    let title = fold_title(q.song);
+    let artist = fold(q.artist);
+    let dur = q.duration.filter(|d| *d > 0).map(f64::from);
+    let mut best: Option<(i32, &Value)> = None;
+    for h in hits {
+        let ht = fold_title(h["title"].as_str().unwrap_or_default());
+        let ha = fold(h["artist"].as_str().unwrap_or_default());
+        let title_ok = !title.is_empty() && (ht == title || ht.contains(&title) || title.contains(&ht));
+        let artist_ok = artist.is_empty() || ha == artist || ha.contains(&artist) || artist.contains(&ha);
+        if !title_ok || !artist_ok {
+            continue;
+        }
+        let diff = match (dur, h["duration"].as_f64()) {
+            (Some(a), Some(b)) => (a - b).abs(),
+            _ => 0.0,
+        };
+        if diff > 20.0 {
+            continue;
+        }
+        let base = if ht == title { 100 } else { 60 };
+        let score = base + (20.0 - diff) as i32;
+        if best.is_none_or(|(s, _)| score > s) {
+            best = Some((score, h));
+        }
+    }
+    best.map(|(_, h)| h)
+}
+
+/// Letters and digits only, lower case, single-spaced.
+fn fold(s: &str) -> String {
+    s.chars().map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { ' ' }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A title without its bracketed or dashed qualifiers: "(Remastered 2011)", " - Live".
+fn fold_title(s: &str) -> String {
+    let s = s.split(" (").next().unwrap_or(s);
+    let s = s.split(" [").next().unwrap_or(s);
+    let s = s.split(" - ").next().unwrap_or(s);
+    fold(s)
 }
 
 // ------------------------------------------------------------------- shared helpers

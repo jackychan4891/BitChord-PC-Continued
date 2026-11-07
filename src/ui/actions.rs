@@ -20,6 +20,8 @@ impl App {
         } else {
             a
         };
+        // The first result opened after a search is what Recently Searched remembers.
+        self.remember_search_click(&a);
         match a {
             // Clicking the song that's already playing pauses/resumes it, not restart it.
             Action::Play(tracks, i) if tracks.get(i).is_some_and(|t| self.current_id() == Some(t.id.as_str())) && self.resume_at.is_none() => {
@@ -87,6 +89,13 @@ impl App {
                 self.play_current();
             }
             Action::QueueRemove(i) => self.queue.remove(i),
+            Action::ViewQueue => {
+                if self.np_open {
+                    self.np_tab = NpTab::UpNext;
+                } else {
+                    self.queue_open = true;
+                }
+            }
             Action::Seek(secs) => {
                 self.seek_to(Duration::from_secs_f32(secs.max(0.0)));
                 self.lyric_view.resume();
@@ -199,6 +208,30 @@ impl App {
                 }
             }
             Action::Mini(on) => self.mini.request(on),
+            Action::RevertQuality => {
+                // Mark the playing stream's id (a song version differs from the listed id)
+                // so resolve skips hi-res for it, then replay at the same position.
+                let listed = self.current_id().map(str::to_owned);
+                let playing = self.playing_track().map(|t| t.id.clone()).or(listed.clone());
+                let Some(id) = playing else { return };
+                let at = self.audio.status.position();
+                self.backend.revert_quality(&id);
+                if let Some(listed) = listed.filter(|l| l != &id) {
+                    self.backend.revert_quality(&listed);
+                }
+                self.play_current_at(at, false);
+            }
+            Action::UpgradeQuality => {
+                let listed = self.current_id().map(str::to_owned);
+                let playing = self.playing_track().map(|t| t.id.clone()).or(listed.clone());
+                let Some(id) = playing else { return };
+                let at = self.audio.status.position();
+                self.backend.upgrade_quality(&id);
+                if let Some(listed) = listed.filter(|l| l != &id) {
+                    self.backend.upgrade_quality(&listed);
+                }
+                self.play_current_at(at, false);
+            }
         }
     }
 
@@ -219,6 +252,7 @@ impl App {
                 ctrl(egui::Key::ArrowRight),
                 ctrl(egui::Key::ArrowLeft),
                 k(egui::Key::L),
+                k(egui::Key::Q),
                 k(egui::Key::F),
                 i.key_pressed(egui::Key::Escape),
                 ctrl(egui::Key::ArrowUp),
@@ -227,13 +261,13 @@ impl App {
                 i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::M, pressed: true, repeat: false, modifiers, .. } if modifiers.ctrl)),
             )
         });
-        let (space, back, fwd, next, prev, lyr, full, esc, vol_up, vol_down, mini) = i;
+        let (space, back, fwd, next, prev, lyr, queue, full, esc, vol_up, vol_down, mini) = i;
         if mini {
             self.actions.push(Action::Mini(!self.mini.target()));
         }
         // The mini player has no pages or now playing to go to, nor does a window on
         // its way back until it's there.
-        let (back, fwd, lyr, full, esc) = if self.mini.busy() { (false, false, false, false, false) } else { (back, fwd, lyr, full, esc) };
+        let (back, fwd, lyr, queue, full, esc) = if self.mini.busy() { (false, false, false, false, false, false) } else { (back, fwd, lyr, queue, full, esc) };
         if space {
             self.toggle();
         }
@@ -250,8 +284,12 @@ impl App {
             self.prev();
         }
         if lyr && self.current().is_some() {
-            self.np_open = !self.np_open;
+            self.np_open = true;
             self.np_tab = NpTab::Lyrics;
+        }
+        if queue && self.current().is_some() {
+            self.np_open = true;
+            self.np_tab = NpTab::UpNext;
         }
         if full && self.np_open {
             self.set_fullscreen(ctx, !self.fullscreen);

@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod appicon;
+mod apple;
+mod artist_signature;
 mod fullscreen;
 mod proxy;
 mod renderer;
@@ -10,7 +12,9 @@ mod backend;
 mod bidi;
 mod deeplink;
 mod discord;
+mod dash;
 mod downloads;
+mod hires;
 mod images;
 mod jam;
 mod innertube;
@@ -20,6 +24,7 @@ mod login;
 mod lyrics;
 mod media;
 mod model;
+mod motion;
 mod opus;
 mod preset;
 mod shader;
@@ -85,8 +90,8 @@ fn main() -> eframe::Result {
     // taskbar, so automated test runs don't pop up over whatever the user is doing.
     let background = std::env::var_os("YTM_BACKGROUND").is_some();
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("YT Music")
-        .with_app_id("ytm-rs")
+        .with_title("BitChord")
+        .with_app_id("bitchord")
         .with_inner_size(DEFAULT_SIZE)
         .with_min_inner_size(MIN_SIZE)
         // Windows: the app draws its own title bar (see `ui::titlebar`).
@@ -117,7 +122,7 @@ fn main() -> eframe::Result {
     };
 
     let run = eframe::run_native(
-        "ytm-rs",
+        "BitChord",
         options,
         Box::new(|cc| {
             let ctx = cc.egui_ctx.clone();
@@ -234,8 +239,8 @@ fn hwnd(_: &eframe::CreationContext) -> Option<*mut std::ffi::c_void> {
 /// next to the settings (overwritten each launch).
 fn init_logging() {
     let mut builder = env_logger::Builder::from_env(
-        // A test build can be made more talkative: YTM_DEFAULT_LOG=warn,ytm_rs=debug cargo build.
-        env_logger::Env::default().default_filter_or(option_env!("YTM_DEFAULT_LOG").unwrap_or("warn,ytm_rs=info")),
+        // A test build can be made more talkative: YTM_DEFAULT_LOG=warn,bitchord=debug cargo build.
+        env_logger::Env::default().default_filter_or(option_env!("YTM_DEFAULT_LOG").unwrap_or("warn,bitchord=info")),
     );
     // Dev hook: YTM_LOG=<path> logs there (test runs beside a running copy).
     if let Some(path) = std::env::var_os("YTM_LOG") {

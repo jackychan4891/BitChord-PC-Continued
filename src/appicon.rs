@@ -1,6 +1,6 @@
-//! Settings › App icon: alternative icons for the window, the tray and the Start menu,
-//! desktop and pinned taskbar shortcuts that launch this exe. The exe's own embedded
-//! icon (Explorer's file view) stays the classic one.
+//! The app icon for the window, the tray and the Start menu, desktop and pinned
+//! taskbar shortcuts that launch this exe. The exe's own embedded icon (Explorer's
+//! file view) stays the classic one.
 //!
 //! The choice lives in `<data dir>/app_icon` as plain text, so `main` can read it
 //! before the window opens.
@@ -23,8 +23,8 @@ macro_rules! variant {
 pub const CLASSIC: &str = "classic";
 
 pub static ALL: &[Variant] = &[
-    Variant { id: CLASSIC, name: "Classic", ico: include_bytes!("../assets/icon/icon.ico") },
-    variant!("official", "YT Music"),
+    Variant { id: CLASSIC, name: "BitChord", ico: include_bytes!("../assets/icon/icon.ico") },
+    variant!("official", "Original"),
     variant!("smilering", "Smile ring"),
     variant!("gear", "Rust gear"),
     variant!("wave", "Waveform"),
@@ -86,12 +86,6 @@ pub fn load(data_dir: &Path) -> &'static str {
     get(id.trim()).id
 }
 
-pub fn save(data_dir: &Path, id: &str) {
-    if let Err(e) = std::fs::write(data_dir.join("app_icon"), id) {
-        log::warn!("couldn't save the app icon choice: {e}");
-    }
-}
-
 /// Show `v` on the window: its title bar (small icon) and taskbar button (big icon).
 /// egui's icon command only sets the small one, so the taskbar kept the old icon.
 #[cfg_attr(not(windows), allow(unused_variables))]
@@ -148,8 +142,9 @@ mod window {
     }
 }
 
-/// Point every shortcut to this exe at the chosen icon, in the background. The
-/// installer rewrites its shortcuts on each update, so this also runs at launch.
+/// Create the Start menu shortcut and point every shortcut to this exe at the chosen
+/// icon, in the background. The installer rewrites its shortcuts on each update, so
+/// this also runs at launch.
 pub fn sync_shortcuts(id: &'static str, data_dir: &Path) {
     let data_dir = data_dir.to_owned();
     std::thread::Builder::new()
@@ -187,13 +182,21 @@ mod shortcuts {
 
     use super::Variant;
 
-    /// How many shortcuts were changed.
+    /// How many shortcuts were changed or created.
     pub fn sync(v: &Variant, data_dir: &Path) -> anyhow::Result<usize> {
         let exe = std::env::current_exe()?;
         let icon = if v.id == super::CLASSIC { exe.clone() } else { super::icon_file(v, data_dir)? };
         // SAFETY: COM on this thread only, for the shell link objects below.
-        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()? };
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        if hr.is_err() {
+            anyhow::bail!("COM init: {hr:?}");
+        }
         let mut changed = Vec::new();
+        match start_menu(&exe, &icon) {
+            Ok(Some(lnk)) => changed.push(lnk),
+            Ok(None) => {}
+            Err(e) => log::warn!("start menu shortcut: {e:#}"),
+        }
         for lnk in shortcut_files() {
             match update(&lnk, &exe, &icon) {
                 Ok(true) => changed.push(lnk),
@@ -213,6 +216,47 @@ mod shortcuts {
             }
         }
         Ok(changed.len())
+    }
+
+    /// The per-user Start menu link, created when missing and repointed when stale.
+    /// Returns the link when it had to be written.
+    fn start_menu(exe: &Path, icon: &Path) -> anyhow::Result<Option<PathBuf>> {
+        let Some(dir) = known_folder(&FOLDERID_Programs) else { return Ok(None) };
+        let lnk = dir.join("BitChord.lnk");
+        if lnk.exists() && !points_elsewhere(&lnk, exe) {
+            // The link is ours: only the icon may need catching up with the theme.
+            return Ok(update(&lnk, exe, icon)?.then_some(lnk));
+        }
+        // SAFETY: COM calls on an object this function owns, with buffers it owns.
+        unsafe {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            link.SetPath(&HSTRING::from(exe.as_os_str()))?;
+            if let Some(dir) = exe.parent() {
+                link.SetWorkingDirectory(&HSTRING::from(dir.as_os_str()))?;
+            }
+            link.SetDescription(&HSTRING::from("BitChord"))?;
+            link.SetIconLocation(&HSTRING::from(icon.as_os_str()), 0)?;
+            let file: IPersistFile = link.cast()?;
+            file.Save(&HSTRING::from(lnk.as_os_str()), true)?;
+        }
+        log::info!("start menu shortcut: created {}", lnk.display());
+        Ok(Some(lnk))
+    }
+
+    fn points_elsewhere(lnk: &Path, exe: &Path) -> bool {
+        // SAFETY: COM calls on an object this function owns, with buffers it owns.
+        unsafe {
+            let Ok(link) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) else { return true };
+            let Ok(file) = link.cast::<IPersistFile>() else { return true };
+            if file.Load(&HSTRING::from(lnk.as_os_str()), STGM_READ).is_err() {
+                return true;
+            }
+            let mut buf = [0u16; 1024];
+            if link.GetPath(&mut buf, std::ptr::null_mut(), 0).is_err() {
+                return true;
+            }
+            !same_file(&from_wide(&buf), exe)
+        }
     }
 
     /// Set `lnk`'s icon if it launches `exe` and doesn't show `icon` yet.

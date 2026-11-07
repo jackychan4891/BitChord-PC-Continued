@@ -10,7 +10,7 @@ use crate::backend::{Req, Resp};
 use crate::model::{ShelfKind, Track};
 use crate::ytm::HomePage;
 
-use super::{App, Dialog, HomeState, LibTab, Page, PlayingAs, Repeat, dev_var, shuffle};
+use super::{Action, App, Dialog, HomeState, LibTab, MixFrom, Page, PlayingAs, Repeat, dev_var, shuffle};
 
 impl App {
     pub(super) fn pump(&mut self, now: f64) {
@@ -18,6 +18,7 @@ impl App {
         // The listed track's art, with what plays's title, artists and length.
         if let Some((id, file)) = cover
             && self.current().is_some_and(|t| t.id == id)
+            && self.mix_hold().is_none()
             && let Some(track) = self.playing_track().cloned()
             && let Some(m) = &mut self.media
         {
@@ -39,15 +40,48 @@ impl App {
                 AudioEvent::Finished { .. } => {}
                 // Crossfade into the next song; repeat-one and the end of the queue wait for the end.
                 AudioEvent::Ending { generation } if generation == self.generation && !self.jam.guest() && self.queue.repeat != Repeat::One => {
+                    // Automix: the next song eases in under this one, which keeps the
+                    // player until the blend has given the next song the louder half
+                    // (see `MixFrom`).
+                    if let Some(from) = self.playing_track().cloned() {
+                        let total = self
+                            .audio
+                            .status
+                            .duration()
+                            .map(|d| d.as_secs_f32())
+                            .or_else(|| from.duration.map(|d| d as f32))
+                            .unwrap_or(0.0);
+                        let mix = self.audio.status.mix_secs(Some(std::time::Duration::from_secs_f32(total)));
+                        if total > 0.0 && mix > 0.5 {
+                            self.pending_mix = Some(MixFrom { track: from, total, mix, started: false, released: false });
+                        }
+                    }
+                    let before = self.playing_id().map(str::to_owned);
                     self.handoff = true;
                     self.next();
                     self.handoff = false;
+                    if self.playing_id().map(str::to_owned) != before {
+                        self.mix_from = self.pending_mix.take();
+                    } else {
+                        self.pending_mix = None;
+                    }
                 }
                 AudioEvent::Ending { .. } => {}
                 AudioEvent::Interrupted { generation, at, reason } if generation == self.generation => self.recover(at, &reason),
                 AudioEvent::Interrupted { .. } => {}
                 AudioEvent::Error(e) => self.toast(e),
             }
+        }
+        // Once the next song is the louder of the two, it takes the player over; the
+        // caption stays while the handoff's tail runs out.
+        let released = self.mix_from.as_ref().is_some_and(|h| h.released);
+        let switched = self.watch_mix();
+        let over = self.mix_over();
+        if (switched || over) && !released {
+            self.release_mix();
+        }
+        if over {
+            self.mix_from = None;
         }
         while let Ok(ev) = self.ch.media_rx.try_recv() {
             match ev {
@@ -84,10 +118,66 @@ impl App {
             self.suggest_due = None;
             let q = self.search_text.trim().to_owned();
             // An empty box signed in shows the account's recent searches.
-            if !q.is_empty() || self.logged_in {
+            if self.forgets_pending == 0 && (!q.is_empty() || self.logged_in) {
                 self.backend.request(Req::Suggest { query: q, round: self.suggest_round });
             }
         }
+    }
+
+    /// A search's results are on screen: the first result clicked becomes what
+    /// "Recently Searched" remembers, not the words that were typed.
+    pub(super) fn expect_search_click(&mut self, query: &str) {
+        if matches!(&self.page, Page::Search(q) if q == query) {
+            self.search_pending = true;
+        }
+    }
+
+    /// The entry a click makes: the item itself, with the artwork it was shown with.
+    fn search_click_entry(&self, a: &Action) -> Option<super::RecentSearch> {
+        let r = self.search.as_ref()?;
+        let best = |thumbs: &[crate::model::Thumb]| thumbs.iter().max_by_key(|t| t.width).map(|t| t.url.clone());
+        let song = |t: &Track| {
+            Some(super::RecentSearch {
+                query: r.query.clone(),
+                target: Some(crate::model::Target::Song(t.clone())),
+                title: t.title.clone(),
+                subtitle: format!("Song • {}", t.artist_line()),
+                thumb: best(&t.thumbs),
+                round: false,
+            })
+        };
+        let card = |target: &crate::model::Target| {
+            let c = r.artists.iter().chain(&r.albums).chain(&r.playlists).find(|c| c.target == *target)?;
+            Some(super::RecentSearch {
+                query: r.query.clone(),
+                target: Some(target.clone()),
+                title: c.title.clone(),
+                subtitle: c.subtitle.clone(),
+                thumb: best(&c.thumbs),
+                round: c.round,
+            })
+        };
+        match a {
+            Action::Open(crate::model::Target::Song(t)) | Action::Radio(t) => song(t),
+            Action::Open(target) | Action::PlayCollection(target, _) => card(target),
+            Action::Play(tracks, i) => tracks.get(*i).and_then(song),
+            _ => None,
+        }
+    }
+
+    /// Record the thing the search's first click opened, once.
+    pub(super) fn remember_search_click(&mut self, a: &Action) {
+        if !self.search_pending || !matches!(self.page, Page::Search(_)) {
+            return;
+        }
+        let Some(entry) = self.search_click_entry(a) else { return };
+        self.search_pending = false;
+        // One entry per thing; a bare query left by an older version goes with it.
+        self.recent_searches.retain(|s| {
+            s.target.as_ref() != entry.target.as_ref() && !(s.target.is_none() && s.query.eq_ignore_ascii_case(&entry.query))
+        });
+        self.recent_searches.insert(0, entry);
+        self.recent_searches.truncate(8);
     }
 
     fn on_resp(&mut self, r: Resp, now: f64) {
@@ -112,6 +202,7 @@ impl App {
                         self.play_list(r.tracks.clone(), 0);
                     }
                 }
+                self.expect_search_click(&r.query);
                 self.search = Some(r);
                 self.loading = false;
             }
@@ -123,9 +214,18 @@ impl App {
                 }
             }
             Resp::Suggest { query, round, terms } => {
-                if round == self.suggest_round && self.search_text.trim() == query {
-                    self.suggestions = (query, terms);
-                    self.suggest_sel = None;
+                if round == self.suggest_round && self.forgets_pending == 0 {
+                    // Keep late answers for backspacing/revisiting, but never display
+                    // an answer for a query other than the one currently in the box.
+                    self.suggest_cache.retain(|(q, _)| q != &query);
+                    self.suggest_cache.push_back((query.clone(), terms.clone()));
+                    if self.suggest_cache.len() > 32 {
+                        self.suggest_cache.pop_front();
+                    }
+                    if self.search_text.trim() == query {
+                        self.suggestions = (query, terms);
+                        self.suggest_sel = None;
+                    }
                 }
             }
             Resp::Collection { load, c, more } => self.collection_in(load, c, more),
@@ -137,6 +237,16 @@ impl App {
                 }
                 if self.page == Page::Artist(a.id.clone()) {
                     self.loading = false;
+                }
+                let apple_key = format!("artist:{}", a.id);
+                let answered = self.apple_artists.get(&a.id).is_some_and(Option::is_some);
+                let cooling = self.apple_missed.get(&apple_key).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(120));
+                if !answered && !cooling {
+                    let id = a.id.clone();
+                    let name = a.name.clone();
+                    if self.apple_waiting.insert(apple_key) {
+                        self.backend.request(Req::AppleArtist { id, name });
+                    }
                 }
                 self.artist = Some(a);
             }
@@ -175,7 +285,7 @@ impl App {
                 });
             }
             Resp::Lyrics { video_id, lyrics } => {
-                if self.playing_id() == Some(video_id.as_str()) {
+                if self.shown().is_some_and(|t| t.id == video_id) {
                     let available = self.lyric_prefs.available(&lyrics);
                     let shown = self.lyric_prefs.choose(&video_id, &lyrics);
                     let missing: Vec<&str> = self.lyric_prefs.order.iter().filter(|(p, on)| *on && !available.contains(p)).map(|(p, _)| p.key()).collect();
@@ -197,18 +307,58 @@ impl App {
                 }
             }
             Resp::LyricsExtras { video_id, source, target, extras } => {
-                if self.playing_id() == Some(video_id.as_str()) {
+                if self.shown().is_some_and(|t| t.id == video_id) {
                     self.lyrics_extras = Some((video_id, source, target, extras));
                 }
             }
             Resp::Art { key, art } => {
-                if self.current_id() == Some(key.as_str()) {
+                if self.mix_hold().is_none() && self.current_id() == Some(key.as_str()) {
                     self.accent = art.accent;
                     if let Some(bg) = &self.bg {
                         bg.set_art(art);
                     }
                     self.art_key = Some(key);
                     self.art_changed = now;
+                }
+            }
+            Resp::AppleArtist { id, info } => {
+                // A miss is cooled down rather than cached for the session: Apple's
+                // search sometimes fails one time and answers the next.
+                let key = format!("artist:{id}");
+                self.apple_waiting.remove(&key);
+                match info {
+                    Some(artwork) => {
+                        self.apple_missed.remove(&key);
+                        self.apple_artists.insert(id, Some(artwork));
+                    }
+                    None => {
+                        self.apple_artists.remove(&id);
+                        self.apple_missed.insert(key, std::time::Instant::now());
+                    }
+                }
+            }
+            Resp::ArtistSignature { key, signature } => {
+                self.signature_waiting.remove(&key);
+                match signature {
+                    Some(s) => {
+                        self.signature_missed.remove(&key);
+                        self.signature_images.insert(key, (s.width, s.height, s.rgba));
+                    }
+                    None => {
+                        self.signature_missed.insert(key, std::time::Instant::now());
+                    }
+                }
+            }
+            Resp::AppleCover { key, motion } => {
+                self.apple_waiting.remove(&key);
+                match motion.and_then(|m| m.square) {
+                    Some(url) => {
+                        self.apple_missed.remove(&key);
+                        self.apple_covers.insert(key, Some(url));
+                    }
+                    None => {
+                        self.apple_missed.insert(key, std::time::Instant::now());
+                    }
                 }
             }
             Resp::Radio { seed, tracks } => {
@@ -302,8 +452,10 @@ impl App {
                             track
                         }
                     };
-                    self.show_in_media(&shown);
-                    self.refresh_lyrics(shown);
+                    if self.mix_hold().is_none() {
+                        self.show_in_media(&shown);
+                        self.refresh_lyrics(shown);
+                    }
                     // A jam began while it was being looked up: everyone plays the host's upload.
                     if self.jam.active() {
                         self.play_listed_upload();
@@ -311,6 +463,12 @@ impl App {
                 }
             }
             Resp::PlayError { generation, msg } => self.on_play_error(generation, msg),
+            Resp::AudioInfo { generation, info } => {
+                // The stream that answered may already have been skipped past.
+                if generation == self.generation {
+                    self.audio_info = Some((generation, info));
+                }
+            }
             Resp::ServerQueue(q) => self.adopt_server_queue(q),
             Resp::Account { name, photo } => {
                 self.account_name = name.or(self.account_name.take());
@@ -424,6 +582,11 @@ impl App {
     fn on_play_error(&mut self, generation: u64, msg: String) {
         if generation == self.generation {
             self.buffering = false;
+            if self.mix_from.take().is_some() {
+                self.pending_mix = None;
+                self.audio.send(AudioCmd::Stop);
+                self.release_mix();
+            }
             let title = self.current().map(|t| t.title.clone()).unwrap_or_default();
             let reason = if msg.contains("age-restricted") || msg.contains("confirm your age") {
                 "it's age-restricted".to_owned()
@@ -459,6 +622,7 @@ impl App {
         self.suggest_sel = None;
         self.forgetting = None;
         self.suggest_round += 1;
+        self.suggest_cache.clear();
         self.forgets_pending = 0;
         self.suggest_due = Some(now);
         self.account_name = None;

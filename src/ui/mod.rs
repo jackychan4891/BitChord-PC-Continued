@@ -8,6 +8,7 @@ mod actions;
 mod collections;
 mod dev;
 mod dialogs;
+mod glyphs;
 mod integrations;
 mod jam;
 mod karaoke;
@@ -26,7 +27,7 @@ pub use titlebar::{custom as custom_titlebar, set_hwnd as set_titlebar_hwnd};
 mod transfer;
 mod widgets;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -48,12 +49,17 @@ use dev::{dev_pace, dev_screenshot, dev_var};
 use dialogs::text_field;
 pub use queue::Repeat;
 
+/// Animated sleeves are off until the decoder is fixed: the surfacing call sites stay
+/// in place, so turning this back on is all it takes to try again.
+const MOTION_COVERS: bool = false;
+
 #[derive(Clone, PartialEq, Hash, Debug)]
 pub enum Page {
     Home,
-    Explore,
+    New,
     Library(LibTab),
     Search(String),
+    Downloads,
     Album(String),
     Playlist(String),
     Artist(String),
@@ -93,6 +99,8 @@ pub enum Action {
     Go(Page),
     QueueJump(usize),
     QueueRemove(usize),
+    /// Open up next (the player's) or the queue drawer (the bar's).
+    ViewQueue,
     Seek(f32),
     Like(Track, bool),
     /// Like (or unlike) a selection of songs.
@@ -115,6 +123,10 @@ pub enum Action {
     Mini(bool),
     /// Play/pause what's already loaded (a card's button on the playing item).
     TogglePlay,
+    /// Drop the hi-res stream and replay the current song from YouTube at the same spot.
+    RevertQuality,
+    /// Clear a quality revert and replay, asking hi-res sources again.
+    UpgradeQuality,
     /// A song chosen on the search page as the Spotify transfer's match.
     TransferPick(Track),
 }
@@ -193,6 +205,59 @@ pub struct Channels {
 /// its answer (works, message).
 type ProxyTest = Option<Option<(bool, String)>>;
 
+/// A thing opened from a search, shown on the search landing with its artwork.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecentSearch {
+    /// The search it was clicked from.
+    pub query: String,
+    /// What was opened; `None` for entries saved by an earlier version, which only kept
+    /// the query and open the search again.
+    #[serde(default)]
+    pub target: Option<Target>,
+    pub title: String,
+    pub subtitle: String,
+    pub thumb: Option<String>,
+    /// An artist, whose picture is round.
+    pub round: bool,
+}
+
+/// A decoded motion sleeve, uploaded to a texture as frames arrive.
+pub struct MotionView {
+    motion: std::sync::Arc<crate::motion::Motion>,
+    tex: Option<egui::TextureHandle>,
+    seen: u64,
+    /// The width this decoder was started at: a larger view replaces it once.
+    width: u32,
+}
+
+impl MotionView {
+    fn new(motion: std::sync::Arc<crate::motion::Motion>, width: u32) -> Self {
+        Self { motion, tex: None, seen: 0, width }
+    }
+
+    /// The newest frame as a texture, once one has been decoded.
+    fn texture(&mut self, ctx: &egui::Context) -> Option<&egui::TextureHandle> {
+        if let Some((version, frame)) = self.motion.latest()
+            && version != self.seen
+        {
+            self.seen = version;
+            let image = egui::ColorImage::from_rgba_unmultiplied([frame.w, frame.h], &frame.rgba);
+            match &mut self.tex {
+                Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
+                None => self.tex = Some(ctx.load_texture("apple-motion", image, egui::TextureOptions::LINEAR)),
+            }
+        }
+        self.tex.as_ref()
+    }
+}
+
+impl Drop for MotionView {
+    fn drop(&mut self) {
+        // Off screen: the decoder stops at its next frame instead of looping on.
+        self.motion.stop();
+    }
+}
+
 pub struct App {
     backend: Backend,
     audio: AudioHandle,
@@ -233,7 +298,15 @@ pub struct App {
     /// The current page's request failed with nothing cached: show a retry, not a skeleton.
     load_failed: bool,
     search_text: String,
+    /// The route query the box was last filled from, so clearing it isn't undone.
+    search_synced: String,
+    /// Past searches, newest first, for the search landing.
+    recent_searches: Vec<RecentSearch>,
+    /// A search whose results are on screen, waiting for the first result to be opened.
+    search_pending: bool,
     suggestions: (String, Vec<crate::ytm::Suggestion>),
+    /// Up to 32 query results, oldest first, scoped to the current suggestion round.
+    suggest_cache: VecDeque<(String, Vec<crate::ytm::Suggestion>)>,
     /// The suggestion picked with the arrow keys, which Enter searches.
     suggest_sel: Option<usize>,
     /// Bumped when a past search is removed or the account changes: suggestions
@@ -302,9 +375,42 @@ pub struct App {
     // visuals
     art_key: Option<String>,
     art_changed: f64,
+    /// Apple's page for each artist visited (their display name and hero clips).
+    apple_artists: std::collections::HashMap<String, Option<crate::apple::Artwork>>,
+    /// Motion sleeve master playlist per release key (`None`: Apple has none).
+    apple_covers: std::collections::HashMap<String, Option<String>>,
+    /// Releases Apple had nothing for when last asked, and when: asked again after a
+    /// while, since a lookup can fail on a network hiccup rather than for good.
+    apple_missed: std::collections::HashMap<String, std::time::Instant>,
+    /// Decoders for the motion sleeves on screen.
+    apple_motion: std::collections::HashMap<String, MotionView>,
+    /// Apple lookups already in flight.
+    apple_waiting: std::collections::HashSet<String>,
+    /// Settings › Artist pages: the listener's own signature service, or empty.
+    signature_api: String,
+    /// Signatures already uploaded, by name key (`artist_signature::key`).
+    signature_tex: std::collections::HashMap<String, egui::TextureHandle>,
+    /// Signatures fetched but not yet uploaded, keyed the same way.
+    signature_images: std::collections::HashMap<String, (usize, usize, Vec<u8>)>,
+    /// Names the service had nothing for, and when: asked again after a minute.
+    signature_missed: std::collections::HashMap<String, std::time::Instant>,
+    /// Signature lookups already in flight.
+    signature_waiting: std::collections::HashSet<String>,
+    /// Settings › Playback: the listener's hi-res addon links, in the order given.
+    hires_sources: Vec<String>,
+    /// The "+ Add a source" row is open.
+    hires_adding: bool,
+    /// What's typed in that row, before it's added.
+    hires_draft: String,
+    /// Focus the draft row as soon as it opens.
+    hires_focus: bool,
+    /// Ask the addons for Dolby Atmos renditions.
+    prefer_atmos: bool,
+    /// What the playing stream is (codec, rate, depth, size), when a hi-res source
+    /// supplied it, with the generation it belongs to.
+    audio_info: Option<(u64, crate::hires::Info)>,
     accent: Color32,
-    default_theme: bool,
-    /// Selected theme preset (see `preset.rs`); applies unless `default_theme`.
+    /// Selected theme preset (see `preset.rs`).
     theme_id: String,
     /// Preset whose chrome (glass, corner radius) is installed in the egui style.
     chrome_applied: Option<String>,
@@ -316,11 +422,15 @@ pub struct App {
     sponsorblock: bool,
     /// Crossfade between songs, and over how many seconds.
     crossfade: bool,
+    /// DJ-style handoff: the next song eases in under the last one (see `audio::Ramp`).
+    automix: bool,
     crossfade_secs: u32,
-    /// Also crossfade when skipping or picking a song.
-    crossfade_skips: bool,
     /// The next song starts because this one is ending: crossfade into it.
     handoff: bool,
+    /// The handoff just begun, for the play that starts the next song to pick up.
+    pending_mix: Option<MixFrom>,
+    /// The song an Automix handoff came from, shown until the next one is louder.
+    mix_from: Option<MixFrom>,
     /// SponsorBlock segments for a video, and when one was last skipped.
     segments: Option<(String, Vec<crate::sponsorblock::Segment>)>,
     segment_skipped: f64,
@@ -374,7 +484,6 @@ pub struct App {
 
     // updates
     updater: Option<crate::update::Updater>,
-    auto_update: bool,
     /// When the last automatic update check ran (app time, s).
     update_checked: Option<f64>,
     update_announced: bool,
@@ -403,7 +512,7 @@ pub struct App {
     close_to_tray: bool,
     /// Settings › Window: draw with wgpu (Vulkan) from the next start (renderer.rs).
     pub(super) wgpu_renderer: bool,
-    /// Settings › App icon (`appicon::ALL` id).
+    /// The app icon (`appicon::ALL` id) shown on the window and in the tray.
     app_icon: &'static str,
     /// The tray icon, while the window is hidden.
     tray: Option<crate::tray::Tray>,
@@ -415,6 +524,11 @@ pub struct App {
     good_window: Option<String>,
     /// The sidebar is a narrow icon rail.
     sidebar_collapsed: bool,
+    /// The sidebar playlists' order (by id), and the ones hidden from it.
+    playlist_order: Vec<String>,
+    hidden_playlists: HashSet<String>,
+    /// The collection page whose inline search is open, and what's typed in it.
+    coll_search: Option<(String, String)>,
     actions: Vec<Action>,
     dialog: Option<Dialog>,
     share_pending: Option<String>,
@@ -423,6 +537,22 @@ pub struct App {
 
 /// Longest crossfade offered, in seconds.
 pub(super) const CROSSFADE_MAX: u32 = 12;
+
+/// The song an Automix handoff came from. Its last stretch is still what you hear
+/// while the next one eases in, so the player keeps showing it (with its art and
+/// lyrics) until the next song is the louder of the two rather than switching at
+/// the first beat of the blend.
+pub(super) struct MixFrom {
+    pub(super) track: Track,
+    /// Its length and the handoff's length, in seconds.
+    pub(super) total: f32,
+    pub(super) mix: f32,
+    /// The audio thread has taken the handoff: the position reads the next song's again.
+    pub(super) started: bool,
+    /// The player has handed the screen to the next song. The mix keeps running after
+    /// that, with this song's tail under it, so the "Mixing" caption stays until its end.
+    pub(super) released: bool,
+}
 
 impl App {
     pub fn new(
@@ -439,15 +569,20 @@ impl App {
         let discord_enabled = get("discord_enabled").is_none_or(|v| v == "1");
         let app_icon = crate::appicon::load(backend.data_dir());
         let wgpu_renderer = crate::renderer::load(backend.data_dir()) == crate::renderer::Renderer::Wgpu;
-        // Updates reinstall the shortcuts with the classic icon.
-        if app_icon != crate::appicon::CLASSIC {
-            crate::appicon::sync_shortcuts(app_icon, backend.data_dir());
-        }
+        // Updates reinstall the shortcuts with the classic icon: always put ours back,
+        // and keep the Start menu link pointing at this exe.
+        crate::appicon::sync_shortcuts(app_icon, backend.data_dir());
         crate::downloads::init(backend.data_dir(), &get("download_dir").unwrap_or_default());
         crate::lastfm::init(backend.data_dir());
         let logged_in = backend.is_logged_in();
         // Before any request: a song started at launch (dev hooks) must see this setting.
         backend.set_high_quality(get("high_quality").is_none_or(|v| v == "1"));
+        // Before any request: a song started at launch must see the hi-res source too.
+        let hires_source = get("hires_source").unwrap_or_default();
+        let hires_sources: Vec<String> = hires_source.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+        backend.set_hires_source(&hires_sources.join("\n"));
+        let prefer_atmos = get("prefer_atmos").is_some_and(|v| v == "1");
+        backend.set_prefer_atmos(prefer_atmos);
         backend.request(Req::Home(None));
         if logged_in {
             backend.request(Req::Library);
@@ -485,7 +620,11 @@ impl App {
             loading: false,
             load_failed: false,
             search_text: String::new(),
+            search_synced: String::new(),
+            recent_searches: get("recent_searches").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            search_pending: false,
             suggestions: Default::default(),
+            suggest_cache: VecDeque::new(),
             suggest_sel: None,
             suggest_round: 0,
             forgets_pending: 0,
@@ -528,7 +667,6 @@ impl App {
             output_device: get("output_device").filter(|d| !d.is_empty()).map(|id| (id, get("output_device_name").unwrap_or_default())),
             output_devices: Vec::new(),
             updater: None,
-            auto_update: get("auto_update").is_none_or(|v| v == "1"),
             close_to_tray: get("close_to_tray").is_some_and(|v| v == "1"),
             wgpu_renderer,
             app_icon,
@@ -537,6 +675,9 @@ impl App {
             window_hidden: false,
             good_window: get("window"),
             sidebar_collapsed: get("sidebar_collapsed").is_some_and(|v| v == "1"),
+            playlist_order: get("playlist_order").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
+            hidden_playlists: get("hidden_playlists").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
+            coll_search: None,
             update_checked: None,
             update_announced: false,
             notes_dialog: None,
@@ -561,11 +702,25 @@ impl App {
             radio_pending: false,
             seek_drag: None,
             art_key: None,
+            apple_artists: Default::default(),
+            apple_covers: Default::default(),
+            apple_missed: Default::default(),
+            apple_motion: Default::default(),
+            apple_waiting: Default::default(),
+            signature_api: get("signature_api").unwrap_or_default(),
+            signature_tex: Default::default(),
+            signature_images: Default::default(),
+            signature_missed: Default::default(),
+            signature_waiting: Default::default(),
+            hires_sources,
+            hires_adding: false,
+            hires_draft: String::new(),
+            hires_focus: false,
+            prefer_atmos,
+            audio_info: None,
             art_changed: -10.0,
             accent: theme::RED,
-            default_theme: get("default_theme").is_some_and(|v| v == "1") && std::env::var_os("YTM_THEME").is_none(),
-            // Dev hook: YTM_THEME=<preset id> tries a theme without saving it.
-            theme_id: std::env::var("YTM_THEME").ok().or_else(|| get("theme")).unwrap_or_else(|| crate::preset::DEFAULT_ID.to_owned()),
+            theme_id: crate::preset::DEFAULT_ID.to_owned(),
             chrome_applied: None,
             // Dev hook: YTM_APPEARANCE=light|dark|system tries a mode without saving it.
             appearance: theme::Appearance::from_key(&dev_var("YTM_APPEARANCE").map(str::to_owned).or_else(|| get("appearance")).unwrap_or_default()),
@@ -573,8 +728,10 @@ impl App {
             reactive_bg: get("reactive_bg").is_none_or(|v| v == "1"),
             sponsorblock: get("sponsorblock").is_some_and(|v| v == "1"),
             crossfade: get("crossfade").is_some_and(|v| v == "1"),
+            automix: get("automix").is_some_and(|v| v == "1"),
             handoff: false,
-            crossfade_skips: get("crossfade_skips").is_some_and(|v| v == "1"),
+            pending_mix: None,
+            mix_from: None,
             crossfade_secs: get("crossfade_secs").and_then(|v| v.parse().ok()).unwrap_or(5).clamp(1, CROSSFADE_MAX),
             segments: None,
             segment_skipped: f64::NEG_INFINITY,
@@ -632,7 +789,7 @@ impl App {
         }
         match std::env::var("YTM_PAGE").as_deref() {
             Ok("home") => app.go(Page::Home),
-            Ok("explore") => app.go(Page::Explore),
+            Ok("new") | Ok("explore") => app.go(Page::New),
             Ok("library") => app.go(Page::Library(LibTab::Playlists)),
             Ok("uploads") => app.go(Page::Library(LibTab::Uploads)),
             Ok("liked") => app.go(Page::Library(LibTab::Songs)),
@@ -686,6 +843,8 @@ impl App {
             self.refresh();
             return;
         }
+        // Leaving a page deloads its motion clips: no decoder keeps running unseen.
+        self.apple_motion.clear();
         let prev = std::mem::replace(&mut self.page, page);
         self.back.push(prev);
         self.forward.clear();
@@ -696,6 +855,7 @@ impl App {
         if self.np_open {
             self.np_open = false;
         } else if let Some(p) = self.back.pop() {
+            self.apple_motion.clear();
             self.forward.push(std::mem::replace(&mut self.page, p));
             self.page_loaded();
         }
@@ -703,6 +863,7 @@ impl App {
 
     fn nav_forward(&mut self) {
         if let Some(p) = self.forward.pop() {
+            self.apple_motion.clear();
             self.back.push(std::mem::replace(&mut self.page, p));
             self.page_loaded();
         }
@@ -722,10 +883,11 @@ impl App {
     fn page_loaded(&mut self) {
         self.page_changed = -1.0; // stamped with the frame time on the next pass
         // The search box holds the query of the search page you're on, and is empty elsewhere.
-        self.search_text = match &self.page {
+        self.search_synced = match &self.page {
             Page::Search(q) => q.clone(),
             _ => String::new(),
         };
+        self.search_text = self.search_synced.clone();
         self.suggestions = Default::default();
         self.suggest_sel = None;
         // Choosing a transfer match lasts while searching; any other page ends it.
@@ -740,8 +902,9 @@ impl App {
                 self.home_loading = true;
                 Some(Req::Home(None))
             }
-            Page::Explore => Some(Req::Explore(self.preferred_artist_ids())),
-            Page::Search(q) if self.search.as_ref().is_none_or(|s| &s.query != q) => Some(Req::Search(q.clone())),
+            Page::New => Some(Req::Explore(self.preferred_artist_ids())),
+            // The empty search is the page's landing state: nothing to ask for.
+            Page::Search(q) if !q.trim().is_empty() && self.search.as_ref().is_none_or(|s| &s.query != q) => Some(Req::Search(q.clone())),
             Page::Album(id) | Page::Playlist(id) => {
                 self.visit_list(id, matches!(self.page, Page::Album(_)));
                 None
@@ -761,7 +924,7 @@ impl App {
         // The spinner is only for a page with nothing to show yet.
         let cached = match &self.page {
             Page::Home => self.home.is_some(),
-            Page::Explore => self.explore.is_some(),
+            Page::New => self.explore.is_some(),
             Page::Album(id) | Page::Playlist(id) => self.opened(id).is_some(),
             Page::Artist(id) => self.artist.as_ref().is_some_and(|a| &a.id == id),
             Page::Library(LibTab::History) => self.history.is_some(),
@@ -789,8 +952,102 @@ impl App {
         }
     }
 
+    /// Ask Apple, once, for the release's motion sleeve.
+    fn apple_cover(&mut self, album: &str, artist: &str, title: Option<&str>) {
+        if !MOTION_COVERS || album.is_empty() || artist.is_empty() {
+            return;
+        }
+        let key = format!("{album}\u{1}{artist}");
+        if self.apple_covers.contains_key(&key) {
+            return;
+        }
+        if self.apple_missed.get(&key).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(300)) {
+            return;
+        }
+        if !self.apple_waiting.insert(key.clone()) {
+            return;
+        }
+        self.backend.request(Req::AppleCover {
+            key,
+            album: album.to_owned(),
+            artist: artist.to_owned(),
+            title: title.map(str::to_owned),
+        });
+    }
+
+    /// The newest frame of the release's motion sleeve, started the first time it's seen.
+    /// `None` until Apple has answered (or if it has no clip for the release).
+    fn apple_sprite(&mut self, ctx: &egui::Context, album: &str, artist: &str, max_width: u32) -> Option<widgets::MotionSprite> {
+        if !MOTION_COVERS {
+            return None;
+        }
+        let key = format!("{album}\u{1}{artist}");
+        let url = self.apple_covers.get(&key)?.clone()?;
+        self.motion_sprite(ctx, key, &url, max_width)
+    }
+
+    /// The artist's handwritten signature, from the service in Settings: asked for once
+    /// per name, uploaded the frame it arrives. `None` while it's on its way or when
+    /// the service has none for them.
+    fn signature_texture(&mut self, ctx: &egui::Context, name: &str) -> Option<egui::TextureHandle> {
+        let endpoint = crate::artist_signature::endpoint(&self.signature_api);
+        let canon = crate::artist_signature::key(name);
+        if endpoint.is_empty() || canon.is_empty() {
+            return None;
+        }
+        // The link is part of the key: an answer from a service the field no longer
+        // holds is not this artist's signature.
+        let key = format!("{endpoint}\u{1}{canon}");
+        if let Some(tex) = self.signature_tex.get(&key) {
+            return Some(tex.clone());
+        }
+        if let Some((w, h, rgba)) = self.signature_images.remove(&key) {
+            let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+            let tex = ctx.load_texture("artist-signature", image, egui::TextureOptions::LINEAR);
+            // A few artists' marks at most: the header never shows two at once.
+            if self.signature_tex.len() >= 8 {
+                self.signature_tex.clear();
+            }
+            self.signature_tex.insert(key, tex.clone());
+            return Some(tex);
+        }
+        if self.signature_missed.get(&key).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60)) {
+            return None;
+        }
+        if self.signature_waiting.insert(key.clone()) {
+            self.backend.request(Req::ArtistSignature { key, endpoint, name: name.to_owned() });
+        }
+        None
+    }
+
+    /// A new link is a different service: what was read from the old one is no longer
+    /// evidence.
+    pub(super) fn signature_reset(&mut self) {
+        self.signature_tex.clear();
+        self.signature_images.clear();
+        self.signature_missed.clear();
+        self.signature_waiting.clear();
+    }
+
+    /// The newest frame of a motion clip, started the first time it's seen. The decoders
+    /// on screen are capped so old pages don't leave threads behind.
+    fn motion_sprite(&mut self, ctx: &egui::Context, key: String, url: &str, max_width: u32) -> Option<widgets::MotionSprite> {
+        // One decoder per release. The strip and the player ask for different sizes, and
+        // replacing it per caller would restart the clip every frame and never show a
+        // frame: a bigger view takes over only when it needs a wider decode.
+        let stale = self.apple_motion.get(&key).map_or(true, |v| v.width < max_width);
+        if stale {
+            if self.apple_motion.len() >= 8 {
+                self.apple_motion.clear();
+            }
+            self.apple_motion.insert(key.clone(), MotionView::new(crate::motion::play(ctx, url, max_width), max_width));
+        }
+        let tex = self.apple_motion.get_mut(&key)?.texture(ctx)?;
+        Some(widgets::MotionSprite { id: tex.id(), size: tex.size_vec2() })
+    }
+
     fn accent_color(&self) -> Color32 {
-        let c = if self.default_theme { theme::RED } else { self.look().accent(self.accent) };
+        let c = self.look().accent(self.accent);
         if theme::light() {
             // A pale cover colour would barely show on light pages: deepen it.
             let luma = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
@@ -804,25 +1061,26 @@ impl App {
     /// Whether pages draw light: only the ytm-rs theme has a light mode, and it follows
     /// Settings › Appearance › Mode.
     fn light_pages(&self, ctx: &egui::Context) -> bool {
-        !self.default_theme && self.look().id == crate::preset::DEFAULT_ID && self.appearance.is_light(ctx)
+        self.look().id == crate::preset::DEFAULT_ID && self.appearance.is_light(ctx)
     }
 
-    /// The active theme preset; the classic red theme uses the built-in look's layout.
-    /// Synced once per frame (`sync_look`), so this is a plain index, not a search.
+    /// The active theme preset. Synced once per frame (`sync_look`), so this is a plain
+    /// index, not a search.
     fn look(&self) -> &'static crate::preset::Preset {
         crate::preset::active()
     }
 
     fn sync_look(&self) {
-        let id = if self.default_theme { crate::preset::DEFAULT_ID } else { &self.theme_id };
+        let id = self.theme_id.as_str();
         if crate::preset::active().id != id {
             crate::preset::set_active(id);
         }
     }
 
-    /// Height of the bottom player area (a floating bar leaves a margin around it).
+    /// Height of the bottom player area: the capsule's 56 points plus the margin it
+    /// floats on.
     fn bar_height(&self) -> f32 {
-        if self.look().chrome.player_bar == crate::preset::PlayerBar::Floating { 100.0 } else { 86.0 }
+        86.0
     }
 
     fn toast(&mut self, msg: impl Into<String>) {
@@ -939,7 +1197,7 @@ impl eframe::App for App {
         } else if playing && widgets::equalizer_shown(ctx) {
             // The playing row's bars need a steady, full rate to read as smooth.
             ctx.request_repaint_after(Duration::from_millis(16));
-        } else if playing && self.anim_bg && !self.default_theme && shell::pages_bg_moves(self.look()) {
+        } else if playing && self.anim_bg && shell::pages_bg_moves(self.look()) {
             ctx.request_repaint_after(Duration::from_millis(66));
         } else if playing || self.buffering {
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -975,6 +1233,9 @@ impl eframe::App for App {
         titlebar::set_fullscreen(&ctx, self.fullscreen);
         // The mini player, or nothing but the background while the window changes size.
         let layout = self.mini.layout(&ctx);
+        // The strip's window is cut to the same corner as the artwork it frames; the
+        // full window keeps its corners.
+        crate::fullscreen::set_rounded((layout == mini::Layout::Mini).then(|| (theme::thumb_radius() + 1.0) * ctx.pixels_per_point()));
         if layout != mini::Layout::Full {
             shell::background(self, ui, screen, now, None);
             if layout == mini::Layout::Mini {
@@ -992,34 +1253,13 @@ impl eframe::App for App {
             // The top of the window, down to the search box's row: what's on it comes after.
             titlebar::drag_area(ui, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), titlebar::HEIGHT)), "main");
         }
-        if !self.fullscreen {
-            let floating = look.chrome.player_bar == crate::preset::PlayerBar::Floating;
-            let bar_alpha = app_style.bar_alpha.clamp(0.0, 1.0);
-            let frame = if floating {
-                egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 14 })
-            } else {
-                let mut f = egui::Frame::new().fill(theme::panel(bar_alpha));
-                if app_style.bar_border {
-                    f = f.stroke(egui::Stroke::new(1.0, theme::glass(0.1)));
-                }
-                f
-            };
+        if !self.fullscreen && covered {
+            // Now playing hides the pages: the player bar keeps its full-width place.
             egui::Panel::bottom("player").resizable(false)
                 .exact_size(self.bar_height())
-                .frame(frame)
+                .frame(egui::Frame::new())
                 .show_separator_line(false)
-                .show(ui, |ui| {
-                    if floating {
-                        let r = ui.max_rect();
-                        let radius = look.chrome.radius.clamp(10.0, 26.0);
-                        widgets::soft_shadow(ui, r, radius, 24.0, 0.45);
-                        ui.painter().rect_filled(r, radius, theme::panel((bar_alpha + 0.07).min(1.0)));
-                        let edge = if app_style.bar_border { 0.14 } else { 0.08 };
-                        ui.painter().rect_stroke(r, radius, egui::Stroke::new(1.0, theme::glass(edge)), egui::StrokeKind::Inside);
-                        ui.set_clip_rect(r);
-                    }
-                    shell::player_bar(self, ui, now)
-                });
+                .show(ui, |ui| shell::player_bar(self, ui, now, false));
         }
         if !self.fullscreen && !covered {
             use crate::preset::SidebarStyle;
@@ -1037,11 +1277,14 @@ impl eframe::App for App {
                     .outer_margin(egui::Margin { left: 10, right: 4, top: 10, bottom: 10 })
                     .inner_margin(egui::Margin::symmetric(12, 14)),
             };
+            // The sidebar first, so it runs the window's full height: the player floats
+            // over the main section only, and the page content scrolls under it.
             egui::Panel::left("nav").resizable(false)
                 .exact_size(shell::SIDEBAR_W - (shell::SIDEBAR_W - shell::RAIL_W) * shell::sidebar_collapse(self, &ctx))
                 .frame(side_frame)
                 .show_separator_line(false)
                 .show(ui, |ui| shell::sidebar(self, ui));
+            let section = ui.available_rect_before_wrap();
             let q = theme::anim_bool(&ctx, "queue-drawer", self.queue_open && !self.np_open, 0.25);
             if q > 0.01 {
                 egui::Panel::right("queue").resizable(false)
@@ -1050,12 +1293,24 @@ impl eframe::App for App {
                     .show_separator_line(false)
                     .show(ui, |ui| shell::queue_drawer(self, ui));
             }
+            let main_right = ui.available_rect_before_wrap().right();
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().inner_margin(egui::Margin { left: 28, right: 0, top: titlebar::top_margin(14, 42.0), bottom: 0 }))
+                .frame(egui::Frame::new().inner_margin(egui::Margin { left: 28, right: 28, top: titlebar::top_margin(14, 42.0), bottom: 0 }))
                 .show(ui, |ui| {
                     shell::top_bar(self, ui);
-                    ui.add_space(6.0);
+                    ui.add_space(2.0);
                     pages::page(self, ui, now);
+                });
+            // The player: a frosted strip over the bottom of the main section, above the
+            // pages, so their last rows fade under it instead of stopping at a seam.
+            let strip = egui::Rect::from_min_max(egui::pos2(section.left(), screen.bottom() - self.bar_height()), egui::pos2(main_right, screen.bottom()));
+            egui::Area::new(egui::Id::new("player-bar"))
+                .fixed_pos(strip.min)
+                .order(egui::Order::Middle)
+                .show(&ctx, |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+                        shell::player_bar(self, ui, now, true);
+                    });
                 });
         }
         if np > 0.001 {
@@ -1070,6 +1325,7 @@ impl eframe::App for App {
         shell::suggestions(self, &ctx);
         shell::toast(self, &ctx, now);
 
+        // The player keeps the window buttons too: the top right stays the window's.
         titlebar::window_buttons(&ctx);
         titlebar::resize_edges(&ctx);
         // Back from the mini player.
@@ -1127,6 +1383,7 @@ impl eframe::App for App {
         storage.set_string("repeat", repeat.into());
         let b = |v: bool| if v { "1" } else { "0" }.to_owned();
         storage.set_string("autoplay", b(self.autoplay));
+        storage.set_string("recent_searches", serde_json::to_string(&self.recent_searches).unwrap_or_default());
         storage.set_string("jam_name", self.jam.name.clone());
         let cache = self.logged_in.then(|| AccountCache {
             name: self.account_name.clone(),
@@ -1143,7 +1400,6 @@ impl eframe::App for App {
         let (device, device_name) = self.output_device.clone().unzip();
         storage.set_string("output_device", device.unwrap_or_default());
         storage.set_string("output_device_name", device_name.unwrap_or_default());
-        storage.set_string("auto_update", b(self.auto_update));
         // eframe has just saved the window's geometry. Minimized or in the tray that's
         // 0×0 at -32000, which would reopen as a speck: keep the last real one instead.
         if self.window_hidden {
@@ -1161,12 +1417,24 @@ impl eframe::App for App {
         }
         storage.set_string("close_to_tray", b(self.close_to_tray));
         storage.set_string("sidebar_collapsed", b(self.sidebar_collapsed));
+        // The sidebar's playlist order, completed with any playlist that appeared since
+        // it was last changed (so a drag can place them all).
+        if let Some(l) = &self.library {
+            for c in &l.playlists {
+                if let Target::Playlist(id) = &c.target
+                    && !self.playlist_order.contains(id)
+                {
+                    self.playlist_order.push(id.clone());
+                }
+            }
+        }
+        storage.set_string("playlist_order", self.playlist_order.join("\n"));
+        storage.set_string("hidden_playlists", self.hidden_playlists.iter().cloned().collect::<Vec<_>>().join("\n"));
         // Pretend versions (dev hook) mustn't decide the real "what's new".
         if std::env::var_os("YTM_UPDATE_AS").is_none() {
             storage.set_string("last_version", crate::update::current_version());
         }
         storage.set_string("discord_enabled", b(self.discord_enabled));
-        storage.set_string("default_theme", b(self.default_theme));
         if dev_var("YTM_APPEARANCE").is_none() {
             storage.set_string("appearance", self.appearance.key().to_owned());
         }
@@ -1178,10 +1446,13 @@ impl eframe::App for App {
         }
         storage.set_string("anim_bg", b(self.anim_bg));
         storage.set_string("reactive_bg", b(self.reactive_bg));
+        storage.set_string("signature_api", self.signature_api.clone());
+        storage.set_string("hires_source", self.hires_sources.join("\n"));
+        storage.set_string("prefer_atmos", b(self.prefer_atmos));
         storage.set_string("sponsorblock", b(self.sponsorblock));
         storage.set_string("crossfade", b(self.crossfade));
+        storage.set_string("automix", b(self.automix));
         storage.set_string("crossfade_secs", self.crossfade_secs.to_string());
-        storage.set_string("crossfade_skips", b(self.crossfade_skips));
         storage.set_string("show_roman", b(self.show_roman));
         storage.set_string("show_trans", b(self.show_trans));
         // Background test runs mustn't change the listener's sources or per-song picks.
@@ -1200,13 +1471,13 @@ impl eframe::App for App {
         if let (Some(bg), Some(gl)) = (&self.bg, gl) {
             bg.destroy(gl);
         }
-        // A downloaded update installs as the app closes (and relaunches it when the
-        // user asked to restart).
+        // A downloaded update installs only when the user restarted for it; nothing is
+        // installed behind their back as the app closes.
         let update_ready = self.updater.as_ref().is_some_and(|u| matches!(u.state(), crate::update::State::Ready { .. }));
         if let Some(u) = &self.updater
-            && (self.restart_for_update || self.auto_update || (self.restart_app && update_ready))
+            && self.restart_for_update
         {
-            u.install(self.restart_for_update || self.restart_app);
+            u.install(true);
         }
         if self.restart_app && !update_ready {
             relaunch();

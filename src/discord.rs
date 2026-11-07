@@ -15,6 +15,9 @@ use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 /// as "Listening to <name>" in the profile card.
 const CLIENT_ID: &str = "1521756469433991299";
 
+/// The name the profile card shows, in place of the Discord app's registered name.
+const APP_NAME: &str = "BitChord PC Continued";
+
 const RETRY: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +129,9 @@ fn activity(p: &Presence) -> Activity<'_> {
     }
     let url = format!("https://music.youtube.com/watch?v={}", p.video_id);
     Activity::new()
+        // What the profile card calls the app: the Discord app's own name is fixed by
+        // the client ID, so the activity overrides it.
+        .name(APP_NAME)
         .activity_type(ActivityType::Listening)
         .status_display_type(StatusDisplayType::Details)
         .details(field(&p.title))

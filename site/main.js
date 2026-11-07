@@ -1,4 +1,4 @@
-/* ytm-rs site. No framework, no build step. */
+/* bitchord site. No framework, no build step. */
 (() => {
   "use strict";
 
@@ -519,7 +519,7 @@ void main(){
     const builds = {
       windows: { x86: find(/setup-[\d.]+\.exe$/i), arm: find(/setup-[\d.]+-arm64\.exe$/i) },
       macos: { arm: find(/setup-[\d.]+-macos-aarch64\.dmg$/i), x86: find(/setup-[\d.]+-macos-x86_64\.dmg$/i) },
-      linux: { x86: find(/^ytm-rs-[\d.]+-linux-x86_64\.tar\.gz$/i) },
+      linux: { x86: find(/^bitchord-[\d.]+-linux-x86_64\.tar\.gz$/i) },
     };
     const show = (os, file) => {
       if (!file) return;

@@ -256,7 +256,7 @@ mod frame {
     use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
     use windows::Win32::UI::Controls::MARGINS;
     use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
-    use windows::Win32::UI::WindowsAndMessaging::{NCCALCSIZE_PARAMS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, WM_NCCALCSIZE};
+    use windows::Win32::UI::WindowsAndMessaging::{NCCALCSIZE_PARAMS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, WM_CHAR, WM_NCCALCSIZE, WM_SYSCHAR};
 
     pub fn init(hwnd: *mut std::ffi::c_void) {
         let hwnd = HWND(hwnd);
@@ -277,6 +277,13 @@ mod frame {
         // SAFETY: called by Windows with the window's own message; for WM_NCCALCSIZE with
         // wparam set, lparam points at an NCCALCSIZE_PARAMS.
         unsafe {
+            // A character with no key press for winit to pair it with (an IME commit
+            // sends these) is left to Windows' default handling, which answers with the
+            // system beep. The text itself already reached the app either way.
+            if msg == WM_CHAR || msg == WM_SYSCHAR {
+                let _ = DefSubclassProc(hwnd, msg, wparam, lparam);
+                return LRESULT(0);
+            }
             if msg != WM_NCCALCSIZE || wparam.0 == 0 {
                 return DefSubclassProc(hwnd, msg, wparam, lparam);
             }

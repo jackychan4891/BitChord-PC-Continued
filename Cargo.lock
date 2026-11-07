@@ -520,6 +520,59 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
 
 [[package]]
+name = "bitchord"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bytes",
+ "crossbeam-channel",
+ "directories",
+ "discord-rich-presence",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "env_logger",
+ "filmcraft-ac3",
+ "futures-util",
+ "gtk",
+ "hmac",
+ "image",
+ "keyring",
+ "libc",
+ "localzone",
+ "log",
+ "md-5",
+ "memmap2",
+ "mp4ameta",
+ "raw-window-handle",
+ "reqwest",
+ "rfd",
+ "rodio",
+ "roxmltree",
+ "rquickjs",
+ "rusty-opus",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "sha2",
+ "skrifa",
+ "souvlaki",
+ "symphonia",
+ "tao",
+ "tokio",
+ "tokio-tungstenite",
+ "tray-icon",
+ "unicode-bidi",
+ "unicode-normalization",
+ "url",
+ "wgpu",
+ "windows 0.62.2",
+ "winresource",
+ "wry",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1772,6 +1825,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "extended"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1806,6 +1865,15 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
+]
+
+[[package]]
+name = "filmcraft-ac3"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d17e68e57e0039be2264551c24f22b622079e43c4ec6d736626348220e98b79"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5367,10 +5435,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5773a4c030a19d9bfaa090f49746ff35c75dfddfa700df7a5939d5e076a57039"
 dependencies = [
  "lazy_static",
+ "symphonia-bundle-flac",
+ "symphonia-bundle-mp3",
  "symphonia-codec-aac",
+ "symphonia-codec-alac",
+ "symphonia-codec-vorbis",
  "symphonia-core",
  "symphonia-format-isomp4",
  "symphonia-format-mkv",
+ "symphonia-format-riff",
+ "symphonia-metadata",
+]
+
+[[package]]
+name = "symphonia-bundle-flac"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c91565e180aea25d9b80a910c546802526ffd0072d0b8974e3ebe59b686c9976"
+dependencies = [
+ "log",
+ "symphonia-core",
+ "symphonia-metadata",
+ "symphonia-utils-xiph",
+]
+
+[[package]]
+name = "symphonia-bundle-mp3"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4872dd6bb56bf5eac799e3e957aa1981086c3e613b27e0ac23b176054f7c57ed"
+dependencies = [
+ "lazy_static",
+ "log",
+ "symphonia-core",
  "symphonia-metadata",
 ]
 
@@ -5383,6 +5480,27 @@ dependencies = [
  "lazy_static",
  "log",
  "symphonia-core",
+]
+
+[[package]]
+name = "symphonia-codec-alac"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8413fa754942ac16a73634c9dfd1500ed5c61430956b33728567f667fdd393ab"
+dependencies = [
+ "log",
+ "symphonia-core",
+]
+
+[[package]]
+name = "symphonia-codec-vorbis"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f025837c309cd69ffef572750b4a2257b59552c5399a5e49707cc5b1b85d1c73"
+dependencies = [
+ "log",
+ "symphonia-core",
+ "symphonia-utils-xiph",
 ]
 
 [[package]]
@@ -5422,6 +5540,18 @@ dependencies = [
  "symphonia-core",
  "symphonia-metadata",
  "symphonia-utils-xiph",
+]
+
+[[package]]
+name = "symphonia-format-riff"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2d7c3df0e7d94efb68401d81906eae73c02b40d5ec1a141962c592d0f11a96f"
+dependencies = [
+ "extended",
+ "log",
+ "symphonia-core",
+ "symphonia-metadata",
 ]
 
 [[package]]
@@ -7328,58 +7458,6 @@ dependencies = [
  "quote",
  "syn 3.0.6",
  "synstructure",
-]
-
-[[package]]
-name = "ytm-rs"
-version = "0.2.31"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "bytes",
- "crossbeam-channel",
- "directories",
- "discord-rich-presence",
- "eframe",
- "egui",
- "egui_extras",
- "env_logger",
- "futures-util",
- "gtk",
- "hmac",
- "image",
- "keyring",
- "libc",
- "localzone",
- "log",
- "md-5",
- "memmap2",
- "mp4ameta",
- "raw-window-handle",
- "reqwest",
- "rfd",
- "rodio",
- "roxmltree",
- "rquickjs",
- "rusty-opus",
- "serde",
- "serde_json",
- "sha1 0.10.7",
- "sha2",
- "skrifa",
- "souvlaki",
- "symphonia",
- "tao",
- "tokio",
- "tokio-tungstenite",
- "tray-icon",
- "unicode-bidi",
- "unicode-normalization",
- "url",
- "wgpu",
- "windows 0.62.2",
- "winresource",
- "wry",
 ]
 
 [[package]]

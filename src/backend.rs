@@ -16,7 +16,7 @@ use crate::audio::{AudioCmd, AudioHandle};
 use crate::lyrics::{self, LyricsSet};
 use crate::model::{self, Card, Target, Thumb, Track, sized};
 use crate::stream::{self, Shared};
-use crate::{innertube, jsc, webmusic, ytdlp, ytm, ytmapi};
+use crate::{hires, innertube, jsc, webmusic, ytdlp, ytm, ytmapi};
 
 pub enum Req {
     /// Home feed, optionally filtered by a mood chip's params.
@@ -60,6 +60,13 @@ pub enum Req {
     LyricsExtras { video_id: String, source: String, lines: Vec<String>, lang: Option<String>, target: String },
     /// Process cover art for the background; `key` is echoed back.
     Art { key: String, url: String },
+    /// Apple's artist page (display name and hero clips) for the artist `id`.
+    AppleArtist { id: String, name: String },
+    /// Apple's motion sleeve for a release; `key` is what the UI asked for.
+    AppleCover { key: String, album: String, artist: String, title: Option<String> },
+    /// A handwritten signature for `name` from the service at `endpoint`; `key` is
+    /// what the UI asked for.
+    ArtistSignature { key: String, endpoint: String, name: String },
     /// Radio seeded from a track (`seed`, its id); appended to the queue. `song_of`: the
     /// track, when it's a music video to play as its song: the song's radio is asked for.
     Radio { seed: String, song_of: Option<Track> },
@@ -69,10 +76,11 @@ pub enum Req {
     /// YouTube about the play (not when picking up a song already counted). `song_of`:
     /// the track, when it's a music video to play as its song version if one is found.
     /// `song`: the song version already playing for the music video `video_id` (picked up
-    /// mid-song): played without a lookup, and the video if it won't.
-    Play { video_id: String, generation: u64, at: std::time::Duration, report: bool, song_of: Option<Track>, song: Option<Track> },
+    /// mid-song): played without a lookup, and the video if it won't. `track`: the song as
+    /// the UI lists it, for a hi-res source's search.
+    Play { video_id: String, generation: u64, at: std::time::Duration, report: bool, song_of: Option<Track>, song: Option<Track>, track: Option<Track> },
     /// Resolve and download a track ahead of time so skipping to it is instant.
-    Prefetch { video_id: String, song_of: Option<Track> },
+    Prefetch { video_id: String, song_of: Option<Track>, track: Option<Track> },
     Like { video_id: String, like: bool },
     /// Several likes (or unlikes) one after another, for a selection.
     LikeMany { video_ids: Vec<String>, like: bool },
@@ -96,7 +104,7 @@ impl Req {
         match self {
             Req::Home(_) | Req::HomeMore(_) => "Loading home",
             Req::MoreQuickPicks(_) => "Loading more picks",
-            Req::Explore(_) => "Loading explore",
+            Req::Explore(_) => "Loading new",
             Req::Search(_) => "Search",
             Req::Suggest { .. } => "Suggest",
             Req::ForgetSearch(_) => "Removing the search",
@@ -116,6 +124,9 @@ impl Req {
             Req::Segments { .. } => "SponsorBlock",
             Req::LyricsExtras { .. } => "Translation",
             Req::Art { .. } => "Art",
+            Req::AppleArtist { .. } => "Apple artist",
+            Req::AppleCover { .. } => "Apple artwork",
+            Req::ArtistSignature { .. } => "Artist signature",
             Req::Radio { .. } => "Loading radio",
             Req::PlayCollection { .. } => "Playback",
             Req::Play { .. } => "Playback",
@@ -137,7 +148,7 @@ impl Req {
 
     /// Background requests fail quietly (logged, no toast).
     fn quiet(&self) -> bool {
-        matches!(self, Req::Suggest { .. } | Req::Account | Req::Channels | Req::ServerQueue | Req::Art { .. } | Req::Prefetch { .. } | Req::HomeMore(_) | Req::Lyrics(_) | Req::Segments { .. } | Req::LyricsExtras { .. })
+        matches!(self, Req::Suggest { .. } | Req::Account | Req::Channels | Req::ServerQueue | Req::Art { .. } | Req::AppleArtist { .. } | Req::AppleCover { .. } | Req::ArtistSignature { .. } | Req::Prefetch { .. } | Req::HomeMore(_) | Req::Lyrics(_) | Req::Segments { .. } | Req::LyricsExtras { .. })
     }
 }
 
@@ -261,6 +272,12 @@ pub enum Resp {
     /// Romanization/translation for one source's lines, arriving after them.
     LyricsExtras { video_id: String, source: String, target: String, extras: crate::translate::Extras },
     Art { key: String, art: Art },
+    /// Apple's page for an artist, when there is one (`None`: no match, or no token).
+    AppleArtist { id: String, info: Option<crate::apple::Artwork> },
+    /// Apple's motion sleeve for a release; `key` is what the UI asked it for.
+    AppleCover { key: String, motion: Option<crate::apple::Motion> },
+    /// A signature for an artist, already whitened for the header.
+    ArtistSignature { key: String, signature: Option<crate::artist_signature::Signature> },
     Radio { seed: String, tracks: Vec<Track> },
     /// What was asked to play (a `Req::PlayCollection`), and its songs.
     PlayQueue { target: Target, tracks: Vec<Track> },
@@ -274,6 +291,8 @@ pub enum Resp {
     Collaboration(ytm::Collaboration),
     /// Playback for `generation` failed before reaching the audio engine.
     PlayError { generation: u64, msg: String },
+    /// What `generation` is playing from a hi-res source (codec, rate, depth, size).
+    AudioInfo { generation: u64, info: crate::hires::Info },
     /// Play `generation` is the song version of the music video that was asked for
     /// (`None`: that song wouldn't start, and the music video plays after all).
     PlayingAs { generation: u64, listed: String, song: Option<Track> },
@@ -424,6 +443,9 @@ type SongCell = Arc<tokio::sync::OnceCell<Option<Track>>>;
 const PLAY_SONG_WAIT: std::time::Duration = std::time::Duration::from_millis(2500);
 /// A prefetch has until the song before it ends.
 const PREFETCH_SONG_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+/// How long playback waits for the hi-res sources before falling back to YouTube. A cold
+/// addon mints a lossless URL in a few seconds, and every source is asked at once.
+const HIRES_WAIT: std::time::Duration = std::time::Duration::from_secs(12);
 
 #[derive(Clone)]
 pub struct Backend {
@@ -447,6 +469,12 @@ pub struct Backend {
     /// High quality: with Premium, every song goes through the signed-in web player
     /// for its 256 kbps stream instead of the anonymous 128 kbps one.
     hq: Arc<std::sync::atomic::AtomicBool>,
+    /// The listener's hi-res addons, in the order their links were given.
+    hires: Arc<std::sync::RwLock<Vec<Arc<hires::Client>>>>,
+    /// Ask the addons for Dolby Atmos renditions when they offer one.
+    atmos: Arc<std::sync::atomic::AtomicBool>,
+    /// Songs the listener sent back to YouTube audio: no addon copy until they leave.
+    reverted: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// Song versions of music videos looked up this session (`None`: there's none), by
     /// video and whether the account has Premium (which gets YouTube's own pairs). One
     /// cell each, so a prefetch and the play of the same video share a lookup.
@@ -477,7 +505,7 @@ impl Backend {
         {
             log::warn!("proxy relay: {e:#}");
         }
-        let backend = Self { rt: Arc::new(rt), api, tx, audio, wake, prefetched: Default::default(), current: Default::default(), data_dir, lyrics, translate, jsc, premium: Arc::new(tokio::sync::Mutex::new(Err(None))), hq: Default::default(), songs: Default::default() };
+        let backend = Self { rt: Arc::new(rt), api, tx, audio, wake, prefetched: Default::default(), current: Default::default(), data_dir, lyrics, translate, jsc, premium: Arc::new(tokio::sync::Mutex::new(Err(None))), hq: Default::default(), hires: Default::default(), atmos: Default::default(), reverted: Default::default(), songs: Default::default() };
         backend.keep_signed_in();
         Ok(backend)
     }
@@ -710,6 +738,35 @@ impl Backend {
                     let art = tokio::task::spawn_blocking(move || crate::art::process(&bytes)).await??;
                     Resp::Art { key, art }
                 }
+                Req::AppleArtist { id, name } => {
+                    let info = crate::apple::artist(&self.http(), &name).await;
+                    log::info!("apple artist '{name}': {}", match &info {
+                        Some(a) => match &a.logo {
+                            Some(l) => format!("'{}' wordmark {}x{}", a.name, l.w, l.h),
+                            None => format!("'{}' in type (no wordmark)", a.name),
+                        },
+                        None => "no answer".to_owned(),
+                    });
+                    Resp::AppleArtist { id, info }
+                }
+                Req::AppleCover { key, album, artist, title } => {
+                    let motion = match title.as_deref() {
+                        Some(t) => crate::apple::song_motion(&self.http(), t, &artist, Some(&album)).await,
+                        None => crate::apple::album_motion(&self.http(), &album, &artist).await,
+                    };
+                    if motion.is_none() {
+                        log::debug!("apple: no motion sleeve for '{album}' by '{artist}'");
+                    }
+                    Resp::AppleCover { key, motion }
+                }
+                Req::ArtistSignature { key, endpoint, name } => {
+                    let signature = crate::artist_signature::lookup(&self.http(), &endpoint, &name).await;
+                    log::info!("artist signature: {}", match &signature {
+                        Some(s) => format!("found one for '{name}' ({}x{})", s.width, s.height),
+                        None => format!("none for '{name}'"),
+                    });
+                    Resp::ArtistSignature { key, signature }
+                }
                 Req::Radio { seed, song_of } => {
                     // A music video's radio is music videos; its song's is songs, as from the
                     // song itself. The lookup is shared with its play's (one per video).
@@ -733,12 +790,12 @@ impl Backend {
                     let path = self.download(&t, for_video).await?;
                     Resp::Downloaded { title: t.title, path }
                 }
-                Req::Play { video_id, generation, at, report, song_of, song } => match self.start_playback(&video_id, song_of.as_ref(), song, generation, at, report).await {
+                Req::Play { video_id, generation, at, report, song_of, song, track } => match self.start_playback(&video_id, song_of.as_ref(), song, track.as_ref(), generation, at, report).await {
                     Ok(()) => return Ok(None),
                     Err(e) => Resp::PlayError { generation, msg: format!("{e:#}") },
                 },
-                Req::Prefetch { video_id, song_of } => {
-                    self.prefetch(video_id, song_of).await?;
+                Req::Prefetch { video_id, song_of, track } => {
+                    self.prefetch(video_id, song_of, track).await?;
                     return Ok(None);
                 }
                 Req::Like { video_id, like } => {
@@ -891,14 +948,14 @@ impl Backend {
 
     /// Open the next song's stream ahead of time, once the playing one has downloaded.
     /// `song_of`: the music video it stands for, whose song version is what will play.
-    async fn prefetch(&self, video_id: String, song_of: Option<Track>) -> anyhow::Result<()> {
+    /// `track`: the song as listed, for a hi-res source's search.
+    async fn prefetch(&self, video_id: String, song_of: Option<Track>, track: Option<Track>) -> anyhow::Result<()> {
         // For the play it was asked during: a skip in the meantime makes it moot.
         let generation = self.audio.status.wanted_gen.load(Ordering::Relaxed);
         // Looked up now, so the play doesn't wait for it.
-        let video_id = match self.song_version(&video_id, song_of.as_ref(), PREFETCH_SONG_WAIT).await {
-            Some(song) => song.id,
-            None => video_id,
-        };
+        let song = self.song_version(&video_id, song_of.as_ref(), PREFETCH_SONG_WAIT).await;
+        let meta = song.clone().or_else(|| song_of.clone()).or_else(|| track);
+        let video_id = song.map_or(video_id, |s| s.id);
         // Let the playing song finish downloading first: it gets the whole bandwidth.
         let playing = self.current.lock().unwrap().as_ref().map(|(_, s)| s.clone());
         if let Some(s) = playing {
@@ -910,7 +967,7 @@ impl Backend {
             return Ok(());
         }
         log::debug!("prefetch {video_id}");
-        let shared = self.open_stream(&video_id, true).await?;
+        let shared = self.open_stream(&video_id, true, meta.as_ref()).await?;
         if let Some((_, old)) = self.prefetched.lock().unwrap().replace((video_id, shared)) {
             old.cancel();
         }
@@ -975,7 +1032,7 @@ impl Backend {
         Ok(())
     }
 
-    async fn start_playback(&self, listed: &str, song_of: Option<&Track>, carried: Option<Track>, generation: u64, at: std::time::Duration, report: bool) -> anyhow::Result<()> {
+    async fn start_playback(&self, listed: &str, song_of: Option<&Track>, carried: Option<Track>, track: Option<&Track>, generation: u64, at: std::time::Duration, report: bool) -> anyhow::Result<()> {
         let t0 = std::time::Instant::now();
         // A music video plays as its song when one is found in time (or goes on as the
         // one it was). From here on, everything (prefetch, replay, history) goes by what
@@ -985,12 +1042,16 @@ impl Backend {
             Some(song) => Some(song),
             None => self.song_version(listed, song_of, PLAY_SONG_WAIT).await,
         };
+        // What a hi-res source is asked for: the song that will play, or the video itself.
+        let meta = song.clone().or_else(|| song_of.cloned()).or_else(|| track.cloned());
         if self.audio.status.wanted_gen.load(Ordering::Relaxed) != generation {
             return Ok(());
         }
         let mut video_id = song.as_ref().map_or(listed, |s| s.id.as_str()).to_owned();
         let prefetched = self.prefetched.lock().unwrap().take();
-        let replay = self.current.lock().unwrap().take().filter(|(id, s)| *id == video_id && s.is_complete()).map(|(_, s)| s);
+        // A reverted song must not replay its buffered hi-res copy: it re-resolves to YouTube.
+        let reverted = self.reverted.lock().unwrap().contains(&video_id);
+        let replay = self.current.lock().unwrap().take().filter(|(id, s)| !reverted && *id == video_id && s.is_complete()).map(|(_, s)| s);
         let ready = match prefetched {
             Some((id, s)) if id == video_id => Some(s),
             // Replaying the current song keeps the next one's prefetch.
@@ -1015,7 +1076,7 @@ impl Backend {
                 if self.audio.status.wanted_gen.load(Ordering::Relaxed) != generation {
                     return Ok(());
                 }
-                match self.open_stream(&video_id, false).await {
+                match self.open_stream(&video_id, false, meta.as_ref()).await {
                     Ok(s) => s,
                     // The song won't play: the music video still does.
                     Err(e) if song.is_some() => {
@@ -1025,7 +1086,7 @@ impl Backend {
                         if was_carried {
                             let _ = self.tx.send(Resp::PlayingAs { generation, listed: listed.to_owned(), song: None });
                         }
-                        self.open_stream(listed, false).await?
+                        self.open_stream(listed, false, None).await?
                     }
                     Err(e) => return Err(e),
                 }
@@ -1068,6 +1129,13 @@ impl Backend {
         tokio::task::spawn_blocking(move || match open() {
             Ok(decoder) => {
                 log::debug!("play gen {generation}: decoder ready at {at:?} in {:?}", t0.elapsed());
+                // What a hi-res stream is, as the decoder actually reads it.
+                if let Some(mut info) = shared2.info.clone() {
+                    info.sample_rate = Some(rodio::Source::sample_rate(&decoder).get());
+                    info.channels = Some(rodio::Source::channels(&decoder).get() as u8);
+                    let _ = tx.send(Resp::AudioInfo { generation, info });
+                    wake();
+                }
                 audio.send(AudioCmd::Start { generation, decoder, shared: shared2, at });
                 // Skipped past before it started: that one doesn't count.
                 if let Some((this, id)) = report.filter(|_| audio.status.wanted_gen.load(Ordering::Relaxed) == generation) {
@@ -1087,7 +1155,7 @@ impl Backend {
                 Some((this, listed, report)) => {
                     log::warn!("{listed}'s song won't start ({e}); playing the music video");
                     let _ = tx.send(Resp::PlayingAs { generation, listed: listed.clone(), song: None });
-                    this.request(Req::Play { video_id: listed, generation, at, report, song_of: None, song: None });
+                    this.request(Req::Play { video_id: listed, generation, at, report, song_of: None, song: None, track: None });
                     wake();
                 }
                 None => {
@@ -1234,26 +1302,38 @@ impl Backend {
         ytm::searched_song(&self.api, video).await
     }
 
-    async fn open_stream(&self, video_id: &str, prefetch: bool) -> anyhow::Result<Arc<Shared>> {
+    async fn open_stream(&self, video_id: &str, prefetch: bool, track: Option<&Track>) -> anyhow::Result<Arc<Shared>> {
         let id = video_id.to_owned();
         if let Some(shared) = tokio::task::spawn_blocking(move || crate::downloads::open(&id)).await? {
             return Ok(shared);
         }
-        let (source, s) = self.resolve(video_id, false).await?;
-        let shared = Shared::new(s.size, s.duration_ms, s.loudness_db, s.opus, prefetch);
-        self.rt.spawn(stream::download(self.http(), s.url, s.user_agent, shared.clone(), Some(self.refresher(source, video_id, s.opus))));
+        let (source, s) = self.resolve(video_id, false, track, true).await?;
+        // Atmos arrives already decoded: a complete buffer, no download to run.
+        if let Some(data) = s.data {
+            return Ok(Shared::from_bytes_with_format(data, s.duration_ms, s.loudness_db, s.format, s.info));
+        }
+        let shared = Shared::new(s.size, s.duration_ms, s.loudness_db, s.format.clone(), s.info, prefetch);
+        self.rt.spawn(stream::download(
+            self.http(),
+            s.url,
+            s.user_agent,
+            shared.clone(),
+            Some(self.refresher(source, video_id, s.format, track.cloned())),
+            s.ranging,
+        ));
         Ok(shared)
     }
 
     /// Resolves a fresh URL from the same source and format, for a download that got a 403.
-    fn refresher(&self, source: Source, video_id: &str, opus: bool) -> stream::Refresh {
+    fn refresher(&self, source: Source, video_id: &str, format: stream::Format, track: Option<Track>) -> stream::Refresh {
         let (this, id) = (self.clone(), video_id.to_owned());
         Arc::new(move || {
-            let (this, id) = (this.clone(), id.clone());
+            let (this, id, track) = (this.clone(), id.clone(), track.clone());
+            let format = format.clone();
             Box::pin(async move {
-                let s = this.resolve_from(source, &id, opus).await?;
+                let s = this.resolve_from(source, &id, format.clone(), track.as_ref()).await?;
                 // The buffer is laid out for the format it started with.
-                anyhow::ensure!(s.opus == opus, "the stream changed format");
+                anyhow::ensure!(s.format == format, "the stream changed format");
                 Ok(s.url)
             })
         })
@@ -1261,10 +1341,10 @@ impl Backend {
 
     /// Download a song into the downloads folder, at the best quality the account gets.
     async fn download(&self, t: &Track, for_video: Option<String>) -> anyhow::Result<PathBuf> {
-        let (source, s) = self.resolve(&t.id, true).await?;
+        let (source, s) = self.resolve(&t.id, true, Some(t), false).await?;
         log::info!("download {}: {} bytes from {source:?}", t.id, s.size);
-        let shared = Shared::new(s.size, s.duration_ms, s.loudness_db, s.opus, false);
-        stream::download(self.http(), s.url, s.user_agent, shared.clone(), Some(self.refresher(source, &t.id, s.opus))).await;
+        let shared = Shared::new(s.size, s.duration_ms, s.loudness_db, s.format.clone(), s.info, false);
+        stream::download(self.http(), s.url, s.user_agent, shared.clone(), Some(self.refresher(source, &t.id, s.format, None)), s.ranging).await;
         if let Some(e) = shared.error() {
             anyhow::bail!("{e}");
         }
@@ -1280,8 +1360,27 @@ impl Backend {
     /// Find a stream URL, trying the fastest source that can play the song. `best`
     /// (downloads) takes the high quality stream whatever the setting, and waits for
     /// the solver it needs. Playback without Premium takes Opus where there is one;
-    /// downloads stay AAC, which saves as a tagged .m4a.
-    async fn resolve(&self, video_id: &str, best: bool) -> anyhow::Result<(Source, ResolvedStream)> {
+    /// downloads stay AAC, which saves as a tagged .m4a. `allow_hires`: try the listener's
+    /// addon source first (playback only).
+    async fn resolve(&self, video_id: &str, best: bool, track: Option<&Track>, allow_hires: bool) -> anyhow::Result<(Source, ResolvedStream)> {
+        // The listener's addons answer for the songs they have; when they miss, YouTube plays.
+        let reverted = self.reverted.lock().unwrap().contains(video_id);
+        let hires = if allow_hires && !reverted { self.hires.read().unwrap().clone() } else { Vec::new() };
+        if let Some(track) = track
+            && !hires.is_empty()
+        {
+            let started = std::time::Instant::now();
+            match tokio::time::timeout(HIRES_WAIT, self.from_hires(&hires, track)).await {
+                Ok(Some(s)) => {
+                    if let Some(info) = s.info.as_ref() {
+                        log::info!("{video_id}: {} audio from {}", info.badge(), info.source);
+                    }
+                    return Ok((Source::HiRes, s));
+                }
+                Ok(None) => log::info!("{video_id}: no hi-res source has a copy ({:.1}s)", started.elapsed().as_secs_f32()),
+                Err(_) => log::info!("{video_id}: the hi-res sources gave no answer in {HIRES_WAIT:?}"),
+            }
+        }
         let hq = best || self.hq.load(Ordering::Relaxed);
         if best
             && !self.jsc.ready()
@@ -1304,42 +1403,47 @@ impl Backend {
             && let Some(session) = self.api.account()
             && self.is_premium(&session).await
         {
-            match self.resolve_from(Source::WebMusic, video_id, false).await {
+            match self.resolve_from(Source::WebMusic, video_id, stream::Format::Aac, None).await {
                 Ok(s) => return Ok((Source::WebMusic, s)),
                 // Not fatal: the usual 128 kbps stream still plays.
                 Err(e) => log::warn!("high quality stream failed for {video_id} ({e:#}); using standard quality"),
             }
         }
-        match self.resolve_from(Source::VisionOs, video_id, !best).await {
+        let opus = if best { stream::Format::Aac } else { stream::Format::Opus };
+        match self.resolve_from(Source::VisionOs, video_id, opus, None).await {
             Ok(s) => Ok((Source::VisionOs, s)),
             // Age-restricted or Premium-only: only signed-in web players get it.
             Err(e) if needs_account(&e) => {
                 log::info!("{video_id} needs a signed-in player ({e:#})");
                 let session = self.api.account().ok_or_else(|| anyhow::anyhow!("sign in to play this song"))?;
                 if self.is_premium(&session).await {
-                    match self.resolve_from(Source::WebMusic, video_id, false).await {
+                    match self.resolve_from(Source::WebMusic, video_id, stream::Format::Aac, None).await {
                         Ok(s) => return Ok((Source::WebMusic, s)),
                         Err(e) => log::warn!("web music player failed ({e:#}); using yt-dlp"),
                     }
                 }
-                Ok((Source::YtDlp, self.resolve_from(Source::YtDlp, video_id, false).await?))
+                Ok((Source::YtDlp, self.resolve_from(Source::YtDlp, video_id, stream::Format::Aac, None).await?))
             }
             Err(e) => Err(e),
         }
     }
 
-    /// `opus`: the visionOS player's Opus stream where there is one (the others are AAC).
-    async fn resolve_from(&self, source: Source, video_id: &str, opus: bool) -> anyhow::Result<ResolvedStream> {
+    /// `format`: the container the caller needs (the visionOS player picks Opus or AAC
+    /// from it). The hi-res source re-resolves by searching for `track` again.
+    async fn resolve_from(&self, source: Source, video_id: &str, format: stream::Format, track: Option<&Track>) -> anyhow::Result<ResolvedStream> {
         let plain = |s: innertube::Stream, ua: &str| ResolvedStream {
             url: s.url,
             size: s.size,
             duration_ms: s.duration_ms,
             user_agent: ua.to_owned(),
             loudness_db: s.loudness_db,
-            opus: s.opus,
+            format: stream::Format::from_opus(s.opus),
+            info: None,
+            ranging: stream::Ranging::Query,
+            data: None,
         };
         Ok(match source {
-            Source::VisionOs => plain(self.visionos_stream(video_id, opus).await?, innertube::UA),
+            Source::VisionOs => plain(self.visionos_stream(video_id, format == stream::Format::Opus).await?, innertube::UA),
             Source::WebMusic => {
                 let session = self.api.account().ok_or_else(|| anyhow::anyhow!("signed out"))?;
                 plain(session.audio_stream(&self.http(), &self.jsc, video_id).await?, webmusic::UA)
@@ -1350,9 +1454,51 @@ impl Backend {
                 // Cookies Google replaced while yt-dlp used the session.
                 self.api.keep(&session, s.replaced.iter().map(String::as_str));
                 // yt-dlp's JSON doesn't carry YouTube's loudness figure.
-                ResolvedStream { url: s.url, size: s.size, duration_ms: s.duration_ms, user_agent: s.user_agent, loudness_db: None, opus: false }
+                ResolvedStream { url: s.url, size: s.size, duration_ms: s.duration_ms, user_agent: s.user_agent, loudness_db: None, format: stream::Format::Aac, info: None, ranging: stream::Ranging::Query, data: None }
+            }
+            Source::HiRes => {
+                let track = track.ok_or_else(|| anyhow::anyhow!("no song to look up"))?;
+                let sources = self.hires.read().unwrap().clone();
+                anyhow::ensure!(!sources.is_empty(), "no hi-res source is set");
+                self.from_hires(&sources, track).await.ok_or_else(|| anyhow::anyhow!("no hi-res source has a copy"))?
             }
         })
+    }
+
+    /// The first of the listener's addons that holds `track`. Every source is asked at
+    /// once, so the fastest copy wins and a slow one doesn't hold the others up. `None`:
+    /// none of them has it, which is a miss rather than a fault.
+    async fn from_hires(&self, sources: &[Arc<hires::Client>], track: &Track) -> Option<ResolvedStream> {
+        let atmos = self.atmos.load(Ordering::Relaxed);
+        let mut tasks = tokio::task::JoinSet::new();
+        for client in sources {
+            let (http, track, client) = (self.http(), track.clone(), client.clone());
+            tasks.spawn(async move {
+                let found = client.find(&http, &track, atmos).await;
+                (client, found)
+            });
+        }
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok((_, Ok(Some(found)))) => {
+                    return Some(ResolvedStream {
+                        url: found.url,
+                        size: found.size,
+                        duration_ms: found.duration_ms,
+                        user_agent: hires::USER_AGENT.to_owned(),
+                        loudness_db: None,
+                        format: found.format,
+                        info: Some(found.info),
+                        ranging: stream::Ranging::Header,
+                        data: found.data,
+                    });
+                }
+                Ok((client, Ok(None))) => log::info!("hi-res {}: no copy of \"{}\"", client.host(), track.title),
+                Ok((client, Err(e))) => log::info!("hi-res {}: {e:#}", client.host()),
+                Err(e) => log::info!("hi-res: a lookup stopped: {e}"),
+            }
+        }
+        None
     }
 
     /// Get the signed-in playback path ready in the background, so the first Premium-only
@@ -1432,6 +1578,50 @@ impl Backend {
         self.hq.store(on, Ordering::Relaxed);
     }
 
+    /// Prefer a Dolby Atmos rendition from the hi-res sources when they offer one.
+    pub fn set_prefer_atmos(&self, on: bool) {
+        self.atmos.store(on, Ordering::Relaxed);
+    }
+
+    /// Send a song back to YouTube audio: later plays of it skip the hi-res sources.
+    pub fn revert_quality(&self, video_id: &str) {
+        self.reverted.lock().unwrap().insert(video_id.to_owned());
+    }
+
+    /// Allow hi-res sources again for a song that was sent back to YouTube audio.
+    pub fn upgrade_quality(&self, video_id: &str) {
+        self.reverted.lock().unwrap().remove(video_id);
+    }
+
+    /// Point the hi-res sources at the links in `links`, one per line (empty: none). The
+    /// links themselves aren't logged: they can carry a token.
+    pub fn set_hires_source(&self, links: &str) {
+        let mut clients: Vec<Arc<hires::Client>> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut rejected = 0;
+        for line in links.lines() {
+            let line = line.trim();
+            if line.is_empty() || !seen.insert(line.to_owned()) {
+                continue;
+            }
+            match hires::Client::new(line) {
+                Some(client) => clients.push(Arc::new(client)),
+                None => rejected += 1,
+            }
+        }
+        let hosts: Vec<String> = clients.iter().map(|c| c.host()).collect();
+        match clients.len() {
+            0 if rejected == 0 => log::info!("hi-res sources: none"),
+            0 => log::warn!("hi-res sources: none usable ({rejected} not an http(s) link)"),
+            1 => log::info!("hi-res source set: {}", hosts[0]),
+            n => log::info!("{n} hi-res sources set: {}", hosts.join(", ")),
+        }
+        if rejected > 0 && !clients.is_empty() {
+            log::warn!("hi-res sources: {rejected} entry(s) aren't http(s) links and were skipped");
+        }
+        *self.hires.write().unwrap() = clients;
+    }
+
     /// Like or unlike a selection, one at a time, then check Liked Music and try again
     /// what didn't take. Unlikes still listed after that count as refused; likes aren't
     /// counted so (songs that can't be played are liked but not listed).
@@ -1482,6 +1672,8 @@ enum Source {
     VisionOs,
     WebMusic,
     YtDlp,
+    /// The listener's own addon server (see `hires`).
+    HiRes,
 }
 
 struct ResolvedStream {
@@ -1490,8 +1682,13 @@ struct ResolvedStream {
     duration_ms: u64,
     user_agent: String,
     loudness_db: Option<f32>,
-    /// Opus in WebM; otherwise AAC in MP4.
-    opus: bool,
+    format: stream::Format,
+    /// What the player can say about a hi-res stream (codec, rate, depth, size).
+    info: Option<hires::Info>,
+    /// How this source takes byte ranges.
+    ranging: stream::Ranging,
+    /// Already-decoded audio (Dolby Atmos out of DASH): no download to run.
+    data: Option<Vec<u8>>,
 }
 
 /// The anonymous visionOS player refused because the song needs an account:

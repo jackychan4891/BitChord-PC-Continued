@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Join the jam · ytm-rs</title>
-<meta name="description" content="You've been invited to listen together in ytm-rs.">
+<title>Join the jam · bitchord</title>
+<meta name="description" content="You've been invited to listen together in bitchord.">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#0b0707">
 <meta name="color-scheme" content="dark">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="ytm-rs">
-<meta property="og:title" content="Join the jam on ytm-rs">
-<meta property="og:description" content="Listen together, in sync, in the ytm-rs YouTube Music app.">
+<meta property="og:site_name" content="bitchord">
+<meta property="og:title" content="Join the jam on bitchord">
+<meta property="og:description" content="Listen together, in sync, in the bitchord YouTube Music app.">
 <meta property="og:image" content="https://grapedjuice.github.io/ytm-rs/og.png">
 <link rel="icon" href="../favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png">
@@ -55,7 +55,7 @@
 </head>
 <body>
 <header class="jam-top">
-  <a href="../" aria-label="ytm-rs home"><img src="../icon-192.png" alt="" width="28" height="28"><span>ytm-rs</span></a>
+  <a href="../" aria-label="bitchord home"><img src="../icon-192.png" alt="" width="28" height="28"><span>bitchord</span></a>
 </header>
 
 <main class="jam">
@@ -64,10 +64,10 @@
     <h1>Join the jam</h1>
     <ol class="jam__code" id="code" aria-label="Room code"></ol>
     <div class="jam__actions">
-      <a class="btn btn--primary btn--lg" id="open" href="#">Open in ytm-rs</a>
+      <a class="btn btn--primary btn--lg" id="open" href="#">Open in bitchord</a>
     </div>
-    <p>Don't have ytm-rs? <a class="inline" href="https://github.com/grapedjuice/ytm-rs/releases/latest" rel="noopener">Download it</a> for Windows, macOS or Linux, then open this link again. On macOS, type the code under <strong>Listen together</strong> instead.</p>
-    <p class="jam__hint">If ytm-rs is already open, you can also type the code under <strong>Listen together</strong>.</p>
+    <p>Don't have bitchord? <a class="inline" href="https://github.com/grapedjuice/ytm-rs/releases/latest" rel="noopener">Download it</a> for Windows, macOS or Linux, then open this link again. On macOS, type the code under <strong>Listen together</strong> instead.</p>
+    <p class="jam__hint">If bitchord is already open, you can also type the code under <strong>Listen together</strong>.</p>
   </div>
 
   <div class="jam__card" id="bad" hidden>
@@ -75,7 +75,7 @@
     <h1>This invite doesn't look right</h1>
     <p>The link is missing its room code, or the code got cut off. Ask whoever shared it to send it again. Codes are 6 letters and numbers.</p>
     <div class="jam__actions" style="margin-top:24px">
-      <a class="btn btn--ghost btn--lg" href="../">About ytm-rs</a>
+      <a class="btn btn--ghost btn--lg" href="../">About bitchord</a>
     </div>
   </div>
 </main>
@@ -89,7 +89,7 @@
     return;
   }
   document.getElementById('ok').hidden = false;
-  document.title = 'Join jam ' + code + ' · ytm-rs';
+  document.title = 'Join jam ' + code + ' · bitchord';
   var list = document.getElementById('code');
   list.setAttribute('aria-label', 'Room code ' + code.split('').join(' '));
   code.split('').forEach(function (ch) {
@@ -97,11 +97,11 @@
     li.textContent = ch;
     list.appendChild(li);
   });
-  var app = 'ytm-rs://jam/' + code;
+  var app = 'bitchord://jam/' + code;
   var open = document.getElementById('open');
   open.href = app;
   open.addEventListener('click', function (e) { e.preventDefault(); location.href = app; });
-  // ytm-rs is a Windows app; elsewhere an unknown scheme only shows an error.
+  // bitchord is a Windows app; elsewhere an unknown scheme only shows an error.
   if (/Windows/i.test(navigator.userAgent)) location.href = app;
 })();
 </script>

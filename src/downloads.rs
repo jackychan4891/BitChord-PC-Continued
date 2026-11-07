@@ -23,6 +23,7 @@ struct Entry {
     /// video plays it from this file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stands_for: Option<String>,
+    /// The song as it was downloaded, for the Downloads page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     song: Option<Track>,
 }
@@ -37,12 +38,12 @@ struct State {
 static STATE: LazyLock<RwLock<State>> =
     LazyLock::new(|| RwLock::new(State { index: HashMap::new(), file: PathBuf::new(), folder: default_folder() }));
 
-/// Music\ytm-rs.
+/// Music\BitChord.
 pub fn default_folder() -> PathBuf {
     let base = directories::UserDirs::new()
         .and_then(|u| u.audio_dir().map(Path::to_path_buf).or_else(|| Some(u.home_dir().join("Music"))))
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("ytm-rs")
+    base.join("BitChord")
 }
 
 /// Load the index; `folder` is the saved setting (empty for the default).
@@ -117,6 +118,22 @@ pub fn path(video_id: &str) -> Option<PathBuf> {
     STATE.read().unwrap().index.get(video_id).map(|e| e.path.clone()).filter(|p| p.is_file())
 }
 
+/// The downloaded songs still on disk, newest first.
+pub fn list() -> Vec<Track> {
+    let st = STATE.read().unwrap();
+    let mut out: Vec<(std::time::SystemTime, Track)> = st
+        .index
+        .values()
+        .filter(|e| e.path.is_file())
+        .filter_map(|e| {
+            let modified = std::fs::metadata(&e.path).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+            e.song.clone().map(|t| (modified, t))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.into_iter().map(|(_, t)| t).collect()
+}
+
 /// The downloaded song version of the music video `video_id`, if its file is still there.
 pub fn song_for(video_id: &str) -> Option<Track> {
     let st = STATE.read().unwrap();
@@ -162,7 +179,8 @@ pub fn save(t: &Track, audio: &[u8], duration_ms: u64, loudness_db: Option<f32>,
     }
     std::fs::rename(&part, &path)?;
     let mut st = STATE.write().unwrap();
-    let song = stands_for.is_some().then(|| t.clone());
+    // Every entry keeps its song, so the Downloads page can list it later.
+    let song = Some(t.clone());
     st.index.insert(t.id.clone(), Entry { path: path.clone(), duration_ms, loudness_db, stands_for, song });
     if let Ok(json) = serde_json::to_vec(&st.index) {
         let _ = std::fs::write(&st.file, json);

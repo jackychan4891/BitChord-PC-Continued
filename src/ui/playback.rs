@@ -11,7 +11,12 @@ use crate::lyrics::Lyrics;
 use crate::model::Track;
 
 use super::queue::QueueFill;
-use super::{App, PlayingAs, Repeat, Session, jam, lyric_prefs};
+use super::{App, MixFrom, PlayingAs, Repeat, Session, jam, lyric_prefs};
+
+/// Where in the blend the two songs trade places: the outgoing one holds its level for
+/// the first 30% (see `audio::mix_handoff`) and the curves are mirrors, so the next song
+/// becomes the louder of the two at 65% of the mix. That's when the player follows it.
+const MIX_SWITCH: f32 = 0.65;
 
 impl App {
     pub fn current(&self) -> Option<&Track> {
@@ -83,6 +88,58 @@ impl App {
         self.playing_track().map(|t| t.id.as_str())
     }
 
+    /// The outgoing song of an Automix handoff, while it is still the louder of the
+    /// two: its tail keeps the player until the next song has taken over.
+    pub(super) fn mix_hold(&self) -> Option<&MixFrom> {
+        self.mix_from.as_ref().filter(|h| !h.released)
+    }
+
+    /// The blend is under way: the handoff exists until both of its halves have played.
+    pub(super) fn mixing(&self) -> bool {
+        self.mix_from.as_ref().is_some_and(|h| h.started && self.audio.status.mixing())
+    }
+
+    /// That song's progress, in seconds: its tail runs out as the mix goes on.
+    pub(super) fn mix_hold_pos(&self, h: &MixFrom) -> f32 {
+        self.audio.status.outgoing_position().as_secs_f32().min(h.total)
+    }
+
+    /// Note where the handoff has got to; true on the frame the next song becomes the
+    /// louder one and takes the screen over (see `MIX_SWITCH`).
+    pub(super) fn watch_mix(&mut self) -> bool {
+        let pos = self.audio.status.position().as_secs_f32();
+        let Some(h) = &mut self.mix_from else { return false };
+        if let Some(duration) = self.audio.status.mix_duration(self.generation) {
+            h.started = true;
+            h.mix = duration;
+        }
+        let switch = h.started && !h.released && pos >= h.mix * MIX_SWITCH;
+        if switch {
+            h.released = true;
+        }
+        switch
+    }
+
+    /// The handoff's whole blend has played: the transition is over.
+    pub(super) fn mix_over(&self) -> bool {
+        self.mix_from.as_ref().is_some_and(|h| h.started && !self.audio.status.mixing())
+    }
+
+    /// The song the player shows: a handoff's outgoing one while it's still the louder,
+    /// then whatever actually plays.
+    pub(super) fn shown(&self) -> Option<&Track> {
+        self.mix_hold().map(|h| &h.track).or_else(|| self.playing_track())
+    }
+
+    /// The next song has taken the blend over: its art, lyrics and media info follow.
+    pub(super) fn release_mix(&mut self) {
+        if let Some(track) = self.playing_track().cloned() {
+            self.show_in_media(&track);
+            self.request_art();
+            self.refresh_lyrics(track);
+        }
+    }
+
     /// Play the current music video as itself again, from where its song is now: a jam
     /// plays everyone the host's exact upload.
     pub(super) fn play_listed_upload(&mut self) {
@@ -108,12 +165,8 @@ impl App {
         self.audio.status.playing.load(Ordering::Relaxed)
     }
 
-    /// Fetch the current song's art for the background and accent. The default theme
-    /// shows neither, so it skips the download and blur until the theme is turned off.
+    /// Fetch the current song's art for the background and accent.
     pub(super) fn request_art(&mut self) {
-        if self.default_theme {
-            return;
-        }
         let Some(track) = self.current() else { return };
         if self.art_key.as_deref() == Some(track.id.as_str()) {
             return;
@@ -238,6 +291,12 @@ impl App {
     /// `report`: a new play for the account's history (not picking up last session's song).
     pub(super) fn play_current_at(&mut self, at: Duration, report: bool) {
         let Some(track) = self.current().cloned() else { return };
+        // A natural Automix handoff keeps the outgoing song on screen until the next one
+        // is louder (see `MixFrom`); any other play switches at once.
+        let mixing = self.pending_mix.is_some();
+        if !mixing {
+            self.mix_from = None;
+        }
         // Picking up mid-song (a resume, a download that broke off): the position is the
         // song version's when one was playing, so that goes on; a music video stays one.
         let carried = if at.is_zero() || self.jam.active() { None } else { self.playing_as().cloned() };
@@ -246,6 +305,7 @@ impl App {
         self.resume_counts = false;
         self.generation += 1;
         self.audio.status.wanted_gen.store(self.generation, Ordering::Relaxed);
+        self.audio_info = None;
         let shown = carried.clone().unwrap_or_else(|| track.clone());
         self.audio.status.duration_ms.store(shown.duration.map_or(0, |d| d as u64 * 1000), Ordering::Relaxed);
         // A song running into the next crossfades (so does Next, when that's switched
@@ -256,14 +316,18 @@ impl App {
         // A carried song version goes with its music video, which plays if the song won't.
         let song_of = if carried.is_none() && at.is_zero() { self.song_of(&track) } else { None };
         self.playing_as = carried.clone().map(|song| PlayingAs { generation: self.generation, listed: track.id.clone(), song });
-        self.backend.request(Req::Play { video_id: track.id.clone(), generation: self.generation, at, report, song_of, song: carried });
-        self.show_in_media(&shown);
+        self.backend.request(Req::Play { video_id: track.id.clone(), generation: self.generation, at, report, song_of, song: carried, track: Some(track.clone()) });
+        if mixing {
+            // The outgoing song keeps the art, lyrics and media info it still deserves.
+        } else {
+            self.show_in_media(&shown);
+            // Background art follows the track; lyrics and segments, what plays.
+            self.request_art();
+            self.refresh_lyrics(shown);
+        }
         if let Some(m) = &mut self.media {
             m.set_playing(true);
         }
-        // Background art follows the track; lyrics and segments, what plays.
-        self.request_art();
-        self.refresh_lyrics(shown);
         self.top_up();
     }
 
@@ -304,7 +368,9 @@ impl App {
     }
 
     pub(crate) fn set_crossfade(&self) {
-        self.audio.set_crossfade(if self.crossfade { self.crossfade_secs } else { 0 });
+        // Automix is a crossfade with its own shape, so it needs the length too.
+        self.audio.set_automix(self.automix);
+        self.audio.set_crossfade(if self.crossfade || self.automix { self.crossfade_secs } else { 0 });
     }
 
     /// Ask SponsorBlock about the playing song, when that's switched on.
@@ -356,7 +422,7 @@ impl App {
     /// Fetch whatever plays after the current track so skipping is instant.
     pub(super) fn prefetch_next(&self) {
         if let Some(t) = self.queue.upcoming() {
-            self.backend.request(Req::Prefetch { video_id: t.id.clone(), song_of: self.song_of(t) });
+            self.backend.request(Req::Prefetch { video_id: t.id.clone(), song_of: self.song_of(t), track: Some(t.clone()) });
         }
     }
 
@@ -367,10 +433,7 @@ impl App {
         if !self.queue.advance() {
             return;
         }
-        let ending = self.handoff;
-        self.handoff = ending || self.crossfade_skips;
         self.play_current();
-        self.handoff = ending;
     }
 
     pub(super) fn prev(&mut self) {

@@ -192,7 +192,7 @@ impl Cfg {
             }
         };
         // Kept to about a dozen CJK characters per row on narrow windows.
-        let cap = (width / 12.0).max(22.0);
+        let cap = (width / 10.5).max(22.0);
         if size > cap {
             rem *= cap / size;
             size = cap;
@@ -212,9 +212,14 @@ impl Cfg {
             None => s.weight,
         };
         let wave = css.as_ref().and_then(|c| c.letter_wave).unwrap_or([0.05, 0.02, 0.9, 1.11]);
+        // The app's own look: a letter rises by the preset's lift and stays there, so
+        // the words already sung sit above the line being sung.
+        let (crest, settle) = if css.is_some() { (wave[0], wave[1]) } else { (s.lift.clamp(0.0, 8.0) / size, s.lift.clamp(0.0, 8.0) / size) };
         let (glow_alpha, long_glow_alpha) = match css.as_ref().and_then(|c| c.glow_alpha) {
             Some(a) => (a, css.as_ref().and_then(|c| c.long_word_glow_alpha).unwrap_or(a)),
-            None => (0.5 + 0.4 * glow, 0.5 + 0.4 * glow),
+            // A look without a glow setting of its own glows only as much as its preset asks:
+            // the default look has none.
+            None => (glow, glow),
         };
         let pad = css.as_ref().and_then(|c| c.padding_inline).map_or((0.0, 0.0), |p| (p[0] * rem / 10.0, p[1] * rem / 10.0));
         Self {
@@ -231,8 +236,8 @@ impl Cfg {
             target_ratio: s.anchor.clamp(0.1, 0.7),
             centered,
             fill: s.fill,
-            wave_crest: wave[0],
-            wave_settle: wave[1] + if css.is_some() { 0.0 } else { s.lift.clamp(0.0, 8.0) / size },
+            wave_crest: crest,
+            wave_settle: settle,
             emphasis: wave[3],
             upcoming_alpha: s.inactive_alpha,
             falloff: s.falloff,
@@ -243,7 +248,8 @@ impl Cfg {
             rem,
             bg_em: css.as_ref().and_then(|c| c.background_em).unwrap_or(0.75),
             pad,
-            wobble: !css.as_ref().is_some_and(|c| c.no_wobble),
+            // A theme opts out of the sideways pop; the app's own look doesn't have it.
+            wobble: css.as_ref().is_some_and(|c| !c.no_wobble),
             wave_duration: wave[2] as f64,
             glow_alpha,
             long_glow_alpha,
@@ -312,8 +318,6 @@ struct Deco {
     /// Box relative to the line's content origin (the pill, or the translation's text box).
     rect: Rect,
     pill: bool,
-    /// Identifies what was shown, so a new decoration can animate in.
-    id: u64,
 }
 
 #[derive(Clone)]
@@ -644,18 +648,18 @@ fn build_block(fonts: &mut FontsView<'_>, cfg: &Cfg, l: &Line, index: usize, wid
         y += gap;
         let pad = vec2(cfg.rem() * 0.75, cfg.rem() * 0.25);
         let inner_w = content_w - pad.x * 2.0 - 2.0;
-        let (body, inner, id) = match r {
+        let (body, inner) = match r {
             Roman::Timed(parts, text) => {
                 let toks: Vec<Tok> = parts.iter().flat_map(split_part).collect();
                 let font = cfg.roman_font(text);
                 let lh = fonts.row_height(&font);
                 let f = flow(fonts, toks, &font, inner_w, lh, Align::Left, false);
-                (DecoBody::Timed { words: f.words, groups: f.groups }, vec2(f.width, f.height), hash(("rt", text)))
+                (DecoBody::Timed { words: f.words, groups: f.groups }, vec2(f.width, f.height))
             }
             Roman::Text(t) => {
                 let font = cfg.roman_font(t);
                 let g = fonts.layout(t.to_owned(), font.clone(), Color32::WHITE, inner_w);
-                (DecoBody::Text(t.to_owned(), font), g.size(), hash(("r", t)))
+                (DecoBody::Text(t.to_owned(), font), g.size())
             }
         };
         let size = inner + pad * 2.0 + vec2(2.0, 2.0);
@@ -670,7 +674,7 @@ fn build_block(fonts: &mut FontsView<'_>, cfg: &Cfg, l: &Line, index: usize, wid
             DecoBody::Timed { words, groups } => DecoBody::Timed { words: words.into_iter().map(|w| Word { pos: w.pos + rect.min.to_vec2() + pad + vec2(1.0, 1.0), ..w }).collect(), groups },
             b => b,
         };
-        block.decos.push(Deco { body, rect, pill: true, id });
+        block.decos.push(Deco { body, rect, pill: true });
         y += size.y;
     }
     if let Some(t) = trans {
@@ -682,7 +686,7 @@ fn build_block(fonts: &mut FontsView<'_>, cfg: &Cfg, l: &Line, index: usize, wid
             Align::Right => content_w - g.size().x,
             Align::Center => (content_w - g.size().x) * 0.5,
         };
-        block.decos.push(Deco { body: DecoBody::Text(t.to_owned(), font), rect: Rect::from_min_size(pos2(x, y), g.size()), pill: false, id: hash(("t", t)) });
+        block.decos.push(Deco { body: DecoBody::Text(t.to_owned(), font), rect: Rect::from_min_size(pos2(x, y), g.size()), pill: false });
         y += g.size().y;
     }
     block.height = y + cfg.padding;
@@ -789,7 +793,6 @@ pub struct View {
     user_until: f64,
     /// Reader scrolling was on last frame: when it ends, scroll back to the current line.
     was_user: bool,
-    deco_born: HashMap<u64, f64>,
     glow: Glow,
     credits_focused: bool,
     /// The frame (`cumulative_pass_nr`) the view was last drawn in; 0 once its textures
@@ -1126,8 +1129,16 @@ impl View {
             let origin = transform_origin(block_rect, b.align, content.x);
             let xf = Xf { origin, scale, content };
 
+            let text_lit = if let Some(e) = st.exit {
+                1.0 - EASE.at(((f.now - e) / FADE_OUT) as f32)
+            } else if sung_now {
+                EASE.at(((t - b.start) / FADE_IN) as f32)
+            } else {
+                0.0
+            };
+            let text_alpha = 0.6 * lerp(dim, 1.0, text_lit);
             if b.instrumental {
-                animating |= paint_instrumental(&painter, &mut self.glow, &ctx, &cfg, b, &xf, t, f.now, st, dim * opacity, line_w - cfg.size * 0.5);
+                animating |= paint_instrumental(&painter, &cfg, b, &xf, t, line_w - cfg.size * 0.5);
             } else if blur > 0.05 {
                 // `filter: blur()` on the whole line: its text, romanization and translation.
                 let r = (blur * 4.0).round() / 4.0;
@@ -1146,7 +1157,7 @@ impl View {
                         DecoBody::Text(text, font) => {
                             let g = ctx.fonts_mut(|fv| fv.layout(text.clone(), font.clone(), Color32::WHITE, d.rect.width() + 1.0));
                             let pad = if d.pill { vec2(cfg.rem() * 0.75 + 1.0, cfg.rem() * 0.25 + 1.0) } else { Vec2::ZERO };
-                            Some((g, d.rect.min + pad, 0.6))
+                            Some((g, d.rect.min + pad, text_alpha))
                         }
                         DecoBody::Timed { .. } => None,
                     })
@@ -1165,19 +1176,8 @@ impl View {
                 let lit = LitState::new(&cfg, st, t, f.now, sung_now || st.selected);
                 paint_words(&painter, &ctx, &cfg, &b.words, &b.groups, &xf, &lit, dim, opacity, atlas, &mut glow_work, (f.key, i, 0));
                 for (k, d) in b.decos.iter().enumerate() {
-                    let born = *self.deco_born.entry(d.id).or_insert(f.now);
-                    let enter = ((f.now - born) / DECO_ENTRY).clamp(0.0, 1.0) as f32;
-                    let e = DECO_EASE.at(enter);
-                    if enter < 1.0 {
-                        animating = true;
-                    }
-                    // `blyrics-decoration-in`: fades in from 0.4em above.
-                    let font_size = match &d.body {
-                        DecoBody::Text(_, f) => f.size,
-                        DecoBody::Timed { words, .. } => words.first().map_or(cfg.rem() * 1.6, |w| w.font.size),
-                    };
-                    let dxf = Xf { content: xf.content + vec2(0.0, -0.4 * font_size * (1.0 - e)), ..xf };
-                    let a = e * opacity;
+                    let dxf = xf;
+                    let a = opacity;
                     if d.pill {
                         let r = dxf.rect(d.rect);
                         let radius = (cfg.rem() * scale).min(255.0) as u8;
@@ -1191,9 +1191,7 @@ impl View {
                             let wrap = d.rect.width() + 1.0;
                             let g = ctx.fonts_mut(|fv| fv.layout(text.clone(), font.clone(), Color32::WHITE, wrap));
                             let pad = if d.pill { vec2(cfg.rem() * 0.75 + 1.0, cfg.rem() * 0.25 + 1.0) } else { Vec2::ZERO };
-                            // `--blyrics-translated-color`: white at 0.6. Drawn through the
-                            // line's transform at the one laid-out size.
-                            paint_galley(&painter, &g, d.rect.min + pad, &dxf, theme::with_alpha(Color32::WHITE, 0.6 * a), atlas);
+                            paint_galley(&painter, &g, d.rect.min + pad, &dxf, theme::with_alpha(Color32::WHITE, text_alpha * a), atlas);
                         }
                     }
                 }
@@ -1849,7 +1847,7 @@ impl Slot {
 }
 
 /// A blurred line's radius in 1/4 px and scale in 1/1000.
-type LineStep = (i32, i32);
+type LineStep = (i32, i32, u64);
 
 #[derive(Default)]
 struct Glow {
@@ -1861,8 +1859,6 @@ struct Glow {
     lines: HashMap<(u64, usize), (Slot, LineStep, Rect, f64)>,
     spare: Vec<Slot>,
     scratch: Vec<f32>,
-    note: Option<(usize, Arc<Vec<f32>>)>,
-    note_tex: Option<(usize, TextureHandle)>,
 }
 
 impl Glow {
@@ -1973,7 +1969,11 @@ impl Glow {
             return None;
         }
         let now = ctx.input(|i| i.time);
-        let step = ((radius * 4.0) as i32, (scale * 1000.0).round() as i32);
+        let weights: Vec<u8> = words.iter().map(|(_, a)| (a.clamp(0.0, 1.0) * 255.0).round() as u8)
+            .chain(texts.iter().map(|(_, _, a)| (a.clamp(0.0, 1.0) * 255.0).round() as u8))
+            .chain(pills.iter().map(|(_, a)| (a.clamp(0.0, 1.0) * 255.0).round() as u8))
+            .collect();
+        let step = ((radius * 4.0) as i32, (scale * 1000.0).round() as i32, hash(&weights));
         if let Some((s, r, rect, used)) = self.lines.get_mut(&key)
             && *r == step
         {
@@ -2236,282 +2236,90 @@ fn box_pass(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize, horizont
 
 // ------------------------------------------------------------------ instrumental
 
-/// The music note (Material Symbols `music_note`, 24-unit viewBox) as a polygon.
-fn note_polygon() -> &'static [Pos2] {
-    static NOTE: std::sync::OnceLock<Vec<Pos2>> = std::sync::OnceLock::new();
-    NOTE.get_or_init(|| svg_path("M10 21q-1.65 0-2.825-1.175T6 17t1.175-2.825T10 13q.575 0 1.063.138t.937.412V4q0-.425.288-.712T13 3h4q.425 0 .713.288T18 4v2q0 .425-.288.713T17 7h-3v10q0 1.65-1.175 2.825T10 21"))
+/// Bits of a break, its beads' alpha at rest, and its beats.
+const GAP_DOTS: usize = 3;
+const GAP_DOT_REST: f32 = 0.55;
+const GAP_REST_SCALE: f32 = 0.76;
+const GAP_BREATH: f32 = 0.20;
+const GAP_PUFF: f32 = 0.35;
+/// The break's shape in seconds: the beads settle in, fill one per beat, and leave.
+const GAP_ENTER: f64 = 0.620;
+const GAP_EXIT: f64 = 0.350;
+const GAP_SPLIT: f32 = 0.35;
+const GAP_COLLAPSE: f64 = 0.500;
+
+/// Where a break's gesture sits in its own span. The exit is cut out of the end of the
+/// silence and runs backwards from the next line, and the beads spend everything ahead
+/// of it: `(exit start, exit length, one bead's beat)`.
+fn gap_times(start: f64, dur: f64) -> (f64, f64, f64) {
+    let until = start + dur.max(0.001);
+    let exit_start = start + GAP_ENTER.max(until - start - GAP_COLLAPSE - GAP_EXIT);
+    let exit_len = (until.min(exit_start + GAP_EXIT) - exit_start).max(0.001);
+    let step = ((exit_start - start) / GAP_DOTS as f64).max(0.001);
+    (exit_start, exit_len, step)
 }
 
-/// A minimal SVG path reader (M L H V Q T Z, absolute and relative) into a polyline.
-fn svg_path(d: &str) -> Vec<Pos2> {
-    let mut toks: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let flush = |cur: &mut String, toks: &mut Vec<String>| {
-        if !cur.is_empty() {
-            toks.push(std::mem::take(cur));
-        }
-    };
-    for c in d.chars() {
-        if c.is_ascii_alphabetic() {
-            flush(&mut cur, &mut toks);
-            toks.push(c.to_string());
-        } else if (c == '-' && !cur.is_empty() && !cur.ends_with('e')) || (c == '.' && cur.contains('.')) {
-            // A sign, or a second decimal point, starts the next number.
-            flush(&mut cur, &mut toks);
-            cur.push(c);
-        } else if c == ' ' || c == ',' {
-            flush(&mut cur, &mut toks);
-        } else {
-            cur.push(c);
-        }
-    }
-    flush(&mut cur, &mut toks);
-    let mut out = Vec::new();
-    let (mut p, mut start) = (pos2(0.0, 0.0), pos2(0.0, 0.0));
-    let mut ctrl: Option<Pos2> = None;
-    let mut i = 0;
-    let mut cmd = 'M';
-    let num = |toks: &[String], i: &mut usize| -> f32 {
-        let v = toks.get(*i).and_then(|t| t.parse().ok()).unwrap_or(0.0);
-        *i += 1;
-        v
-    };
-    let quad = |out: &mut Vec<Pos2>, a: Pos2, c: Pos2, b: Pos2| {
-        for k in 1..=8 {
-            let t = k as f32 / 8.0;
-            let u = 1.0 - t;
-            out.push(pos2(u * u * a.x + 2.0 * u * t * c.x + t * t * b.x, u * u * a.y + 2.0 * u * t * c.y + t * t * b.y));
-        }
-    };
-    while i < toks.len() {
-        if toks[i].chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
-            cmd = toks[i].chars().next().unwrap();
-            i += 1;
-        }
-        let rel = cmd.is_ascii_lowercase();
-        let base = if rel { p.to_vec2() } else { Vec2::ZERO };
-        match cmd.to_ascii_uppercase() {
-            'M' => {
-                p = pos2(num(&toks, &mut i), num(&toks, &mut i)) + base;
-                start = p;
-                out.push(p);
-                cmd = if rel { 'l' } else { 'L' };
-                ctrl = None;
-            }
-            'L' => {
-                p = pos2(num(&toks, &mut i), num(&toks, &mut i)) + base;
-                out.push(p);
-                ctrl = None;
-            }
-            'H' => {
-                let x = num(&toks, &mut i);
-                p = pos2(if rel { p.x + x } else { x }, p.y);
-                out.push(p);
-                ctrl = None;
-            }
-            'V' => {
-                let y = num(&toks, &mut i);
-                p = pos2(p.x, if rel { p.y + y } else { y });
-                out.push(p);
-                ctrl = None;
-            }
-            'Q' => {
-                let c = pos2(num(&toks, &mut i), num(&toks, &mut i)) + base;
-                let b = pos2(num(&toks, &mut i), num(&toks, &mut i)) + base;
-                quad(&mut out, p, c, b);
-                ctrl = Some(c);
-                p = b;
-            }
-            'T' => {
-                let c = ctrl.map_or(p, |c| p + (p - c));
-                let b = pos2(num(&toks, &mut i), num(&toks, &mut i)) + base;
-                quad(&mut out, p, c, b);
-                ctrl = Some(c);
-                p = b;
-            }
-            'Z' => {
-                p = start;
-                out.push(p);
-                ctrl = None;
-            }
-            _ => i += 1,
-        }
-    }
-    out
-}
-
-fn point_in_polygon(poly: &[Pos2], p: Pos2) -> bool {
-    let mut inside = false;
-    let mut j = poly.len() - 1;
-    for i in 0..poly.len() {
-        let (a, b) = (poly[i], poly[j]);
-        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
-}
-
-/// The wave's top edge at viewBox x, morphing between the two paths (`m`: 0 high, 1 low)
-/// and flattened toward its base (y = 4) by `flatten`.
-fn wave_y(x: f32, m: f32, flatten: f32) -> f32 {
-    // `M -4 3 Q 1 2 5 3 Q 10 4 14 3 Q 18 2 22 3 Q 26 4 30 3`; the low path mirrors the
-    // control points around y = 3. Matching command lists interpolate point by point.
-    let segs: [(f32, f32, f32, f32); 4] = [(-4.0, 1.0, 5.0, 2.0), (5.0, 10.0, 14.0, 4.0), (14.0, 18.0, 22.0, 2.0), (22.0, 26.0, 30.0, 4.0)];
-    let (a, c, b, high) = *segs.iter().find(|s| x <= s.2).unwrap_or(&segs[3]);
-    // x(t) = (1-t)^2 a + 2(1-t)t c + t^2 b; solve for t in [0, 1].
-    let qa = a - 2.0 * c + b;
-    let qb = 2.0 * (c - a);
-    let qc = a - x;
-    let t = if qa.abs() < 1e-6 {
-        -qc / qb
-    } else {
-        let disc = (qb * qb - 4.0 * qa * qc).max(0.0).sqrt();
-        let t1 = (-qb + disc) / (2.0 * qa);
-        let t2 = (-qb - disc) / (2.0 * qa);
-        if (0.0..=1.0).contains(&t1) { t1 } else { t2 }
-    }
-    .clamp(0.0, 1.0);
-    let cy = lerp(high, 6.0 - high, m);
-    let y = (1.0 - t) * (1.0 - t) * 3.0 + 2.0 * (1.0 - t) * t * cy + t * t * 3.0;
-    4.0 - (4.0 - y) * flatten
-}
-
-#[allow(clippy::too_many_arguments)]
-fn paint_instrumental(painter: &egui::Painter, glow: &mut Glow, ctx: &egui::Context, cfg: &Cfg, b: &Block, xf: &Xf, t: f64, now: f64, st: LineState, dim: f32, content_w: f32) -> bool {
+/// An intermission: three beads that light one after another as the silence runs out,
+/// breathe once per bead, then puff out and vanish before the next line. `true` while
+/// it is moving.
+fn paint_instrumental(painter: &egui::Painter, cfg: &Cfg, b: &Block, xf: &Xf, t: f64, content_w: f32) -> bool {
     let em = cfg.size;
-    // The icon: one em tall, 4/3 em wide, pulled 1/3 em toward the edge; viewBox 24 centred in it.
-    let box_x = match b.align {
-        Align::Left => -em / 3.0,
-        Align::Right => content_w - em,
-        Align::Center => (content_w - em * 4.0 / 3.0) * 0.5,
+    // The beads' proportions are the BitChord player's: 13 dp across with 5 dp between
+    // them at a 34 sp lyric size.
+    let dot = em * 13.0 / 34.0;
+    let gap = em * 5.0 / 34.0;
+    let total = dot * GAP_DOTS as f32 + gap * (GAP_DOTS - 1) as f32;
+    let x0 = match b.align {
+        Align::Left => 0.0,
+        Align::Right => content_w - total,
+        Align::Center => (content_w - total) * 0.5,
     };
-    let row_h = em * 1.333;
-    let top = cfg.padding + (row_h - em) * 0.5;
-    let unit = em / 24.0;
-    let vb_origin = pos2(box_x + (em * 4.0 / 3.0 - em) * 0.5, top);
-    let to_screen = |p: Pos2| xf.point(vb_origin + p.to_vec2() * unit);
-    let e = t - b.start;
-    let d = b.dur.max(0.001);
-    // Fill opacity: in over 150 ms from the start, out over 0.5 s after the line.
-    let mut fill_a = if st.selected && e >= 0.0 { EASE.at((e / 0.15) as f32) } else { 0.0 };
-    if let Some(x) = st.exit {
-        fill_a = 1.0 - EASE.at(((now - x) / FADE_OUT) as f32);
+    let cy = cfg.padding + em * 1.333 * 0.5;
+    let mid = x0 + total * 0.5;
+    let into = t - b.start;
+    let (exit_start, exit_len, step) = gap_times(b.start, b.dur);
+    let until = b.start + b.dur.max(0.001);
+    // Opening: the row settles from just under its size rather than appearing.
+    let swell = EASE.at(((into / GAP_ENTER) as f32).clamp(0.0, 1.0));
+    // Closing: a push over the first [GAP_SPLIT], then a pull into the point the beads
+    // grew from and out to nothing.
+    let e = ((t - exit_start) / exit_len).clamp(0.0, 1.0) as f32;
+    let pull = e > GAP_SPLIT;
+    let half = if pull { (e - GAP_SPLIT) / (1.0 - GAP_SPLIT) } else { e / GAP_SPLIT };
+    let bend = half * half * (3.0 - 2.0 * half);
+    let grow = if e <= 0.0 {
+        GAP_REST_SCALE + (1.0 - GAP_REST_SCALE) * swell
+    } else if !pull {
+        1.0 + GAP_PUFF * bend
+    } else {
+        (1.0 + GAP_PUFF) * (1.0 - bend)
+    };
+    let alpha = if e <= 0.0 { swell } else if !pull { 1.0 } else { 1.0 - bend };
+    if alpha <= 0.001 || grow <= 0.001 {
+        return false;
     }
-    let p = (e / d).clamp(0.0, 1.0) as f32;
-    // Clip: translateY(78%) -> translateY(-4%) of the 24-unit box, linear; the wave
-    // flattens (scaleY 1.2 -> 0, ease-in) and morphs high <-> low every 1.25 s.
-    let travel = lerp(0.78, -0.04, p) * 24.0;
-    let flatten = lerp(1.2, 0.0, EASE_IN.at(p));
-    let phase = ((e.max(0.0) % 1.25) / 1.25) as f32;
-    let m = EASE_IN_OUT.at(if phase < 0.5 { phase * 2.0 } else { (1.0 - phase) * 2.0 });
-    let sz = (em * ctx.pixels_per_point()).ceil() as usize + 2;
-    let rect = Rect::from_min_max(to_screen(pos2(0.0, 0.0)), to_screen(pos2(24.0, 24.0)));
-    let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    let note_tex = glow.note_texture(ctx, sz);
-    painter.image(note_tex, rect, full, theme::with_alpha(Color32::WHITE, dim));
-    if fill_a > 0.0 {
-        let mask = glow.note_mask(sz);
-        let mut fill = vec![0.0f32; sz * sz];
-        for y in 0..sz {
-            for x in 0..sz {
-                let v = mask[y * sz + x];
-                if v <= 0.0 {
-                    continue;
-                }
-                let q = pos2((x as f32 + 0.5) / sz as f32 * 24.0, (y as f32 + 0.5) / sz as f32 * 24.0);
-                // The clip is the wave shape plus the rect under it (y >= 3.9), moved down.
-                if q.y >= wave_y(q.x, m, flatten).min(3.9) + travel {
-                    fill[y * sz + x] = v;
-                }
-            }
+    // One breath to each bead it lights, all three on the same phase; once the third is
+    // lit the row holds still and waits for the exit. Raised cosine, so every turn round
+    // is the same movement as the last.
+    let beat = if into < step * GAP_DOTS as f64 { ((into % step) / step) as f32 } else { 1.0 };
+    let pulse = 1.0 - GAP_BREATH * 0.5 * (1.0 - (std::f32::consts::TAU * beat).cos());
+    for i in 0..GAP_DOTS {
+        // Beads and the space between them scale together about the middle of the row,
+        // which is what makes the outer dots drift apart as they fill.
+        let x = x0 + dot * 0.5 + i as f32 * (dot + gap);
+        let cx = mid + (x - mid) * grow * pulse;
+        let c = xf.point(pos2(cx, cy));
+        let r = dot * 0.5 * grow * pulse * xf.scale;
+        // Brightness alone is per bead: the count has to read as three arrivals, and
+        // only one of them can be happening at a time.
+        let k = ((t - b.start - i as f64 * step) / step).clamp(0.0, 1.0) as f32;
+        let lit = k * k * (3.0 - 2.0 * k);
+        painter.circle_filled(c, r, theme::with_alpha(Color32::WHITE, GAP_DOT_REST * alpha));
+        if lit > 0.0 {
+            painter.circle_filled(c, r, theme::with_alpha(cfg.active, lit * alpha));
         }
-        // `feGaussianBlur stdDeviation=5` (viewBox units) at 0.6 under the fill.
-        let sigma = 5.0 * sz as f32 / 24.0;
-        let pad = (sigma * 3.0).ceil() as usize;
-        let gw = sz + pad * 2;
-        let mut g = vec![0.0f32; gw * gw];
-        for y in 0..sz {
-            for x in 0..sz {
-                g[(y + pad) * gw + x + pad] = fill[y * sz + x];
-            }
-        }
-        gaussian(&mut g, gw, gw, sigma);
-        let gpad = pad as f32 / sz as f32 * 24.0;
-        let grect = Rect::from_min_max(to_screen(pos2(-gpad, -gpad)), to_screen(pos2(24.0 + gpad, 24.0 + gpad)));
-        let (gt, guv) = glow.set_tex(ctx, 1, mask_image(&g, gw, 0.6));
-        painter.image(gt, grect, guv, theme::with_alpha(cfg.active, fill_a));
-        let (ft, fuv) = glow.set_tex(ctx, 2, mask_image(&fill, sz, 1.0));
-        painter.image(ft, rect, fuv, theme::with_alpha(cfg.active, fill_a));
     }
-    (st.selected && e >= 0.0 && e <= d) || st.exit.is_some()
-}
-
-fn mask_image(v: &[f32], w: usize, a: f32) -> ColorImage {
-    ColorImage {
-        size: [w, v.len() / w],
-        source_size: vec2(w as f32, (v.len() / w) as f32),
-        pixels: v
-            .iter()
-            .map(|v| {
-                let q = ((v * a).clamp(0.0, 1.0) * 255.0).round() as u8;
-                Color32::from_rgba_premultiplied(q, q, q, q)
-            })
-            .collect(),
-    }
-}
-
-impl Glow {
-    /// The note's coverage at `sz` pixels square (2x2 supersampled), cached.
-    fn note_mask(&mut self, sz: usize) -> Arc<Vec<f32>> {
-        if let Some((s, m)) = &self.note
-            && *s == sz
-        {
-            return m.clone();
-        }
-        let poly = note_polygon();
-        let mut out = vec![0.0f32; sz * sz];
-        for y in 0..sz {
-            for x in 0..sz {
-                let mut c = 0;
-                for (ox, oy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
-                    let q = pos2((x as f32 + ox) / sz as f32 * 24.0, (y as f32 + oy) / sz as f32 * 24.0);
-                    if point_in_polygon(poly, q) {
-                        c += 1;
-                    }
-                }
-                out[y * sz + x] = c as f32 / 4.0;
-            }
-        }
-        let m = Arc::new(out);
-        self.note = Some((sz, m.clone()));
-        m
-    }
-
-    fn note_texture(&mut self, ctx: &egui::Context, sz: usize) -> TextureId {
-        if let Some((s, t)) = &self.note_tex
-            && *s == sz
-        {
-            return t.id();
-        }
-        let mask = self.note_mask(sz);
-        let t = ctx.load_texture("lyric-note", mask_image(&mask, sz, 1.0), TextureOptions::LINEAR);
-        let id = t.id();
-        self.note_tex = Some((sz, t));
-        id
-    }
-
-    /// The instrumental note's fill or glow this frame, and the part of the texture it covers.
-    fn set_tex(&mut self, ctx: &egui::Context, slot: u32, img: ColorImage) -> (TextureId, Rect) {
-        let key = (u64::MAX, usize::MAX, slot, 0);
-        let now = ctx.input(|i| i.time);
-        let old = self.textures.remove(&key).map(|(s, _)| s);
-        let s = self.upload(ctx, old, img, "lyric-instrumental");
-        let out = (s.tex.id(), s.uv());
-        self.textures.insert(key, (s, now));
-        out
-    }
+    (into >= 0.0 && into <= GAP_ENTER) || t < b.start + step * GAP_DOTS as f64 || (t >= exit_start && t < until)
 }
 
 /// Dev hook: YTM_LYR_OFF=glow,blur,view leaves those parts out (memory breakdowns).
@@ -2795,10 +2603,15 @@ mod tests {
     }
 
     #[test]
-    fn note_path_is_closed() {
-        let p = note_polygon();
-        assert!(p.len() > 20);
-        assert!(point_in_polygon(p, pos2(10.0, 17.0)));
-        assert!(!point_in_polygon(p, pos2(2.0, 2.0)));
+    fn a_break_finishes_before_the_next_line() {
+        // A 6 s break: the exit starts 0.85 s before the next line and lasts 0.35 s.
+        let (exit, len, step) = gap_times(10.0, 6.0);
+        assert!((exit - 15.15).abs() < 1e-9);
+        assert!((len - 0.35).abs() < 1e-9);
+        assert!((step - 5.15 / 3.0).abs() < 1e-9);
+        // A break too short to count still opens, then uses its whole exit.
+        let (exit, len, _) = gap_times(10.0, 1.0);
+        assert!((exit - 10.62).abs() < 1e-9);
+        assert!((len - 0.35).abs() < 1e-9);
     }
 }

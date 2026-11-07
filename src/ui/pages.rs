@@ -13,6 +13,33 @@ use crate::theme::{self, icon};
 
 const CARD: f32 = 180.0;
 
+/// How many tiles Apple fits across a feed row at this content width. The site
+/// measures from its own viewport, which includes the navigation column this page
+/// already sits past.
+fn feed_columns(width: f32, square: bool) -> usize {
+    let viewport = width + 260.0;
+    match square {
+        true if viewport < 1260.0 => 4,
+        true if viewport < 1580.0 => 5,
+        true => 6,
+        false if viewport < 1260.0 => 2,
+        false if viewport < 1580.0 => 3,
+        false => 4,
+    }
+}
+
+/// One tile of an Apple feed row: a share of the content on wide windows, the site's
+/// own narrow width below its breakpoint.
+fn feed_tile(ui: &Ui, square: bool) -> f32 {
+    let width = ui.available_width();
+    let min = if square { 144.0 } else { 270.0 };
+    if width < 1024.0 {
+        return min;
+    }
+    let cols = feed_columns(width, square);
+    ((width - 20.0 * (cols - 1) as f32) / cols as f32).max(min)
+}
+
 pub fn page(app: &mut App, ui: &mut Ui, now: f64) {
     let t = theme::ease_out(((now - app.page_changed) / 0.32) as f32);
     if t < 1.0 {
@@ -34,16 +61,18 @@ pub fn page(app: &mut App, ui: &mut Ui, now: f64) {
         ui.add_space(18.0 * (1.0 - t));
         match &page {
             Page::Home => home(app, ui, now),
-            Page::Explore => explore(app, ui, now),
+            Page::New => new(app, ui, now),
             Page::Search(q) => search(app, ui, q, now),
             Page::Album(id) | Page::Playlist(id) => collection(app, ui, id, now),
             Page::Artist(id) => artist(app, ui, id, now),
             Page::Library(tab) => library(app, ui, *tab, now),
+            Page::Downloads => downloads(app, ui, now),
             Page::Settings => settings(app, ui),
             Page::Transfer => super::transfer::page(app, ui, now),
             Page::Jam => super::jam::page(app, ui),
         }
-        ui.add_space(40.0);
+        // Room to scroll the last rows clear of the player's frosted strip.
+        ui.add_space(96.0);
     });
     selection_bar(app, ui.ctx(), &page, out.inner_rect);
     // Infinite scroll on home: fetch the next shelves when nearing the bottom.
@@ -114,6 +143,33 @@ fn placeholder(app: &mut App, ui: &mut Ui, now: f64, rows: usize, card: f32) {
     }
 }
 
+/// What a collection header's round buttons draw: a font glyph, or the three dots.
+enum CircleGlyph {
+    Char(char),
+    More,
+}
+
+/// A round glass action on a collection header (shuffle, search, more).
+fn circle_action(ui: &mut Ui, glyph: CircleGlyph, name: &str, active: bool) -> egui::Response {
+    // Same 38 px height as the Play pill beside it, so the row shares one centre line.
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(38.0), Sense::click());
+    let resp = named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || open, 0.15);
+    let press = if resp.is_pointer_button_down_on() { 18.3 } else { 19.0 };
+    ui.painter().circle_filled(rect.center(), press, theme::glass(0.10 + 0.09 * h));
+    let color = theme::lerp_color(theme::text_dim(), theme::text(), h.max(active as u8 as f32));
+    match glyph {
+        CircleGlyph::Char(g) => widgets::icon_at(ui, rect.center(), g, 16.0, color),
+        CircleGlyph::More => {
+            for i in -1..=1 {
+                ui.painter().circle_filled(rect.center() + vec2(i as f32 * 5.2, 0.0), 1.8, color);
+            }
+        }
+    }
+    resp
+}
+
 /// A page's main Play button. Shows Pause while this page's album / playlist / artist
 /// is playing, and toggles instead of restarting when it's already loaded.
 fn play_pill(ui: &mut Ui, acts: &mut Vec<Action>, target: &Target, tracks: &[Track]) {
@@ -134,10 +190,11 @@ fn card_row(ui: &mut Ui, id: &str, title: &str, cards: &[Card], acts: &mut Vec<A
     }
     let (l, r) = shelf_header(ui, title, None, None, true);
     let nudge = r as i32 - l as i32;
-    h_scroll(ui, id, nudge, cards.len(), CARD, 18.0, |ui| {
-        ui.spacing_mut().item_spacing.x = 18.0;
+    let tile = feed_tile(ui, true);
+    h_scroll(ui, id, nudge, cards.len(), tile, 20.0, |ui| {
+        ui.spacing_mut().item_spacing.x = 20.0;
         for c in cards {
-            card(ui, c, CARD, false, acts);
+            card(ui, c, tile, false, acts);
         }
     });
 }
@@ -148,10 +205,10 @@ fn card_row(ui: &mut Ui, id: &str, title: &str, cards: &[Card], acts: &mut Vec<A
 fn song_grid(ui: &mut Ui, rows_ctx: &Rows, liked: &HashSet<String>, acts: &mut Vec<Action>, id: &str, title: &str, strap: Option<&str>, tracks: &[Track], rows: usize) -> bool {
     let (l, r) = shelf_header(ui, title, strap, None, true);
     let nudge = r as i32 - l as i32;
-    let col_w = (ui.available_width() / 2.6).clamp(300.0, 420.0);
+    let col_w = feed_tile(ui, false);
     let mut picked = None;
-    let (_, reached_end) = h_scroll(ui, id, nudge, tracks.len().div_ceil(rows.max(1)), col_w, 16.0, |ui| {
-        ui.spacing_mut().item_spacing.x = 16.0;
+    let (_, reached_end) = h_scroll(ui, id, nudge, tracks.len().div_ceil(rows.max(1)), col_w, 20.0, |ui| {
+        ui.spacing_mut().item_spacing.x = 20.0;
         for (c, col) in tracks.chunks(rows.max(1)).enumerate() {
             ui.allocate_ui(vec2(col_w, rows as f32 * 60.0), |ui| {
                 ui.set_width(col_w);
@@ -294,20 +351,7 @@ fn selection_bar(app: &mut App, ctx: &egui::Context, page: &Page, area: Rect) {
 // ------------------------------------------------------------------ home
 
 fn home(app: &mut App, ui: &mut Ui, now: f64) {
-    if let Some(h) = &app.home
-        && !h.chips.is_empty()
-    {
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
-            for c in &h.chips {
-                if chip(ui, &c.title, c.selected).clicked() {
-                    let params = if c.selected { None } else { c.params.clone() };
-                    app.actions.push(Action::HomeChip(params));
-                }
-            }
-        });
-    }
+    page_title(ui, "Home");
     // A refresh keeps showing the current feed; the skeleton is only for an empty one.
     if app.home.as_ref().is_none_or(|h| app.home_loading && h.shelves.is_empty()) {
         placeholder(app, ui, now, 3, CARD);
@@ -327,13 +371,14 @@ fn home(app: &mut App, ui: &mut Ui, now: f64) {
                 let (strap, thumb) = if s.title == "Listen again" { (None, None) } else { (s.strapline.as_deref(), s.strap_thumb.as_deref()) };
                 let (l, r) = shelf_header(ui, &s.title, strap, thumb, true);
                 let nudge = r as i32 - l as i32;
+                let tile = feed_tile(ui, true);
                 let acts = &mut app.actions;
                 let liked = &app.liked;
-                h_scroll(ui, &id, nudge, cards.len(), CARD, 18.0, |ui| {
-                    ui.spacing_mut().item_spacing.x = 18.0;
+                h_scroll(ui, &id, nudge, cards.len(), tile, 20.0, |ui| {
+                    ui.spacing_mut().item_spacing.x = 20.0;
                     for c in cards {
                         let is_liked = matches!(&c.target, Target::Song(t) if liked.contains(&t.id));
-                        card(ui, c, CARD, is_liked, acts);
+                        card(ui, c, tile, is_liked, acts);
                     }
                 });
             }
@@ -357,10 +402,10 @@ fn home(app: &mut App, ui: &mut Ui, now: f64) {
     }
 }
 
-// ------------------------------------------------------------------ explore
+// ------------------------------------------------------------------ new
 
-fn explore(app: &mut App, ui: &mut Ui, now: f64) {
-    page_title(ui, "Explore");
+fn new(app: &mut App, ui: &mut Ui, now: f64) {
+    page_title(ui, "New");
     if app.explore.is_none() {
         placeholder(app, ui, now, 2, CARD);
         return;
@@ -375,15 +420,32 @@ fn explore(app: &mut App, ui: &mut Ui, now: f64) {
 }
 
 pub(super) fn page_title(ui: &mut Ui, title: &str) {
-    ui.add_space(14.0);
-    ui.label(RichText::new(title).font(theme::bold(34.0)).color(theme::text()));
+    // Left-aligned with the page's content, a little below the top edge.
+    ui.add_space(18.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::hover());
+    ui.painter().text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, title, theme::bold(34.0), theme::text());
 }
 
 // ------------------------------------------------------------------ search
 
 fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
     let pick = super::transfer::pick_banner(app, ui);
+    page_title(ui, "Search");
+    ui.add_space(10.0);
+    // Coming from a suggestion, the sidebar or a link, the field says what's shown.
+    // Only when the route changed: clearing the box leaves the route alone until Enter.
+    if app.search_synced != q {
+        app.search_synced = q.to_owned();
+        app.search_text = q.trim().to_owned();
+    }
+    super::shell::search_field(app, ui, ui.available_width().min(560.0));
+    if q.trim().is_empty() {
+        ui.add_space(26.0);
+        recent_searches(ui, app);
+        return;
+    }
     if app.search.as_ref().is_none_or(|r| r.query != q) {
+        ui.add_space(14.0);
         placeholder(app, ui, now, 2, CARD);
         return;
     }
@@ -392,10 +454,11 @@ fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
     let acts = &mut app.actions;
     let liked = &app.liked;
     if r.tracks.is_empty() && r.artists.is_empty() && r.albums.is_empty() && r.playlists.is_empty() {
-        page_title(ui, "No results");
+        ui.add_space(18.0);
+        ui.label(RichText::new("No results").font(theme::bold(20.0)).color(theme::text()));
         return;
     }
-    ui.add_space(8.0);
+    ui.add_space(14.0);
     // Top result: the first artist when the query names one, otherwise the first song.
     ui.horizontal_top(|ui| {
         if let Some(top) = r.artists.first().filter(|a| a.title.eq_ignore_ascii_case(q.trim())) {
@@ -439,9 +502,60 @@ fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
     card_row(ui, "s-pl", "Playlists", &r.playlists, acts);
 }
 
+/// Apple's search landing: what was opened from the last few searches, with its artwork.
+fn recent_searches(ui: &mut Ui, app: &mut App) {
+    if app.recent_searches.is_empty() {
+        ui.label(RichText::new("Search for artists, songs, albums and playlists.").font(theme::regular(15.0)).color(theme::text_dim()));
+        return;
+    }
+    ui.label(RichText::new("Recently Searched").font(theme::bold(22.0)).color(theme::text()));
+    ui.add_space(12.0);
+    let w = ui.available_width().min(620.0);
+    // The rows are cloned so a removal can be applied after the list is drawn.
+    let recents = app.recent_searches.clone();
+    let mut remove = None;
+    for (i, r) in recents.iter().enumerate() {
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, 64.0), Sense::click());
+        let resp = named(resp, &r.title).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.contains_pointer(), 0.12);
+        ui.painter().rect_filled(rect, 10.0, theme::glass(0.05 + 0.06 * h));
+        let art = Rect::from_min_size(rect.left_top() + vec2(8.0, 8.0), Vec2::splat(48.0));
+        let radius = if r.round { 24.0 } else { 6.0 };
+        match r.thumb.as_deref().filter(|u| !u.is_empty()) {
+            Some(url) => {
+                let thumbs = [crate::model::Thumb { url: url.to_owned(), width: 300, height: 300 }];
+                paint_cover(ui, art, &thumbs, radius, 1.0);
+            }
+            None => {
+                ui.painter().rect_filled(art, radius, theme::glass(0.1));
+            }
+        }
+        let x = art.right() + 14.0;
+        widgets::text_at(ui, pos2(x, rect.center().y - 17.0), &r.title, theme::semibold(15.0), theme::text(), rect.right() - x - 12.0);
+        widgets::text_at(ui, pos2(x, rect.center().y + 4.0), &r.subtitle, theme::regular(13.0), theme::text_dim(), rect.right() - x - 12.0);
+        egui::Popup::context_menu(&resp).show(|ui| {
+            ui.set_min_width(200.0);
+            if ui.button("Remove from Recently Searched").clicked() {
+                remove = Some(i);
+                ui.close();
+            }
+        });
+        if resp.clicked() {
+            app.actions.push(match &r.target {
+                Some(t) => Action::Open(t.clone()),
+                // An entry from an earlier version kept only the search.
+                None => Action::Go(Page::Search(r.query.clone())),
+            });
+        }
+        ui.add_space(6.0);
+    }
+    if let Some(i) = remove {
+        app.recent_searches.remove(i);
+    }
+}
+
 /// `pick`: choosing a transfer match, so clicking a song picks it.
-fn top_result(ui: &mut Ui, c: &Card, pick: bool, acts: &mut Vec<Action>) {
-    ui.vertical(|ui| {
+fn top_result(ui: &mut Ui, c: &Card, pick: bool, acts: &mut Vec<Action>) {    ui.vertical(|ui| {
         ui.label(RichText::new("Top result").font(theme::bold(24.0)));
         ui.add_space(8.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(420.0, 236.0), Sense::click());
@@ -486,16 +600,32 @@ fn collection(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
         return;
     }
     let rows = Rows::new(app, now);
+    // The header's motion sleeve, asked for before the release is borrowed below.
+    let (release, artist) = match app.opened(id) {
+        Some(o) => (o.c.title.clone(), o.c.artists.first().map(|a| a.name.clone()).unwrap_or_else(|| o.c.byline())),
+        None => (String::new(), String::new()),
+    };
+    app.apple_cover(&release, &artist, None);
+    let px = (232.0 * ui.ctx().pixels_per_point()).round().max(256.0) as u32;
+    let sprite = app.apple_sprite(ui.ctx(), &release, &artist, px);
     let Some(o) = app.lists.get(id) else { return };
     let (c, more) = (&o.c, app.receiving(id));
     let acts = &mut app.actions;
     let tracks = &c.tracks;
     let is_album = c.is_album;
+    let filter_on = app.coll_search.as_ref().is_some_and(|(fid, _)| fid == id);
+    let selecting = app.selection.on(&app.page);
+    let mut toggle_search = false;
+    let mut start_select = false;
+    let mut stop_select = false;
     ui.add_space(18.0);
     ui.horizontal_top(|ui| {
         let (img, _) = ui.allocate_exact_size(Vec2::splat(232.0), Sense::hover());
         widgets::soft_shadow(ui, img, 10.0, 40.0, 0.5);
         paint_cover(ui, img, &c.thumbs, theme::card_radius() + 2.0, 1.0);
+        if let Some(s) = &sprite {
+            widgets::paint_motion(ui, img, theme::card_radius() + 2.0, s);
+        }
         ui.add_space(26.0);
         ui.vertical(|ui| {
             ui.set_max_width(ui.available_width().min(760.0));
@@ -517,60 +647,165 @@ fn collection(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
                 ui.label(g);
             }
             ui.add_space(16.0);
-            // Wraps on narrow windows, where your own playlist's buttons don't fit on one line.
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
-                let target = if is_album { Target::Album(id.to_owned()) } else { Target::Playlist(id.to_owned()) };
+            let target = if is_album { Target::Album(id.to_owned()) } else { Target::Playlist(id.to_owned()) };
+            // Liked Music and Episodes for later are the account's own lists: they can't be
+            // saved, removed, edited or deleted.
+            let auto = matches!(id, "LM" | "SE");
+            let saved = app.library.as_ref().is_some_and(|l| {
+                let cards = if is_album { &l.albums } else { &l.playlists };
+                cards.iter().any(|card| card.target == target)
+            });
+            // Saving only applies to someone else's playlist or an album.
+            let save_id = if is_album { c.save_id.clone() } else { (!c.owned).then(|| id.to_owned()) };
+            let owned = !is_album && c.owned;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
                 play_pill(ui, acts, &target, tracks);
-                if pill(ui, "Shuffle", Some(icon::SHUFFLE), false).clicked() && !tracks.is_empty() {
+                if circle_action(ui, CircleGlyph::Char(icon::SHUFFLE), "Shuffle", false).clicked() && !tracks.is_empty() {
                     let mut t = tracks.clone();
                     super::shuffle(&mut t);
                     acts.push(Action::Play(t, 0));
                 }
-                if let Some(first) = tracks.first()
-                    && pill(ui, "Radio", Some(icon::RADIO), false).clicked() {
+                if circle_action(ui, CircleGlyph::Char(icon::SEARCH), "Search in this list", filter_on).clicked() {
+                    toggle_search = true;
+                }
+                let more = circle_action(ui, CircleGlyph::More, "More", false);
+                egui::Popup::menu(&more).show(|ui| {
+                    ui.set_width(226.0);
+                    ui.add_space(3.0);
+                    if let Some(first) = tracks.first()
+                        && widgets::menu_action(ui, Some(icon::RADIO), "Start radio")
+                    {
                         acts.push(Action::Radio(first.clone()));
                     }
-                if pill(ui, "Share", None, false).clicked() {
-                    acts.push(Action::Share(target.clone()));
-                }
-                if !tracks.is_empty() {
-                    select_pill(ui, &mut app.selection, &app.page);
-                }
-                // Liked Music and Episodes for later are the account's own lists: they can't be
-                // saved, removed, edited or deleted.
-                let auto = matches!(id, "LM" | "SE");
-                if app.logged_in && !auto {
-                    let saved = app.library.as_ref().is_some_and(|l| {
-                        let cards = if is_album { &l.albums } else { &l.playlists };
-                        cards.iter().any(|card| card.target == target)
-                    });
-                    // Saving only applies to someone else's playlist or an album.
-                    let save_id = if is_album { c.save_id.clone() } else { (!c.owned).then(|| id.to_owned()) };
-                    if let Some(save_id) = save_id
-                        && pill(ui, if saved { "Remove from library" } else { "Save to library" }, None, false).clicked() {
-                            acts.push(Action::SaveCollection(save_id, !saved));
-                        }
-                    // Only your own playlists can be edited or deleted (mixes and others' playlists can't).
-                    if !is_album && c.owned {
-                        if pill(ui, "Edit", None, false).clicked() { acts.push(Action::EditPlaylist); }
-                        if pill(ui, "Collaborate", None, false).clicked() { acts.push(Action::Collaborate); }
-                        if pill(ui, "Delete", None, false).clicked() { acts.push(Action::DeletePlaylist); }
+                    if let Some(save_id) = save_id.clone()
+                        && widgets::menu_action(ui, Some(icon::LIBRARY), if saved { "Remove from library" } else { "Save to library" })
+                    {
+                        acts.push(Action::SaveCollection(save_id, !saved));
                     }
-                }
+                    if app.logged_in && !auto && !tracks.is_empty() {
+                        if widgets::menu_action(ui, Some(icon::LIST_CHECKS), if selecting { "Done selecting" } else { "Select" }) {
+                            if selecting { stop_select = true } else { start_select = true }
+                        }
+                    }
+                    if app.logged_in && !auto && (save_id.is_some() || owned) {
+                        ui.separator();
+                    }
+                    if owned {
+                        if widgets::menu_action(ui, Some(icon::MUSIC), "Edit playlist") {
+                            acts.push(Action::EditPlaylist);
+                        }
+                        if widgets::menu_action(ui, Some(icon::USERS), "Collaborate") {
+                            acts.push(Action::Collaborate);
+                        }
+                        if widgets::menu_action(ui, Some(icon::TRASH_2), "Delete playlist") {
+                            acts.push(Action::DeletePlaylist);
+                        }
+                    }
+                    if app.logged_in && !auto && !owned && save_id.is_none() {
+                        ui.separator();
+                    }
+                    if widgets::menu_action(ui, Some(icon::LINK), "Share") {
+                        acts.push(Action::Share(target.clone()));
+                    }
+                    ui.add_space(3.0);
+                });
             });
+            if toggle_search {
+                let closing = app.coll_search.as_ref().is_some_and(|(fid, _)| fid == id);
+                app.coll_search = (!closing).then(|| (id.to_owned(), String::new()));
+            }
+            if start_select {
+                app.selection.start(&app.page);
+            }
+            if stop_select {
+                app.selection.clear();
+            }
+
         });
     });
-    ui.add_space(26.0);
+    let mut dismiss_search = false;
+    if let Some((fid, query)) = &mut app.coll_search
+        && fid == id
+    {
+        ui.add_space(14.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().min(420.0), 40.0), Sense::hover());
+        ui.painter().rect_filled(rect, 20.0, theme::glass(0.09));
+        widgets::icon_at(ui, pos2(rect.left() + 20.0, rect.center().y), icon::SEARCH, 16.0, theme::text_dim());
+        let clearable = !query.is_empty();
+        let inner = Rect::from_min_max(pos2(rect.left() + 40.0, rect.top() + 4.0), pos2(rect.right() - if clearable { 40.0 } else { 16.0 }, rect.bottom() - 4.0));
+        let edit = ui.put(
+            inner,
+            egui::TextEdit::singleline(query)
+                .hint_text(egui::RichText::new("Search in this list").color(theme::text_faint()))
+                .font(theme::regular(14.0))
+                .vertical_align(egui::Align::Center)
+                .frame(egui::Frame::NONE)
+                .desired_width(inner.width()),
+        );
+        if toggle_search {
+            edit.request_focus();
+        } else if !edit.has_focus() && query.is_empty() {
+            // Left alone empty, the field goes away instead of sitting over the list.
+            dismiss_search = true;
+        }
+        if clearable {
+            let x = Rect::from_center_size(pos2(rect.right() - 20.0, rect.center().y), Vec2::splat(26.0));
+            let resp = named(ui.interact(x, ui.scope_id().with("coll-clear"), Sense::click()), "Clear search").on_hover_cursor(egui::CursorIcon::PointingHand);
+            widgets::icon_at(ui, x.center(), icon::X, 14.0, theme::text_dim());
+            if resp.clicked() {
+                query.clear();
+            }
+        }
+        ui.add_space(18.0);
+    } else {
+        ui.add_space(26.0);
+    }
+    if dismiss_search {
+        app.coll_search = None;
+    }
+    let needle = app.coll_search.as_ref().filter(|(fid, _)| fid == id).map(|(_, q)| q.trim().to_lowercase()).unwrap_or_default();
+    let filtered: Vec<Track> = if needle.is_empty() {
+        Vec::new()
+    } else {
+        c.tracks
+            .iter()
+            .filter(|t| {
+                t.title.to_lowercase().contains(&needle)
+                    || t.artist_line().to_lowercase().contains(&needle)
+                    || t.album.as_ref().is_some_and(|a| a.name.to_lowercase().contains(&needle))
+            })
+            .cloned()
+            .collect()
+    };
+    let shown: &[Track] = if needle.is_empty() { tracks } else { &filtered };
     let number = |i: usize, t: &Track| is_album.then(|| t.track_nr.map_or(i + 1, |n| n as usize));
     let own = app.logged_in && c.owned && !is_album;
-    list(ui, &rows, &app.liked, tracks, !is_album, number, ListCtx { sel: &mut app.selection, page: &app.page, own }, acts);
+    list(ui, &rows, &app.liked, shown, !is_album, number, ListCtx { sel: &mut app.selection, page: &app.page, own }, acts);
     if more {
         widgets::skeleton_rows(ui, now, 3);
     }
 }
 
 // ------------------------------------------------------------------ artist
+
+/// Apple's wordmark for the artist, bottom-left at `base`, no wider than `max_w`.
+/// False until the image is ready, so the caller can draw the name instead.
+fn wordmark(ui: &Ui, base: egui::Pos2, logo: &crate::apple::LogoSrc, max_w: f32) -> bool {
+    let aspect = logo.w.max(1) as f32 / logo.h.max(1) as f32;
+    let mut size = vec2(72.0 * aspect, 72.0);
+    if size.x > max_w {
+        size = vec2(max_w, max_w / aspect);
+    }
+    let url = logo.at_height((size.y * 2.0) as u32);
+    let ready = matches!(egui::Image::new(url.as_str()).load_for_size(ui.ctx(), size), Ok(egui::load::TexturePoll::Ready { .. }));
+    if ready {
+        let rect = Rect::from_min_size(pos2(base.x, base.y - 40.0 - size.y), size);
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        widgets::paint_remote(ui, &url, rect, 0.0, uv, Color32::WHITE);
+    }
+    ready
+}
 
 fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
     if app.artist.as_ref().is_none_or(|a| a.id != id) {
@@ -579,6 +814,23 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
     }
     let rows = Rows::new(app, now);
     let accent = app.accent_color();
+    // Apple's own page for this artist: their display name and the hero clip. Artists
+    // Apple has no clip for (Charli xcx) keep the still banner.
+    let apple = app.apple_artists.get(id).and_then(|o| o.clone());
+    let name = apple.as_ref().map(|x| x.name.clone()).unwrap_or_else(|| app.artist.as_ref().map(|a| a.name.clone()).unwrap_or_default());
+    // Apple's search misses once now and then. While the page is open, ask again after
+    // the cooldown rather than waiting for the listener to come back to it.
+    if apple.is_none() {
+        let key = format!("artist:{id}");
+        let cooling = app.apple_missed.get(&key).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(120));
+        if !cooling && app.apple_waiting.insert(key) {
+            app.backend.request(crate::backend::Req::AppleArtist { id: id.to_owned(), name: name.clone() });
+        }
+    }
+    // Apple's wordmark wins the hero; failing one, the listener's signature service;
+    // failing that, the name in type. A lettered artist still has their signature
+    // asked for, because it signs the About section below instead of the hero.
+    let signature = app.signature_texture(ui.ctx(), &name);
     let Some(a) = &app.artist else { return };
     let acts = &mut app.actions;
     let top = &a.top;
@@ -598,7 +850,30 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
     }
     super::shell::vgradient(ui.painter(), Rect::from_min_max(pos2(hero.left(), hero.center().y - 40.0), hero.max), Color32::TRANSPARENT, theme::shade(0.85));
     let base = hero.left_bottom() + vec2(28.0, -30.0);
-    ui.painter().text(base - vec2(0.0, 44.0), Align2::LEFT_BOTTOM, &a.name, theme::bold(58.0), Color32::WHITE);
+    // Apple letters some artists a wordmark image instead of setting their name in type.
+    // Until it downloads (or when there's none) the typed name stands in.
+    let drawn = apple.as_ref().and_then(|x| x.logo.as_ref()).is_some_and(|logo| wordmark(ui, base, logo, w * 0.62));
+    if !drawn {
+        match &signature {
+            // The artist's own hand, credited above it the way a page signs itself off.
+            Some(tex) => {
+                let tex_size = tex.size_vec2();
+                let aspect = tex_size.x / tex_size.y.max(1.0);
+                let mut size = vec2(96.0 * aspect, 96.0);
+                let max_w = (w * 0.42).min(340.0);
+                if size.x > max_w {
+                    size = vec2(max_w, max_w / aspect);
+                }
+                let rect = Rect::from_min_size(pos2(base.x, base.y - 40.0 - size.y), size);
+                ui.painter().text(pos2(base.x, rect.top() - 8.0), Align2::LEFT_BOTTOM, format!("Signed by {name}"), theme::regular(12.0), Color32::from_white_alpha(199));
+                let tex = egui::load::SizedTexture::from_handle(tex);
+                egui::Image::from_texture(tex).uv(Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))).paint_at(ui, rect);
+            }
+            None => {
+                ui.painter().text(base - vec2(0.0, 44.0), Align2::LEFT_BOTTOM, &name, theme::bold(58.0), Color32::WHITE);
+            }
+        }
+    }
     if let Some(s) = a.subscribers {
         ui.painter().text(base - vec2(0.0, 18.0), Align2::LEFT_BOTTOM, format!("{} subscribers", compact(s)), theme::regular(14.0), theme::text_dim());
     }
@@ -641,8 +916,33 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
     card_row(ui, "a-sim", "Fans might also like", &a.similar, acts);
     if let Some(d) = a.description.as_deref().filter(|d| !d.trim().is_empty()) {
         shelf_header(ui, "About", None, None, false);
-        let g = widgets::galley_wrapped(ui, d.trim(), theme::regular(14.5), theme::text_dim(), ui.available_width().min(820.0), 8);
-        ui.label(g);
+        let full = ui.available_width().min(820.0);
+        // A lettered artist's signature can't be the hero, so it signs the About
+        // section beside the prose the way a page signs itself off.
+        let beside = drawn.then_some(signature.as_ref()).flatten();
+        if let Some(tex) = beside {
+            ui.horizontal_top(|ui| {
+                let sig_w = (full * 0.28).clamp(120.0, 210.0);
+                let text_w = (full - sig_w - 32.0).max(220.0);
+                let g = widgets::galley_wrapped(ui, d.trim(), theme::regular(14.5), theme::text_dim(), text_w, 8);
+                ui.label(g);
+                ui.add_space(32.0);
+                let tex_size = tex.size_vec2();
+                let aspect = tex_size.x / tex_size.y.max(1.0);
+                let mut size = vec2(sig_w, sig_w / aspect);
+                if size.y > 140.0 {
+                    size = vec2(140.0 * aspect, 140.0);
+                }
+                let (rect, _) = ui.allocate_exact_size(vec2(size.x, size.y + 22.0), Sense::hover());
+                ui.painter().text(rect.left_top(), Align2::LEFT_TOP, format!("Signed by {name}"), theme::regular(12.0), Color32::from_white_alpha(199));
+                let img = Rect::from_min_size(pos2(rect.left(), rect.top() + 22.0), size);
+                let tex = egui::load::SizedTexture::from_handle(tex);
+                egui::Image::from_texture(tex).uv(Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))).paint_at(ui, img);
+            });
+        } else {
+            let g = widgets::galley_wrapped(ui, d.trim(), theme::regular(14.5), theme::text_dim(), full, 8);
+            ui.label(g);
+        }
     }
 }
 
@@ -768,6 +1068,50 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
     }
 }
 
+// ------------------------------------------------------------------ downloads
+
+fn downloads(app: &mut App, ui: &mut Ui, now: f64) {
+    page_title(ui, "Downloads");
+    let songs = crate::downloads::list();
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(format!("{} songs \u{2022} {}", songs.len(), crate::downloads::folder().display()))
+            .font(theme::regular(13.0))
+            .color(theme::text_dim()),
+    );
+    ui.add_space(12.0);
+    if songs.is_empty() {
+        ui.label(RichText::new("No downloads yet").font(theme::semibold(16.0)).color(theme::text()));
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("Right-click a song and choose Download to keep it on this computer, playable offline.")
+                .font(theme::regular(13.0))
+                .color(theme::text_dim()),
+        );
+        ui.add_space(10.0);
+        if pill(ui, "Open folder", Some(icon::FOLDER_OPEN), false).clicked() {
+            crate::downloads::open_folder();
+        }
+        return;
+    }
+    ui.horizontal(|ui| {
+        if pill(ui, "Play", Some(icon::PLAY), true).clicked() {
+            app.actions.push(Action::Play(songs.clone(), 0));
+        }
+        if pill(ui, "Shuffle", Some(icon::SHUFFLE), false).clicked() {
+            let mut t = songs.clone();
+            super::shuffle(&mut t);
+            app.actions.push(Action::Play(t, 0));
+        }
+        if pill(ui, "Open folder", Some(icon::FOLDER_OPEN), false).clicked() {
+            crate::downloads::open_folder();
+        }
+    });
+    ui.add_space(12.0);
+    let rows = Rows::new(app, now);
+    list(ui, &rows, &app.liked, &songs, true, |_, _| None, ListCtx { sel: &mut app.selection, page: &app.page, own: false }, &mut app.actions);
+}
+
 // ------------------------------------------------------------------ settings
 
 fn settings(app: &mut App, ui: &mut Ui) {
@@ -790,17 +1134,14 @@ fn settings_body(app: &mut App, ui: &mut Ui) {
     settings_playback(app, ui);
     settings_downloads(ui);
     settings_lyrics(app, ui);
+    settings_artists(app, ui);
     settings_appearance(app, ui);
     settings_window(app, ui);
-    settings_app_icon(app, ui);
     settings_connections(app, ui);
     section_label(ui, "Network", None);
     settings_card(ui, |ui| network(app, ui));
     super::transfer::settings_section(app, ui);
-    settings_updates(app, ui);
     settings_shortcuts(ui);
-    settings_about(ui);
-    settings_sign_off(app, ui);
 }
 
 /// Settings › Account: signing in and out, and which channel to use.
@@ -911,12 +1252,6 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
             }
         });
         divider(ui);
-        setting_row(ui, "High quality audio", Some("256 kbps instead of 128 kbps, for accounts with YouTube Premium. Applies from the next song."), |ui| {
-            if toggle(ui, &mut app.high_quality, "High quality audio").changed() {
-                app.backend.set_high_quality(app.high_quality);
-            }
-        });
-        divider(ui);
         setting_row(ui, "Play songs, not music videos", Some("An official music video plays as its song, the album recording, when YouTube Music has one: no intros, skits or video-only edits. Lists still show what they hold."), |ui| {
             toggle(ui, &mut app.play_songs, "Play songs, not music videos");
         });
@@ -925,22 +1260,26 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
             output_device_picker(app, ui);
         });
         divider(ui);
-        setting_row(ui, "Crossfade songs", Some("Blend the end of each song into the start of the next."), |ui| {
-            if toggle(ui, &mut app.crossfade, "Crossfade songs").changed() {
+        setting_row(ui, "Automix", Some("Slide from one song into the next the way a DJ would: both hold their level for a moment, then swap in one smooth move, instead of a straight fade. The mix picks its own length, in phrases of 8 or 16 bars (16 on long songs), following the beat it hears."), |ui| {
+            if toggle(ui, &mut app.automix, "Automix").changed() {
                 app.set_crossfade();
             }
         });
-        if app.crossfade {
+        if !app.automix {
             divider(ui);
-            setting_row(ui, "Crossfade length", None, |ui| {
-                if seconds_slider(ui, &mut app.crossfade_secs, 1..=super::CROSSFADE_MAX, "Crossfade length").changed() {
+            setting_row(ui, "Crossfade songs", Some("Blend the end of each song into the start of the next."), |ui| {
+                if toggle(ui, &mut app.crossfade, "Crossfade songs").changed() {
                     app.set_crossfade();
                 }
             });
-            divider(ui);
-            setting_row(ui, "Crossfade when skipping", Some("Also fade into the next song when you skip ahead. Going back or picking a song still switches right away."), |ui| {
-                toggle(ui, &mut app.crossfade_skips, "Crossfade when skipping");
-            });
+            if app.crossfade {
+                divider(ui);
+                setting_row(ui, "Crossfade length", None, |ui| {
+                    if seconds_slider(ui, &mut app.crossfade_secs, 1..=super::CROSSFADE_MAX, "Crossfade length").changed() {
+                        app.set_crossfade();
+                    }
+                });
+            }
         }
         divider(ui);
         setting_row(ui, "Skip non-music parts", Some("Jump over talking, skits and sponsor breaks in music videos, as marked by the SponsorBlock community. Album songs don't have any."), |ui| {
@@ -948,7 +1287,74 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
                 app.request_segments();
             }
         });
+        divider(ui);
+        setting_row(ui, "Hi-Res audio", Some("Addon servers that serve hi-res copies of songs. When one has the song, its copy plays instead of YouTube's, and its quality shows in the player."), |_| {});
+        divider(ui);
+        ui.add_space(12.0);
+        hires_sources_editor(app, ui);
+        ui.add_space(10.0);
+        divider(ui);
+        setting_row(ui, "Prefer Dolby Atmos", Some("Ask the hi-res sources for a Dolby Atmos copy when they offer one. Falls back to the best stereo copy when the stream's codec can't be decoded."), |ui| {
+            if toggle(ui, &mut app.prefer_atmos, "Prefer Dolby Atmos").changed() {
+                app.backend.set_prefer_atmos(app.prefer_atmos);
+            }
+        });
     });
+}
+
+/// The hi-res source list: one line per addon, and "+ Add a source" below it that
+/// opens a fresh line for the next one.
+fn hires_sources_editor(app: &mut App, ui: &mut Ui) {
+    let mut edited = false;
+    let mut remove = None;
+    for i in 0..app.hires_sources.len() {
+        ui.horizontal(|ui| {
+            let field_w = (ui.available_width() - 34.0).max(120.0);
+            ui.allocate_ui_with_layout(vec2(field_w, 42.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(field_w);
+                if super::text_field(ui, "", &mut app.hires_sources[i], false, "https://your-addon.example").changed() {
+                    edited = true;
+                }
+            });
+            if widgets::icon_button(ui, icon::X, 14.0, "Remove source", false).clicked() {
+                remove = Some(i);
+            }
+        });
+        ui.add_space(6.0);
+    }
+    if let Some(i) = remove {
+        app.hires_sources.remove(i);
+        edited = true;
+    }
+    if edited {
+        app.backend.set_hires_source(&live_sources(app));
+    }
+    if app.hires_adding {
+        let resp = super::text_field(ui, "", &mut app.hires_draft, false, "https://your-addon.example");
+        if app.hires_focus {
+            resp.request_focus();
+            app.hires_focus = false;
+        }
+        if resp.lost_focus() {
+            let link = app.hires_draft.trim().to_owned();
+            if !link.is_empty() && !app.hires_sources.iter().any(|s| s.trim() == link) {
+                app.hires_sources.push(link);
+                app.backend.set_hires_source(&live_sources(app));
+            }
+            app.hires_draft.clear();
+            app.hires_adding = false;
+        }
+        ui.add_space(6.0);
+    } else if pill(ui, "+  Add a source", None, false).clicked() {
+        app.hires_adding = true;
+        app.hires_focus = true;
+        app.hires_draft.clear();
+    }
+}
+
+/// The non-empty links as one newline-separated list, the way the backend reads them.
+fn live_sources(app: &App) -> String {
+    app.hires_sources.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n")
 }
 
 /// Settings › Downloads.
@@ -1083,56 +1489,55 @@ fn settings_lyrics(app: &mut App, ui: &mut Ui) {
     });
 }
 
-/// Settings › Appearance and Theme.
+/// Settings › Artist pages: the listener's own signature service.
+fn settings_artists(app: &mut App, ui: &mut Ui) {
+    section_label(ui, "Artist pages", None);
+    settings_card(ui, |ui| {
+        setting_row(ui, "Signature service", Some("A link to your own signature API. Artists get their handwritten signature, with “Signed by …” above it — beside About when Apple also letters them a wordmark; without a signature, their name is set in type."), |_| {});
+        divider(ui);
+        ui.add_space(12.0);
+        if super::text_field(ui, "Link", &mut app.signature_api, false, "https://your-signature-service.example").changed() {
+            app.signature_reset();
+        }
+        ui.add_space(12.0);
+    });
+}
+
+/// Settings › Appearance.
 fn settings_appearance(app: &mut App, ui: &mut Ui) {
-    let was_default = app.default_theme;
-    let was_theme = app.theme_id.clone();
     section_label(ui, "Appearance", None);
     settings_card(ui, |ui| {
-        // Only the ytm-rs theme has a light mode; the others are made dark.
-        let has_modes = !app.default_theme && app.theme_id == crate::preset::DEFAULT_ID;
-        let desc = if !has_modes {
-            "Light mode is part of the ytm-rs theme. Pick it under Theme to use it."
-        } else if cfg!(windows) {
+        let desc = if cfg!(windows) {
             "Light or dark pages. System follows Windows' app mode. Now playing stays dark, over the album art."
         } else {
             "Light or dark pages. System follows your system's setting. Now playing stays dark, over the album art."
         };
         let mut pick = None;
-        ui.add_enabled_ui(has_modes, |ui| {
-            setting_row(ui, "Mode", Some(desc), |ui| {
-                let btn = dropdown_button(ui, app.appearance.label(), 160.0, "Mode");
-                egui::Popup::menu(&btn).show(|ui| {
-                    ui.set_width(160.0);
-                    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                    ui.add_space(4.0);
-                    for a in theme::Appearance::ALL {
-                        if option_row(ui, a.label(), a == app.appearance).clicked() {
-                            pick = Some(a);
-                            ui.close();
-                        }
+        setting_row(ui, "Mode", Some(desc), |ui| {
+            let btn = dropdown_button(ui, app.appearance.label(), 160.0, "Mode");
+            egui::Popup::menu(&btn).show(|ui| {
+                ui.set_width(160.0);
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                ui.add_space(4.0);
+                for a in theme::Appearance::ALL {
+                    if option_row(ui, a.label(), a == app.appearance).clicked() {
+                        pick = Some(a);
+                        ui.close();
                     }
-                    ui.add_space(4.0);
-                });
+                }
+                ui.add_space(4.0);
             });
         });
         if let Some(a) = pick {
             app.appearance = a;
         }
         divider(ui);
-        setting_row(ui, "Classic theme", Some("Plain dark with red accents. Turns off album-art colours and the theme below."), |ui| {
-            toggle(ui, &mut app.default_theme, "Classic theme");
+        setting_row(ui, "Animated background", Some("The album art slowly drifts behind everything."), |ui| {
+            toggle(ui, &mut app.anim_bg, "Animated background");
         });
-        let enabled = !app.default_theme;
         divider(ui);
-        ui.add_enabled_ui(enabled, |ui| {
-            setting_row(ui, "Animated background", Some("The album art slowly drifts behind everything."), |ui| {
-                toggle(ui, &mut app.anim_bg, "Animated background");
-            });
-            divider(ui);
-            setting_row(ui, "Pulse with the music", Some("The background swells with the beat."), |ui| {
-                toggle(ui, &mut app.reactive_bg, "Pulse with the music");
-            });
+        setting_row(ui, "Pulse with the music", Some("The background swells with the beat."), |ui| {
+            toggle(ui, &mut app.reactive_bg, "Pulse with the music");
         });
         divider(ui);
         setting_row(ui, "Font", Some("For the whole app and the lyrics. Any font installed on this PC works, e.g. one made for your language."), |ui| {
@@ -1141,20 +1546,19 @@ fn settings_appearance(app: &mut App, ui: &mut Ui) {
                 app.chrome_applied = None;
             }
         });
+        divider(ui);
+        let hidden = app.hidden_playlists.len();
+        let desc = match hidden {
+            0 => "Nothing hidden. Right-click a playlist in the sidebar to hide it from there.".to_owned(),
+            1 => "1 playlist is hidden from the sidebar. Right-click a playlist there to hide or show it.".to_owned(),
+            n => format!("{} playlists are hidden from the sidebar. Right-click a playlist there to hide or show it.", thousands(n as u64)),
+        };
+        setting_row(ui, "Hidden playlists", Some(&desc), |ui| {
+            if hidden > 0 && pill(ui, "Show all", None, false).clicked() {
+                app.hidden_playlists.clear();
+            }
+        });
     });
-
-    let current = if app.default_theme { "Classic".to_owned() } else { crate::preset::get(&app.theme_id).name.clone() };
-    section_label(ui, "Theme", Some(&current));
-    ui.label(
-        RichText::new("Rebuilt from the Better Lyrics community themes. Each one restyles the background, lyrics, cover, player bar and the rest of the app.")
-            .font(theme::regular(13.0))
-            .color(theme::text_dim()),
-    );
-    ui.add_space(12.0);
-    themes(app, ui);
-    if (was_default && !app.default_theme) || was_theme != app.theme_id {
-        app.request_art();
-    }
 }
 
 /// Settings › Window.
@@ -1196,26 +1600,6 @@ fn settings_window(app: &mut App, ui: &mut Ui) {
     });
 }
 
-/// Settings › App icon.
-fn settings_app_icon(app: &mut App, ui: &mut Ui) {
-    section_label(ui, "App icon", Some(crate::appicon::get(app.app_icon).name));
-    ui.label(
-        RichText::new("Changes the icon on the window, taskbar, tray and Start menu. A pinned taskbar icon can take a moment to catch up.")
-            .font(theme::regular(13.0))
-            .color(theme::text_dim()),
-    );
-    ui.add_space(12.0);
-    settings_card(ui, |ui| {
-        ui.add_space(14.0);
-        app_icons(app, ui);
-        ui.add_space(14.0);
-        divider(ui);
-        setting_row(ui, "Preview", Some("How it looks on the taskbar and in the tray."), |ui| {
-            icon_preview(ui, crate::appicon::get(app.app_icon));
-        });
-    });
-}
-
 /// Settings › Connections.
 fn settings_connections(app: &mut App, ui: &mut Ui) {
     let mut discord_enabled = app.discord_enabled;
@@ -1228,7 +1612,7 @@ fn settings_connections(app: &mut App, ui: &mut Ui) {
         let busy = app.lastfm_busy.load(Ordering::Relaxed);
         let desc = match &app.lastfm_user {
             Some(name) => format!("Scrobbling what you play to {name}'s profile."),
-            None if busy => "Allow ytm-rs on the Last.fm page that opened in your browser.".to_owned(),
+            None if busy => "Allow BitChord on the Last.fm page that opened in your browser.".to_owned(),
             None => "Scrobble what you play to your Last.fm profile.".to_owned(),
         };
         let (mut connect, mut disconnect) = (false, false);
@@ -1253,82 +1637,6 @@ fn settings_connections(app: &mut App, ui: &mut Ui) {
     }
 }
 
-/// Settings › Updates.
-fn settings_updates(app: &mut App, ui: &mut Ui) {
-    section_label(ui, "Updates", None);
-    let state = app.updater.as_ref().map(|u| u.state());
-    let installed = super::updatable();
-    let (mut check, mut restart) = (false, false);
-    settings_card(ui, |ui| {
-        use crate::update::State;
-        let status = if !installed {
-            "Updates only work in the installed or portable app (this is a development build).".to_owned()
-        } else {
-            match &state {
-                Some(State::Checking) => "Checking for updates…".to_owned(),
-                Some(State::UpToDate) => format!("You're on the latest version ({}).", crate::update::current_version()),
-                Some(State::Downloading { version, percent }) => format!("Downloading {version}… {percent}%"),
-                Some(State::Ready { version, .. }) => format!("Version {version} is ready. It installs when you close ytm-rs."),
-                Some(State::Failed(e)) => format!("Couldn't check for updates: {e}"),
-                _ => format!("Version {}.", crate::update::current_version()),
-            }
-        };
-        setting_row(ui, "Automatic updates", Some("Download new versions in the background and install them when you close the app."), |ui| {
-            ui.add_enabled_ui(installed, |ui| toggle(ui, &mut app.auto_update, "Automatic updates"));
-        });
-        divider(ui);
-        setting_row(ui, "Status", Some(&status), |ui| {
-            if !installed {
-                return;
-            }
-            match &state {
-                Some(State::Ready { .. }) => restart = pill(ui, "Restart to update", Some(icon::SPARKLES), true).clicked(),
-                Some(State::Checking | State::Downloading { .. }) => {
-                    ui.spinner();
-                }
-                _ => check = pill(ui, "Check now", None, false).clicked(),
-            }
-        });
-        // Release notes for the version that's ready, else the one running.
-        let (notes_v, ready) = match &state {
-            Some(State::Ready { version, .. }) => (version.clone(), true),
-            _ => (crate::update::current_version(), false),
-        };
-        if let Some(md) = app.updater.as_ref().and_then(|u| u.notes(&notes_v)) {
-            divider(ui);
-            let id = egui::Id::unique(("whats-new-open", &notes_v));
-            let mut open = ui.data(|d| d.get_temp(id)).unwrap_or(ready);
-            ui.add_space(12.0);
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
-            let resp = widgets::named(resp, "What's new").on_hover_cursor(egui::CursorIcon::PointingHand);
-            widgets::icon_at(ui, pos2(rect.left() + 8.0, rect.center().y), if open { icon::CHEVRON_DOWN } else { icon::CHEVRON_RIGHT }, 16.0, theme::text());
-            ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, format!("What's new in {notes_v}"), theme::semibold(14.0), theme::text());
-            if resp.clicked() {
-                open = !open;
-                ui.data_mut(|d| d.insert_temp(id, open));
-            }
-            if open {
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(24.0);
-                    ui.vertical(|ui| {
-                        crate::ui::notes::show(ui, &crate::ui::notes::parse(&md), 13.5);
-                        ui.add_space(6.0);
-                        crate::ui::notes::github_link(ui);
-                    });
-                });
-            }
-            ui.add_space(12.0);
-        }
-    });
-    if check && let Some(u) = &app.updater {
-        u.check();
-    }
-    if restart {
-        app.restart_to_update(ui.ctx());
-    }
-}
-
 /// Settings › Keyboard shortcuts.
 fn settings_shortcuts(ui: &mut Ui) {
     section_label(ui, "Keyboard shortcuts", None);
@@ -1338,7 +1646,8 @@ fn settings_shortcuts(ui: &mut Ui) {
             ("Next / previous song", &["Ctrl", "→ / ←"]),
             ("Volume up / down", &["Ctrl", "↑ / ↓"]),
             ("Search", &["Ctrl", "F"]),
-            ("Lyrics and now playing", &["L"]),
+            ("Lyrics", &["L"]),
+            ("Queue", &["Q"]),
             ("Full-screen lyrics (in now playing)", &["F"]),
             ("Back / forward", &["Alt", "← / →"]),
             ("Close now playing", &["Esc"]),
@@ -1361,45 +1670,13 @@ fn settings_shortcuts(ui: &mut Ui) {
     });
 }
 
-/// Settings › About.
-fn settings_about(ui: &mut Ui) {
-    section_label(ui, "About", None);
-    settings_card(ui, |ui| {
-        setting_row(ui, &format!("ytm-rs {}", env!("CARGO_PKG_VERSION")), Some("A fast, native YouTube Music client."), |_| {});
-        for (title, desc) in [
-            ("Lyrics", "Better Lyrics API: Musixmatch, LRCLIB, QQ, KuGou and Better Lyrics TTML"),
-            ("Themes", "Adapted from the Better Lyrics theme store; each card credits its creators"),
-            ("Background", "A port of Kawarp, MIT © Better Lyrics"),
-            ("Fonts and icons", "Inter, DM Sans, Google Sans Flex, Figtree, Instrument Sans (SIL OFL 1.1) • Lucide (ISC)"),
-        ] {
-            divider(ui);
-            setting_row(ui, title, Some(desc), |_| {});
-        }
-    });
-}
-
-/// The last thing on the page: the app icon, its name and its download count.
-fn settings_sign_off(app: &mut App, ui: &mut Ui) {
-    let downloads = app.updater.as_ref().and_then(|u| u.downloads());
-    let text = match downloads {
-        Some(1) => "1 download and counting".to_owned(),
-        Some(n) => format!("{} downloads and counting", thousands(n)),
-        None => "Counting downloads…".to_owned(),
-    };
-    ui.add_space(40.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 96.0), Sense::hover());
-    icon_at(ui, crate::appicon::get(app.app_icon), Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(44.0, 44.0)));
-    ui.painter().text(pos2(rect.center().x, rect.top() + 58.0), Align2::CENTER_CENTER, "ytm-rs", theme::bold(17.0), theme::text());
-    ui.painter().text(pos2(rect.center().x, rect.top() + 82.0), Align2::CENTER_CENTER, text, theme::regular(13.0), theme::text_dim());
-}
-
 /// Settings › Network: the proxy everything goes through, a connection test, and a
 /// restart when the setting changed.
 fn network(app: &mut App, ui: &mut Ui) {
     use crate::proxy::{self, Setting};
     let same = |a: &Setting, b: &Setting| std::mem::discriminant(a) == std::mem::discriminant(b);
     let mut pick = None;
-    setting_row(ui, "Proxy", Some("Send everything ytm-rs fetches through a proxy: songs, lyrics, sign-in and Listen together."), |ui| {
+    setting_row(ui, "Proxy", Some("Send everything BitChord fetches through a proxy: songs, lyrics, sign-in and Listen together."), |ui| {
         let btn = dropdown_button(ui, app.proxy_mode.label(), 220.0, "Proxy");
         egui::Popup::menu(&btn).show(|ui| {
             ui.set_width(220.0);
@@ -1431,7 +1708,7 @@ fn network(app: &mut App, ui: &mut Ui) {
             divider(ui);
             let desc = match proxy::system() {
                 Some(p) => format!("Windows is set to use {}.", proxy::redact(&p)),
-                None => "Windows isn't set to use a proxy, so ytm-rs connects directly.".to_owned(),
+                None => "Windows isn't set to use a proxy, so BitChord connects directly.".to_owned(),
             };
             setting_row(ui, "Windows proxy", Some(&desc), |_| {});
         }
@@ -1504,71 +1781,8 @@ fn network(app: &mut App, ui: &mut Ui) {
     }
 }
 
-/// The icon picker: a tile per icon in even rows, five across (two when that's too tight).
-fn app_icons(app: &mut App, ui: &mut Ui) {
-    let gap = 12.0;
-    let avail = ui.available_width();
-    let cols = if avail + gap >= 5.0 * (92.0 + gap) { 5.0 } else { 2.0 };
-    let w = ((avail + gap) / cols - gap).floor();
-    let mut picked = None;
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing = vec2(gap, gap);
-        ui.horizontal_wrapped(|ui| {
-            for v in crate::appicon::ALL {
-                if app_icon_tile(ui, v, w, app.app_icon == v.id, app.accent_color()).clicked() {
-                    picked = Some(v.id);
-                }
-            }
-        });
-    });
-    if let Some(id) = picked {
-        app.set_app_icon(ui.ctx(), id);
-    }
-}
-
-fn app_icon_tile(ui: &mut Ui, v: &crate::appicon::Variant, w: f32, selected: bool, accent: Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 112.0), Sense::click());
-    let resp = named(resp, &format!("App icon: {}", v.name)).on_hover_cursor(egui::CursorIcon::PointingHand);
-    if !ui.is_rect_visible(rect) {
-        return resp;
-    }
-    let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.15);
-    let s = theme::anim_bool(ui.ctx(), resp.id.with("s"), selected, 0.2);
-    let painter = ui.painter();
-    painter.rect_filled(rect, 12.0, theme::glass(0.03 + 0.04 * h).lerp_to_gamma(theme::with_alpha(accent, 0.14), s));
-    let ring = theme::glass(0.06).lerp_to_gamma(accent, s);
-    painter.rect_stroke(rect, 12.0, egui::Stroke::new(2.0, ring), egui::StrokeKind::Inside);
-    icon_at(ui, v, Rect::from_center_size(pos2(rect.center().x, rect.top() + 46.0), Vec2::splat(56.0)));
-    // Narrow tiles get a smaller label so "YouTube Music" still fits.
-    let font = theme::semibold(if w >= 108.0 { 13.0 } else { 12.0 });
-    let label = widgets::galley(ui, v.name, font.clone(), theme::text(), w - 8.0);
-    widgets::text_at(ui, pos2(rect.center().x - label.size().x / 2.0, rect.top() + 84.0), v.name, font, theme::text(), w - 8.0);
-    resp
-}
-
-/// The chosen icon on a dark taskbar, as a running app (24 px) and in the tray (16 px).
-fn icon_preview(ui: &mut Ui, v: &crate::appicon::Variant) {
-    let (rect, _) = ui.allocate_exact_size(vec2(236.0, 48.0), Sense::hover());
-    let rect = Rect::from_min_size(pos2(ui.max_rect().right() - 236.0, rect.top()), rect.size());
-    let painter = ui.painter();
-    painter.rect(rect, 10.0, Color32::from_rgb(28, 28, 28), egui::Stroke::new(1.0, Color32::from_white_alpha(18)), egui::StrokeKind::Inside);
-    let mut x = rect.left() + 12.0;
-    for c in [Color32::from_rgb(58, 123, 213), Color32::from_rgb(242, 179, 61)] {
-        painter.rect_filled(Rect::from_center_size(pos2(x + 18.0, rect.center().y), Vec2::splat(20.0)), 4.0, c);
-        x += 42.0;
-    }
-    let app = Rect::from_center_size(pos2(x + 20.0, rect.center().y), Vec2::splat(40.0));
-    painter.rect_filled(app, 6.0, Color32::from_white_alpha(18));
-    icon_at(ui, v, Rect::from_center_size(app.center() - vec2(0.0, 3.0), Vec2::splat(24.0)));
-    painter.rect_filled(Rect::from_center_size(pos2(app.center().x, app.bottom() - 5.0), vec2(14.0, 3.0)), 2.0, Color32::from_rgb(108, 180, 255));
-    x = app.right() + 10.0;
-    painter.vline(x, Rect::from_center_size(rect.center(), vec2(1.0, 24.0)).y_range(), egui::Stroke::new(1.0, Color32::from_white_alpha(30)));
-    icon_at(ui, v, Rect::from_center_size(pos2(x + 20.0, rect.center().y), Vec2::splat(16.0)));
-    painter.text(pos2(x + 38.0, rect.center().y), Align2::LEFT_CENTER, "9:41 PM", theme::regular(12.0), Color32::from_gray(230));
-}
-
 /// Paint `v` into `rect`, from the ICO entry that fits its size in physical pixels.
-fn icon_at(ui: &Ui, v: &crate::appicon::Variant, rect: Rect) {
+pub(super) fn paint_app_icon(ui: &Ui, v: &crate::appicon::Variant, rect: Rect) {
     let px = (rect.width() * ui.ctx().pixels_per_point()).ceil() as u32;
     let png = v.png(px);
     egui::Image::from_bytes(format!("bytes://app-icon/{}-{}.png", v.id, png.len()), png).paint_at(ui, rect);
@@ -1698,7 +1912,7 @@ fn option_row(ui: &mut Ui, label: &str, selected: bool) -> egui::Response {
 }
 
 /// 12345 -> "12,345".
-fn thousands(n: u64) -> String {
+pub(super) fn thousands(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -1831,78 +2045,3 @@ fn keycap(ui: &Ui, right: egui::Pos2, key: &str) -> f32 {
     rect.left()
 }
 
-/// Theme preset gallery: one card per preset with its cover, name and creators.
-fn themes(app: &mut App, ui: &mut Ui) {
-    let avail = ui.available_width();
-    let gap = 16.0;
-    let cols = ((avail + gap) / (200.0 + gap)).floor().max(1.0);
-    let w = ((avail + gap) / cols - gap).floor();
-    let mut picked = None;
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing = vec2(gap, gap + 4.0);
-        ui.horizontal_wrapped(|ui| {
-            for p in crate::preset::all() {
-                let selected = !app.default_theme && app.theme_id == p.id;
-                if theme_card(ui, p, w, selected, app.accent_color()).clicked() {
-                    picked = Some(p.id.clone());
-                }
-            }
-        });
-    });
-    if let Some(id) = picked {
-        app.theme_id = id;
-        app.default_theme = false;
-    }
-}
-
-fn theme_card(ui: &mut Ui, p: &crate::preset::Preset, w: f32, selected: bool, accent: Color32) -> egui::Response {
-    let img_h = (w * 0.625).round();
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, img_h + 52.0), Sense::click());
-    let resp = named(resp, &format!("Theme: {}", p.name)).on_hover_cursor(egui::CursorIcon::PointingHand);
-    if !ui.is_rect_visible(rect) {
-        return resp;
-    }
-    let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.15);
-    let s = theme::anim_bool(ui.ctx(), resp.id.with("s"), selected, 0.2);
-    let img = Rect::from_min_size(rect.min, vec2(w, img_h));
-    let painter = ui.painter();
-    painter.rect_filled(rect.expand(6.0), 16.0, theme::glass(0.04 * h + 0.06 * s));
-    match crate::preset::cover(&p.id) {
-        Some(bytes) => {
-            egui::Image::from_bytes(format!("bytes://theme-cover/{}.jpg", p.id), bytes)
-                .corner_radius(egui::CornerRadius::same(10))
-                .paint_at(ui, img);
-        }
-        None => {
-            // The built-in look has no screenshot: a small abstract of it instead.
-            painter.rect_filled(img, 10.0, Color32::from_rgb(22, 18, 28));
-            let c = img.center();
-            painter.circle_filled(c - vec2(w * 0.18, 0.0), img_h * 0.42, theme::with_alpha(accent, 0.35));
-            painter.circle_filled(c + vec2(w * 0.2, img_h * 0.1), img_h * 0.36, theme::with_alpha(Color32::from_rgb(110, 80, 200), 0.3));
-            painter.rect_filled(Rect::from_center_size(c - vec2(w * 0.22, 0.0), Vec2::splat(img_h * 0.42)), 6.0, theme::glass(0.25));
-            for (i, len) in [0.34f32, 0.42, 0.28].iter().enumerate() {
-                let y = c.y - img_h * 0.12 + i as f32 * img_h * 0.13;
-                let a = if i == 1 { 0.9 } else { 0.35 };
-                painter.rect_filled(Rect::from_min_size(pos2(c.x - w * 0.02, y), vec2(w * len, img_h * 0.07)), 4.0, theme::with_alpha(Color32::WHITE, a));
-            }
-        }
-    }
-    if h > 0.0 {
-        painter.rect_filled(img, 10.0, theme::glass(0.06 * h));
-    }
-    if s > 0.0 {
-        painter.rect_stroke(img.expand(2.0), 12.0, egui::Stroke::new(2.5, theme::with_alpha(Color32::WHITE, s)), egui::StrokeKind::Outside);
-        let badge = pos2(img.right() - 18.0, img.top() + 18.0);
-        painter.circle_filled(badge, 12.0 * s, Color32::WHITE);
-        widgets::icon_at(ui, badge, icon::CHECK, 14.0 * s, Color32::from_gray(15));
-    }
-    let name_y = img.bottom() + 10.0;
-    widgets::text_at(ui, pos2(rect.left() + 2.0, name_y), &p.name, theme::semibold(14.5), theme::text(), w - 4.0);
-    let by = if p.creators.is_empty() { "Built in".to_owned() } else { format!("by {}", p.creators.join(", ")) };
-    widgets::text_at(ui, pos2(rect.left() + 2.0, name_y + 20.0), &by, theme::regular(12.0), theme::text_faint(), w - 4.0);
-    if !p.blurb.is_empty() {
-        resp.on_hover_text(&p.blurb)
-    } else {
-        resp
-    }
-}

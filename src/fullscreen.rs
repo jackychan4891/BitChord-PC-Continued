@@ -48,18 +48,26 @@ pub fn on_a_monitor(rect: egui::Rect) -> bool {
     }
 }
 
+/// Round the window's corners (`radius` in physical pixels); None gives them back.
+/// Used by the mini player's pill-shaped strip.
+#[cfg_attr(not(windows), allow(unused_variables))]
+pub fn set_rounded(radius: Option<f32>) {
+    #[cfg(windows)]
+    imp::rounded(radius);
+}
+
 #[cfg(windows)]
 mod imp {
     use std::sync::{Mutex, OnceLock};
 
     use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
     use windows::Win32::Graphics::Gdi::{
-        CreateSolidBrush, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect, MonitorFromWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE,
-        RedrawWindow,
+        CreateRoundRectRgn, CreateSolidBrush, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect, MonitorFromWindow, RDW_ALLCHILDREN, RDW_ERASE,
+        RDW_FRAME, RDW_INVALIDATE, RedrawWindow, SetWindowRgn,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GCLP_HBRBACKGROUND, GWL_EXSTYLE, GWL_STYLE, GetWindowLongW, GetWindowPlacement, IsZoomed, SW_RESTORE, ShowWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-        SendMessageW, SetClassLongPtrW, SetWindowLongW, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT, WM_SETREDRAW, WS_CAPTION, WS_EX_CLIENTEDGE,
+        GCLP_HBRBACKGROUND, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetWindowLongW, GetWindowPlacement, IsZoomed, SW_RESTORE, ShowWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetClassLongPtrW, SetWindowLongW, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT, WM_SETREDRAW, WS_CAPTION, WS_EX_CLIENTEDGE,
         WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_THICKFRAME,
     };
 
@@ -103,6 +111,37 @@ mod imp {
         let r = RECT { left: rect.left() as i32, top: rect.top() as i32, right: rect.right() as i32, bottom: rect.bottom() as i32 };
         // SAFETY: plain query.
         !unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONULL) }.is_invalid()
+    }
+
+    /// The last region applied: inner size and radius, in pixels.
+    static ROUNDED: Mutex<Option<(i32, i32, i32)>> = Mutex::new(None);
+
+    pub fn rounded(radius: Option<f32>) {
+        let Some(&h) = WINDOW.get() else { return };
+        let hwnd = HWND(h as *mut _);
+        let mut rc = RECT::default();
+        // SAFETY: plain query of the app's own window.
+        if unsafe { GetClientRect(hwnd, &mut rc) }.is_err() {
+            return;
+        }
+        let (w, ht) = (rc.right - rc.left, rc.bottom - rc.top);
+        let r = radius.map_or(0, |r| r.round().max(0.0) as i32);
+        let mut last = ROUNDED.lock().unwrap();
+        if *last == Some((w, ht, r)) {
+            return;
+        }
+        *last = Some((w, ht, r));
+        // SAFETY: the region is ours, and the system takes it over on success.
+        unsafe {
+            if r == 0 {
+                let _ = SetWindowRgn(hwnd, None, true);
+            } else {
+                let region = CreateRoundRectRgn(0, 0, w + 1, ht + 1, r * 2, r * 2);
+                if !region.is_invalid() {
+                    let _ = SetWindowRgn(hwnd, Some(region), true);
+                }
+            }
+        }
     }
 
     pub fn set(on: bool) -> bool {

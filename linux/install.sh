@@ -1,21 +1,18 @@
 #!/bin/sh
-# Install ytm-rs for this user: the app in ~/.local/lib/ytm-rs, a `ytm-rs` command in
+# Install bitchord for this user: the app in ~/.local/lib/bitchord, a `bitchord` command in
 # ~/.local/bin, and a menu entry with its icon. Installed this way, the app updates
 # itself. Libraries it needs that are missing get installed with the system's package
 # manager (that step asks for your password).
 #
-# Run it from the extracted download, or straight from the web, which fetches the
-# latest release first:
-#   curl -fsSL https://raw.githubusercontent.com/grapedjuice/ytm-rs/main/linux/install.sh | sh
+# Run it from the extracted download.
 # `install.sh --uninstall` removes it again.
 set -e
 
-repo=grapedjuice/ytm-rs
 data=${XDG_DATA_HOME:-$HOME/.local/share}
-lib=$HOME/.local/lib/ytm-rs
+lib=$HOME/.local/lib/bitchord
 bin=$HOME/.local/bin
-desktop=$data/applications/ytm-rs.desktop
-icon=$data/icons/hicolor/256x256/apps/ytm-rs.png
+desktop=$data/applications/bitchord.desktop
+icon=$data/icons/hicolor/256x256/apps/bitchord.png
 
 refresh() {
     update-desktop-database -q "$data/applications" 2>/dev/null || true
@@ -25,48 +22,39 @@ refresh() {
 if [ "$1" = "--uninstall" ]; then
     rm -rf "$lib"
     rm -f "$desktop" "$icon"
-    [ -L "$bin/ytm-rs" ] && rm -f "$bin/ytm-rs"
+    [ -L "$bin/bitchord" ] && rm -f "$bin/bitchord"
     refresh
-    echo "ytm-rs is uninstalled. Settings are still in $data/ytm-rs, and sign-ins in your keyring."
+    echo "bitchord is uninstalled. Settings are still in $data/ytm-rs, and sign-ins in your keyring."
     exit 0
 fi
 
 # The files to install: beside this script, or (run from the web) the latest release.
-here=$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)
-if [ ! -f "$here/ytm-rs" ]; then
-    arch=$(uname -m)
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
-    url=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | grep -o "https://[^\"]*/ytm-rs-[0-9][^\"/]*-linux-$arch\.tar\.gz" | head -n 1)
-    [ -n "$url" ] || { echo "No Linux $arch download in the latest release."; exit 1; }
-    echo "Downloading $(basename "$url")"
-    curl -fL# "$url" | tar -xz -C "$tmp"
-    here=$(dirname "$(find "$tmp" -name ytm-rs -type f | head -n 1)")
-fi
+here=$(cd "$(dirname "$0")" && pwd)
+[ -f "$here/bitchord" ] || { echo "Run install.sh from the extracted download."; exit 1; }
 
 mkdir -p "$lib" "$bin" "$data/applications" "$(dirname "$icon")"
 # Put the new binary next to the old one and rename it over, so a copy that's
 # running keeps going.
-cp "$here/ytm-rs" "$lib/ytm-rs.new"
-chmod 755 "$lib/ytm-rs.new"
-mv -f "$lib/ytm-rs.new" "$lib/ytm-rs"
+cp "$here/bitchord" "$lib/bitchord.new"
+chmod 755 "$lib/bitchord.new"
+mv -f "$lib/bitchord.new" "$lib/bitchord"
 cp "$here/install.sh" "$lib/install.sh"
 chmod 755 "$lib/install.sh"
-echo "Installed by install.sh. This file lets ytm-rs update itself." > "$lib/install.txt"
-ln -sf "$lib/ytm-rs" "$bin/ytm-rs"
-sed "s|^Exec=.*|Exec=$lib/ytm-rs|" "$here/ytm-rs.desktop" > "$desktop"
-cp "$here/ytm-rs.png" "$icon"
+echo "Installed by install.sh. This file lets bitchord update itself." > "$lib/install.txt"
+ln -sf "$lib/bitchord" "$bin/bitchord"
+sed "s|^Exec=.*|Exec=$lib/bitchord|" "$here/bitchord.desktop" > "$desktop"
+cp "$here/bitchord.png" "$icon"
 refresh
 
 # Libraries: WebKitGTK (sign-in, lyrics), GTK, the tray's appindicator and ALSA.
-missing=$(ldd "$lib/ytm-rs" 2>/dev/null | awk '/not found/ { print $1 }' | tr '\n' ' ')
+missing=$(ldd "$lib/bitchord" 2>/dev/null | awk '/not found/ { print $1 }' | tr '\n' ' ')
 # (Loaded at run time, so ldd doesn't list it. ldconfig is in /sbin, off a user's PATH on Debian.)
 ldconfig=$(command -v ldconfig || echo /sbin/ldconfig)
 appindicator=$("$ldconfig" -p 2>/dev/null | grep -c 'libayatana-appindicator3\|libappindicator3' || true)
 if [ -n "$missing" ] || [ "$appindicator" = 0 ]; then
     sudo=""
     [ "$(id -u)" = 0 ] || sudo=sudo
-    echo "Installing the libraries ytm-rs needs${missing:+ ($missing)}"
+    echo "Installing the libraries bitchord needs${missing:+ ($missing)}"
     if command -v apt-get >/dev/null; then
         $sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 libasound2
     elif command -v dnf >/dev/null; then
@@ -80,5 +68,5 @@ if [ -n "$missing" ] || [ "$appindicator" = 0 ]; then
     fi
 fi
 
-echo "ytm-rs is installed. Open YT Music from your app menu, or run ytm-rs."
+echo "bitchord is installed. Open BitChord from your app menu, or run bitchord."
 echo "To uninstall: $lib/install.sh --uninstall"

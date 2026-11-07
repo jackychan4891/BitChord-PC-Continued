@@ -163,25 +163,27 @@ pub struct ThemeCss {
 impl Default for LyricStyle {
     fn default() -> Self {
         Self {
+            // The app's own look: the player's lyric sheet — lines already sung
+            // let go, lines still to come wait out of focus.
             align: Align::Left,
             weight: Weight::Bold,
-            font: "inter".into(),
-            size: 1.0,
+            font: "sfpro".into(),
+            size: 1.42,
             line_gap: 0.6,
-            anchor: 0.37,
+            anchor: 0.43,
             fill: Fill::Sweep,
             active_alpha: 0.3,
             inactive_alpha: 0.3,
-            falloff: 0.0,
-            min_alpha: 0.3,
-            past_alpha: None,
+            falloff: 0.01,
+            min_alpha: 0.25,
+            past_alpha: Some(0.0),
             sung_color: "white".into(),
-            blur: 0.0,
-            blur_scope: BlurScope::All,
+            blur: 2.0,
+            blur_scope: BlurScope::Upcoming,
             glow: 0.0,
             glow_color: "white".into(),
-            active_scale: 1.0,
-            lift: 0.0,
+            active_scale: 1.05,
+            lift: 3.0,
             css: None,
         }
     }
@@ -364,7 +366,7 @@ impl Preset {
     fn builtin() -> Self {
         Self {
             id: DEFAULT_ID.into(),
-            name: "ytm-rs".into(),
+            name: "BitChord".into(),
             blurb: "The app's own look: animated album-art background, left-aligned karaoke lyrics.".into(),
             accent: "cover".into(),
             ..Default::default()

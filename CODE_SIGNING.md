@@ -11,7 +11,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 ## Privacy
 
-ytm-rs only talks to the services it needs to play your music:
+bitchord only talks to the services it needs to play your music:
 
 - **YouTube Music and Google** (`music.youtube.com`, `youtube.com`, `googlevideo.com`, `accounts.google.com`) for browsing, playback, likes, playlists and sign-in. Your sign-in cookie stays on your PC.
 - **Better Lyrics** (`lyrics.api.dacubeking.com`) receives the song's YouTube ID, title, artist, album and length to find synced lyrics.

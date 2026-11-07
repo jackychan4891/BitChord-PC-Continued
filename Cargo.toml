@@ -1,10 +1,10 @@
 [package]
-name = "ytm-rs"
-version = "0.2.31"
+name = "bitchord"
+version = "2.0.0"
 edition = "2024"
 license = "GPL-3.0-only"
-repository = "https://github.com/grapedjuice/ytm-rs"
-description = "Native YouTube Music client"
+repository = "https://github.com/jackychan4891/BitChord-PC-Continued"
+description = "Native BitChord client"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -19,12 +19,14 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 egui_extras = { version = "0.37.0", default-features = false, features = ["image"] }
 env_logger = { version = "0.11.11", default-features = false, features = ["humantime"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+# Dolby Atmos from hi-res addons: E-AC-3 JOC decoded to stereo (dash.rs).
+filmcraft-ac3 = "0.9.0"
 localzone = "0.3.1"
 log = "0.4.34"
 memmap2 = "0.9.11"
 raw-window-handle = "0.6"
 reqwest = { version = "0.12", default-features = false, features = ["default-tls", "gzip", "json", "socks"] }
-rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-aac", "symphonia-isomp4"] }
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-aac", "symphonia-isomp4", "symphonia-flac", "symphonia-alac", "symphonia-wav", "symphonia-mp3", "symphonia-vorbis"] }
 rquickjs = "0.14.0"
 roxmltree = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -53,7 +55,7 @@ unicode-bidi = "0.3"
 [target.'cfg(windows)'.dependencies]
 # Windows Credential Manager, for the Google and Spotify sign-ins.
 keyring = { version = "3.6.3", features = ["windows-native"] }
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Registry", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Registry", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The Secret Service (GNOME Keyring, KWallet) for the sign-ins.

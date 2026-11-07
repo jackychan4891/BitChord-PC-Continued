@@ -199,7 +199,7 @@ pub fn dialog(app: &mut App, ctx: &egui::Context) {
                 ui.label(j);
             });
             ui.add_space(8.0);
-            ui.label(egui::RichText::new(format!("ytm-rs {}", d.version)).font(theme::bold(26.0)).color(theme::text()));
+            ui.label(egui::RichText::new(format!("BitChord {}", d.version)).font(theme::bold(26.0)).color(theme::text()));
             ui.add_space(6.0);
             let sub = if d.ready {
                 format!("You're on {}. It's downloaded and installs when you close the app.", crate::update::current_version())
