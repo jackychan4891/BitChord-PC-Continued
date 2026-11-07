@@ -1,0 +1,4 @@
+This is the portable bitchord. While this file sits next to bitchord.exe, the app keeps
+its settings and caches in the "data" folder here, and updates itself in this folder.
+
+Delete this file to use the normal location (%APPDATA%\ytm-rs) instead.

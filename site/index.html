@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>bitchord: a fast, native YouTube Music desktop app for Windows, macOS and Linux</title>
+<meta name="description" content="bitchord is a free, open-source YouTube Music desktop client written in Rust for Windows, macOS and Linux. A 9 MB download with word-by-word synced lyrics, romanization, 26 themes and no Electron.">
+<meta name="keywords" content="YouTube Music desktop app, YouTube Music client, YouTube Music Windows, YouTube Music Mac, YouTube Music Linux, native YouTube Music player, Rust music player, egui, synced lyrics, romanized lyrics, Electron alternative, open source">
+<link rel="canonical" href="https://grapedjuice.github.io/ytm-rs/">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="grapedjuice">
+<meta name="theme-color" content="#0b0707">
+<meta name="color-scheme" content="dark">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="bitchord">
+<meta property="og:title" content="bitchord: YouTube Music, without the browser">
+<meta property="og:description" content="A native YouTube Music desktop app for Windows, macOS and Linux, written in Rust. Word-by-word synced lyrics with romanization, 26 themes, free and open source.">
+<meta property="og:url" content="https://grapedjuice.github.io/ytm-rs/">
+<meta property="og:image" content="https://grapedjuice.github.io/ytm-rs/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="bitchord, a native YouTube Music app, showing synced Japanese lyrics with romanization">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="bitchord: YouTube Music, without the browser">
+<meta name="twitter:description" content="A native YouTube Music desktop app for Windows, macOS and Linux, written in Rust. Word-by-word lyrics, 26 themes, open source.">
+<meta name="twitter:image" content="https://grapedjuice.github.io/ytm-rs/og.png">
+
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@600;700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700&display=swap&text=%E3%81%82%E3%81%84%E3%81%8B%E3%81%8F%E3%81%95%E3%81%96%E3%81%99%E3%81%9A%E3%81%9E%E3%81%9F%E3%81%AB%E3%81%AE%E3%81%AF%E3%81%BF%E3%82%84%E3%82%86%E3%82%89%E3%82%8A%E3%82%8B%E3%82%8F%E3%82%93%E5%87%BA%E5%8C%82%E5%BC%A5%E6%96%87%E7%94%9F%E7%A9%BA%E8%A6%8B%E9%99%90%E9%9B%B2A">
+<link rel="stylesheet" href="vendor/lenis.css?v=__V__">
+<link rel="stylesheet" href="styles.css?v=__V__">
+<link rel="preload" as="image" href="img/app/now-playing-1600.webp" imagesrcset="img/app/now-playing-800.webp 800w, img/app/now-playing-1600.webp 1600w" imagesizes="(max-width: 1100px) 100vw, 1100px">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://grapedjuice.github.io/ytm-rs/#app",
+      "name": "bitchord",
+      "alternateName": "bitchord YouTube Music client",
+      "description": "A fast, lightweight, native YouTube Music desktop client written in Rust with egui and rodio. Word-by-word synced lyrics with romanization and translation, 26 themes, 256 kbps audio with Premium, uploads, listening together, Spotify playlist transfer, Discord Rich Presence and automatic updates.",
+      "applicationCategory": "MultimediaApplication",
+      "applicationSubCategory": "Music player",
+      "operatingSystem": "Windows, macOS, Linux",
+      "softwareVersion": "0.2.25",
+      "url": "https://grapedjuice.github.io/ytm-rs/",
+      "downloadUrl": "https://github.com/grapedjuice/ytm-rs/releases/latest",
+      "installUrl": "https://github.com/grapedjuice/ytm-rs/releases/latest",
+      "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+      "isAccessibleForFree": true,
+      "image": "https://grapedjuice.github.io/ytm-rs/og.png",
+      "screenshot": [
+        "https://grapedjuice.github.io/ytm-rs/img/app/now-playing-1600.webp",
+        "https://grapedjuice.github.io/ytm-rs/img/app/jp-1600.webp",
+        "https://grapedjuice.github.io/ytm-rs/img/app/spinning-record-1600.webp"
+      ],
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "author": { "@type": "Person", "name": "grapedjuice", "url": "https://github.com/grapedjuice" },
+      "sameAs": ["https://github.com/grapedjuice/ytm-rs"]
+    },
+    {
+      "@type": "SoftwareSourceCode",
+      "name": "bitchord",
+      "codeRepository": "https://github.com/grapedjuice/ytm-rs",
+      "programmingLanguage": "Rust",
+      "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+      "targetProduct": { "@id": "https://grapedjuice.github.io/ytm-rs/#app" }
+    },
+    {
+      "@type": "WebSite",
+      "name": "bitchord",
+      "url": "https://grapedjuice.github.io/ytm-rs/"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "Is bitchord free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. bitchord is free and open source under the GPL-3.0 license. There are no ads, accounts or paid tiers in the app itself." } },
+        { "@type": "Question", "name": "Is bitchord an official YouTube Music app?", "acceptedAnswer": { "@type": "Answer", "text": "No. bitchord is an unofficial client built by an independent developer. It talks to the same services music.youtube.com uses, so changes on YouTube's side can occasionally affect playback, sign-in or lyrics." } },
+        { "@type": "Question", "name": "Do I need YouTube Premium to use bitchord?", "acceptedAnswer": { "@type": "Answer", "text": "No. You can browse, search and play without signing in. Signing in unlocks your home feed, library, likes and history. If your account has Premium, Premium-only songs play natively and everything plays at 256 kbps." } },
+        { "@type": "Question", "name": "Does bitchord run on macOS or Linux?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Every release has a Windows installer, a macOS disk image for Apple silicon and Intel (macOS 11 or later), and a Linux build with a one-line installer. Each platform also has a portable download." } },
+        { "@type": "Question", "name": "Where do the synced lyrics come from?", "acceptedAnswer": { "@type": "Answer", "text": "Synced lyrics come from every source the Better Lyrics extension uses, including Better Lyrics, Unison, Musixmatch and LRCLib. If one has nothing for a song, the next takes over. Romanization and translations for Japanese, Korean, Chinese and other non-Latin lyrics come from the lyrics when they include them, otherwise from Unison or Google Translate." } },
+        { "@type": "Question", "name": "How does bitchord update?", "acceptedAnswer": { "@type": "Answer", "text": "The installed app checks GitHub for new releases, downloads them in the background and installs when you close it. You can also restart to update right away, or turn updates off in Settings." } }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" id="nav">
+  <a class="nav__brand" href="#top" aria-label="bitchord home">
+    <img src="icon-192.png" alt="" width="28" height="28">
+    <span>bitchord</span>
+  </a>
+  <nav class="nav__links" aria-label="Sections">
+    <a href="#features">Features</a>
+    <a href="#lyrics">Lyrics</a>
+    <a href="#themes">Themes</a>
+    <a href="#engine">Under the hood</a>
+    <a href="#faq">FAQ</a>
+  </nav>
+  <div class="nav__actions">
+    <a class="gh-pill" href="https://github.com/grapedjuice/ytm-rs" rel="noopener" aria-label="bitchord on GitHub">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span class="gh-pill__label">Star</span>
+      <span class="gh-pill__count" data-stars>9</span>
+    </a>
+    <a class="btn btn--sm btn--primary" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ============ HERO ============ -->
+<section class="hero" id="top" aria-labelledby="hero-title">
+  <canvas class="hero__bg" data-warp="hero" aria-hidden="true"></canvas>
+  <div class="hero__grain" aria-hidden="true"></div>
+  <div class="hero__inner">
+    <a class="chip" href="https://github.com/grapedjuice/ytm-rs/releases/latest" rel="noopener">
+      <span class="chip__dot"></span>
+      <span data-version>v0.2.25</span> is out
+      <span class="chip__sep"></span>
+      <span class="chip__more">Release notes →</span>
+    </a>
+    <h1 class="hero__title karaoke" id="hero-title">
+      <span class="kline"><span class="kw">YouTube</span> <span class="kw">Music,</span></span>
+      <span class="kline"><span class="kw">without</span> <span class="kw">the</span> <span class="kw">browser.</span></span>
+    </h1>
+    <p class="hero__sub">
+      bitchord is a native YouTube Music app for Windows, macOS and Linux, written in Rust. Word-by-word synced lyrics, romanization and 26 themes in a 9&nbsp;MB download that draws nothing at all when you aren't looking.
+    </p>
+    <div class="hero__cta">
+      <a class="btn btn--primary btn--lg" href="#download" data-dl>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3v11.17l4.59-4.58L18 11l-6 6-6-6 1.41-1.41L11 14.17V3zM5 19h14v2H5z"/></svg>
+        <span data-os-label>Download</span>
+      </a>
+      <a class="btn btn--ghost btn--lg" href="https://github.com/grapedjuice/ytm-rs" rel="noopener">View source</a>
+    </div>
+    <p class="hero__meta">Free and open source · GPL-3.0 · No account needed to listen</p>
+  </div>
+
+  <div class="scrollframe" data-scrollframe>
+    <div class="scrollframe__stage">
+      <figure class="device" data-device>
+        <div class="device__bar" aria-hidden="true"><i></i><i></i><i></i><span>bitchord</span></div>
+        <img src="img/app/now-playing-1600.webp" srcset="img/app/now-playing-800.webp 800w, img/app/now-playing-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1100px" width="1600" height="881" alt="bitchord now playing BIRDS OF A FEATHER by Billie Eilish, with word-by-word synced lyrics over an animated album-art background" fetchpriority="high">
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STATS ============ -->
+<section class="stats" aria-label="By the numbers">
+  <div class="stats__grid">
+    <div class="stat"><span class="stat__num"><b data-tick="9">0</b><small>MB</small></span><span class="stat__label">download</span></div>
+    <div class="stat"><span class="stat__num"><b data-tick="94" data-prefix="~">0</b><small>MB</small></span><span class="stat__label">memory while playing</span></div>
+    <div class="stat"><span class="stat__num"><b data-tick="0">0</b><small>fps</small></span><span class="stat__label">drawn when idle</span></div>
+    <div class="stat"><span class="stat__num"><b data-tick="26">0</b></span><span class="stat__label">community themes</span></div>
+  </div>
+  <p class="stats__note">Measured with v0.2.12 on Windows 11: private memory with a song playing (about 80&nbsp;MB idle, 102&nbsp;MB with lyrics open), and frames drawn with the window idle.</p>
+</section>
+
+<!-- ============ FEATURES ============ -->
+<section class="section" id="features" aria-labelledby="features-title">
+  <div class="section__head">
+    <p class="eyebrow">Features</p>
+    <h2 id="features-title">Everything you use YouTube Music for.</h2>
+    <p class="lede">Your feed, your library and your playlists, in a small native app that stays out of the way.</p>
+  </div>
+
+  <div class="bento">
+    <article class="card" data-glow>
+      <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg></span>
+      <h3>Your feed and library</h3>
+      <p>Listen again, Quick picks, your mixes and mood filters, plus liked songs, saved albums, playlists and history once you sign in.</p>
+    </article>
+    <article class="card" data-glow>
+      <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12h3l3-7 4 14 3-7h5"/></svg></span>
+      <h3>Even volume, quick skips</h3>
+      <p>Loudness normalization, the next song loaded ahead for instant skips, and 256 kbps audio with Premium. Queue, radio, shuffle, repeat and autoplay included.</p>
+    </article>
+    <article class="card" data-glow>
+      <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0-5-5m5 5 5-5M4 20h16"/></svg></span>
+      <h3>Downloads for offline</h3>
+      <p>Save any song as a tagged .m4a with its cover art, at the best quality your account gets. Downloaded songs play from the file, even offline.</p>
+    </article>
+    <article class="card" data-glow>
+      <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0-5 5m5-5 5 5M4 20h16"/></svg></span>
+      <h3>Upload your own files</h3>
+      <p>Drop MP3, M4A, FLAC, OGG or WMA files on the window. They go to your YouTube Music library, tags and cover art included.</p>
+    </article>
+    <article class="card" data-glow>
+      <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+      <h3>Feels like part of your desktop</h3>
+      <p>Media keys and system media controls on Windows, macOS and Linux, close to tray, Discord Rich Presence and Last.fm scrobbling.</p>
+    </article>
+    <article class="card" data-glow>
+      <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"/></svg></span>
+      <h3>Updates itself</h3>
+      <p>New versions download in the background and install when you close the app, with release notes written by a person.</p>
+    </article>
+  </div>
+
+  <div class="rows">
+    <article class="row">
+      <div class="row__copy">
+        <p class="eyebrow">Listen together</p>
+        <h3>Same song, same second, different rooms.</h3>
+        <p>Start a jam and share the code or the link. Friends who open it land straight in bitchord and hear what you're playing at the same moment, each streaming it on their own.</p>
+        <ul class="feat__list">
+          <li><b>Up to 16 people</b> in one jam, kept within a tenth of a second of the host.</li>
+          <li><b>You set the rules.</b> Let guests add songs, control playback, both or neither.</li>
+          <li><b>Guest picks play next,</b> marked with who added them.</li>
+        </ul>
+      </div>
+      <figure class="row__shot">
+        <img src="img/app/jam-770.webp" srcset="img/app/jam-385.webp 385w, img/app/jam-770.webp 770w" sizes="(max-width: 900px) 92vw, 620px" width="770" height="459" loading="lazy" alt="The Listen together page in bitchord: host a jam with your name, or join one with a code">
+      </figure>
+    </article>
+
+    <article class="row row--flip">
+      <div class="row__copy">
+        <p class="eyebrow">Transfer from Spotify</p>
+        <h3>Bring your Spotify library with you.</h3>
+        <p>Pick a playlist or your Liked Songs, or paste any public playlist link, and keep listening while bitchord finds every song on YouTube Music.</p>
+        <ul class="feat__list">
+          <li><b>Asks when it isn't sure</b> about a match, then makes a private playlist.</li>
+          <li><b>Liked Songs go to Liked Music</b> in the same order as on Spotify.</li>
+          <li><b>Picks up where it left off</b> if a transfer gets interrupted.</li>
+        </ul>
+      </div>
+      <figure class="row__shot">
+        <img src="img/app/transfer-1105.webp" srcset="img/app/transfer-553.webp 553w, img/app/transfer-1105.webp 1105w" sizes="(max-width: 900px) 92vw, 620px" width="1105" height="612" loading="lazy" alt="The Transfer from Spotify page in bitchord with a public playlist link pasted in, Today&apos;s Top Hits picked, and the new YouTube Music playlist named after it">
+      </figure>
+    </article>
+
+    <article class="row">
+      <div class="row__copy">
+        <p class="eyebrow">Any language</p>
+        <h3>Read along, even when you can't read it.</h3>
+        <p>Japanese, Korean, Chinese and other non-Latin lyrics get romanization and a translation in their own rows under every line, filling in word by word as they're sung.</p>
+        <ul class="feat__list">
+          <li><b>Every Better Lyrics source,</b> with the next one taking over when a source has nothing.</li>
+          <li><b>Click a line</b> to jump there, or nudge the timing per song.</li>
+        </ul>
+      </div>
+      <figure class="row__shot">
+        <img src="img/app/jp-1600.webp" srcset="img/app/jp-800.webp 800w, img/app/jp-1600.webp 1600w" sizes="(max-width: 900px) 92vw, 620px" width="1600" height="900" loading="lazy" alt="Now playing アイドル (Idol) by YOASOBI, with Japanese lyrics filling word by word, romaji in a pill and an English translation under each line">
+      </figure>
+    </article>
+
+    <article class="row row--flip">
+      <div class="row__copy">
+        <p class="eyebrow">Browse</p>
+        <h3>Your home feed, artists and search.</h3>
+        <p>Everything comes straight from YouTube Music, so your mixes and recommendations are the ones you already know. Keep scrolling and more loads in.</p>
+        <ul class="feat__list">
+          <li><b>Artist pages</b> with top songs, albums, singles and radio.</li>
+          <li><b>Charts and new releases</b> in Explore, and search across everything.</li>
+        </ul>
+      </div>
+      <figure class="row__shot">
+        <img src="img/app/home-tall-1440.webp" srcset="img/app/home-tall-720.webp 720w, img/app/home-tall-1440.webp 1440w" sizes="(max-width: 900px) 92vw, 620px" width="1440" height="960" loading="lazy" alt="bitchord home page with mood filters, Quick picks and throwback mixes">
+      </figure>
+    </article>
+  </div>
+</section>
+
+<!-- ============ LYRICS DEMO ============ -->
+<section class="section lyrics" id="lyrics" aria-labelledby="lyrics-title">
+  <div class="section__head">
+    <p class="eyebrow">Synced lyrics</p>
+    <h2 id="lyrics-title">Lyrics that keep up with you.</h2>
+    <p class="lede">Words fill in as they're sung, the way the Better Lyrics extension draws them. Try it below with six of the app's lyric styles, using the same numbers as its theme presets.</p>
+  </div>
+
+  <div class="player" data-player data-theme="classic">
+    <canvas class="player__bg" data-warp="player" aria-hidden="true"></canvas>
+    <div class="player__scrim" aria-hidden="true"></div>
+    <div class="player__top">
+      <span class="player__badge">Live demo</span>
+      <div class="player__toggles">
+        <button class="pill" type="button" data-toggle="romaji" aria-pressed="true">あa Romaji</button>
+        <button class="pill" type="button" data-toggle="trans" aria-pressed="true">文A Translation</button>
+      </div>
+    </div>
+    <div class="player__body">
+      <div class="player__art">
+        <canvas class="player__cover" data-cover width="512" height="512" role="img" aria-label="Cherry blossom artwork for Sakura Sakura"></canvas>
+        <div class="player__meta">
+          <strong lang="ja">さくら さくら <span lang="en">· Sakura Sakura</span></strong>
+          <span>Traditional Japanese folk song</span>
+        </div>
+      </div>
+      <div class="player__lyrics" data-lyrics aria-live="off">
+        <div class="lyr__track" data-track></div>
+      </div>
+    </div>
+    <div class="player__bar">
+      <button class="playbtn" type="button" data-play aria-label="Pause">
+        <svg class="i-pause" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
+        <svg class="i-play" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5z"/></svg>
+      </button>
+      <span class="player__time" data-time>0:00</span>
+      <div class="player__progress" data-progress role="slider" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><i data-fill></i></div>
+      <span class="player__time" data-dur>0:30</span>
+    </div>
+  </div>
+
+  <div class="themepick" role="radiogroup" aria-label="Lyric style">
+    <button type="button" role="radio" aria-checked="true" data-style="classic"><b>Classic</b><span>bitchord</span></button>
+    <button type="button" role="radio" aria-checked="false" data-style="apple"><b>Apple Music</b><span>tposejank</span></button>
+    <button type="button" role="radio" aria-checked="false" data-style="glow"><b>Lyric Glow</b><span>MatiuxXcd</span></button>
+    <button type="button" role="radio" aria-checked="false" data-style="burn"><b>Burn</b><span>semicolonhope</span></button>
+    <button type="button" role="radio" aria-checked="false" data-style="karaoke"><b>Opacity Karaoke</b><span>semicolonhope</span></button>
+    <button type="button" role="radio" aria-checked="false" data-style="spotlight"><b>Spotlight</b><span>boidushya</span></button>
+  </div>
+  <p class="fineprint">The demo plays the lyrics of さくら さくら (Sakura Sakura), a traditional Japanese folk song in the public domain. In the app, lyrics come from every source Better Lyrics uses, with the next one taking over when a source has nothing. Translations come from the lyrics when included, otherwise from Unison or Google Translate. Source, romanization, translation and timing controls sit next to Lyrics in the now-playing view.</p>
+</section>
+
+<!-- ============ THEMES ============ -->
+<section class="section themes" id="themes" aria-labelledby="themes-title">
+  <div class="themes__split">
+    <div class="themes__copy">
+      <p class="eyebrow">Themes</p>
+      <h2 id="themes-title">26 themes, rebuilt natively.</h2>
+      <p class="lede">The Better Lyrics community made these as CSS for the browser. bitchord translates each one into native rendering: its lyrics, warped backdrop, cover, player bar, fonts and the rest of the app. Every theme credits its creators.</p>
+      <details class="themes__all">
+      <summary>All 26 themes and their creators</summary>
+      <ul class="themes__names" aria-label="Included themes">
+        <li><b>Apple Music</b><span>tposejank</span></li>
+        <li><b>Apple Music Refine</b><span>ankit008-mishra</span></li>
+        <li><b>AppleTify</b><span>a-dogann</span></li>
+        <li><b>Better-YTM</b><span>WolftheE</span></li>
+        <li><b>Burn</b><span>semicolonhope</span></li>
+        <li><b>Clarity</b><span>Al Farrizi</span></li>
+        <li><b>Colorful Vocals</b><span>adaliea</span></li>
+        <li><b>Darky</b><span>ankit008-mishra</span></li>
+        <li><b>Dynamic Background</b><span>chengggit</span></li>
+        <li><b>EqualTweaks</b><span>thejosuep</span></li>
+        <li><b>Even Better Lyrics Plus</b><span>boidushya, noah</span></li>
+        <li><b>Expressive</b><span>decipher3114</span></li>
+        <li><b>Glassy Blur</b><span>ankit008-mishra</span></li>
+        <li><b>Lucid</b><span>drago-oo</span></li>
+        <li><b>Lyric Glow</b><span>MatiuxXcd</span></li>
+        <li><b>Minimal</b><span>semicolonhope</span></li>
+        <li><b>Minimalism Music</b><span>notacoderlols</span></li>
+        <li><b>ModernPlayer</b><span>snw-mint</span></li>
+        <li><b>Opacity Based Karaoke</b><span>semicolonhope</span></li>
+        <li><b>reCover</b><span>mukeenanyafiq</span></li>
+        <li><b>Spicy for YouTube Music</b><span>olafix52</span></li>
+        <li><b>Spinning Record</b><span>Xtremerspro</span></li>
+        <li><b>Spotifont</b><span>mukeenanyafiq</span></li>
+        <li><b>Spotlight</b><span>boidushya</span></li>
+        <li><b>Sustain</b><span>boidushya</span></li>
+        <li><b>YouTube TV</b><span>mukeenanyafiq</span></li>
+      </ul>
+      </details>
+    </div>
+    <div class="marquee3d" aria-hidden="true">
+      <div class="marquee3d__plane">
+        <div class="marquee3d__col" style="--dur:46s">
+          <img src="img/themes/apple-music.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/clarity-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/eblp.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/minimal.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spicy-for-ytm.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/youtube-tv-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/apple-music.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/clarity-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/eblp.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/minimal.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spicy-for-ytm.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/youtube-tv-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/apple-music.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/clarity-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/eblp.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/minimal.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spicy-for-ytm.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/youtube-tv-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/apple-music.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/clarity-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/eblp.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/minimal.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spicy-for-ytm.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/youtube-tv-theme.webp" alt="" width="480" height="300" decoding="async">
+        </div>
+        <div class="marquee3d__col" style="--dur:60s">
+          <img src="img/themes/colorful-vocals.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/expressive.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/minimalism-music.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spinning-record.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/apple-music-v3.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/colorful-vocals.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/expressive.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/minimalism-music.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spinning-record.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/apple-music-v3.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/colorful-vocals.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/expressive.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/minimalism-music.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spinning-record.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/apple-music-v3.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/colorful-vocals.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/expressive.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/minimalism-music.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spinning-record.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/apple-music-v3.webp" alt="" width="480" height="300" decoding="async">
+        </div>
+        <div class="marquee3d__col" style="--dur:52s">
+          <img src="img/themes/glassy-blur.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/modern-player.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spotifont.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/ad-nextgen.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/darky.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/glassy-blur.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/modern-player.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spotifont.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/ad-nextgen.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/darky.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/glassy-blur.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/modern-player.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spotifont.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/ad-nextgen.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/darky.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/glassy-blur.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/modern-player.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spotifont.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/ad-nextgen.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/darky.webp" alt="" width="480" height="300" decoding="async">
+        </div>
+        <div class="marquee3d__col" style="--dur:66s">
+          <img src="img/themes/opacity-based-karaoke.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spotlight.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/wolfthee-theme-bytm.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/dynamic-background.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/lucid.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/opacity-based-karaoke.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spotlight.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/wolfthee-theme-bytm.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/dynamic-background.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/lucid.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/opacity-based-karaoke.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spotlight.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/wolfthee-theme-bytm.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/dynamic-background.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/lucid.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/opacity-based-karaoke.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/spotlight.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/wolfthee-theme-bytm.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/dynamic-background.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/lucid.webp" alt="" width="480" height="300" decoding="async">
+        </div>
+        <div class="marquee3d__col" style="--dur:56s">
+          <img src="img/themes/sustain.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/burn.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/thejosueps-equal-tweaks-id.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/lyric-glow.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/recover-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/sustain.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/burn.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/thejosueps-equal-tweaks-id.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/lyric-glow.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/recover-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/sustain.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/burn.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/thejosueps-equal-tweaks-id.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/lyric-glow.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/recover-theme.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/sustain.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/burn.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/thejosueps-equal-tweaks-id.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/lyric-glow.webp" alt="" width="480" height="300" decoding="async">
+          <img src="img/themes/recover-theme.webp" alt="" width="480" height="300" decoding="async">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="showcase" data-showcase>
+    <div class="showcase__tabs" role="tablist" aria-label="Theme screenshots">
+      <button role="tab" aria-selected="true" data-shot="spinning-record">Spinning Record</button>
+      <button role="tab" aria-selected="false" data-shot="recover">reCover</button>
+      <button role="tab" aria-selected="false" data-shot="apple-music-v3">Apple Music Refine</button>
+      <button role="tab" aria-selected="false" data-shot="burn">Burn</button>
+      <button role="tab" aria-selected="false" data-shot="expressive">Expressive</button>
+      <button role="tab" aria-selected="false" data-shot="spotlight">Spotlight</button>
+      <button role="tab" aria-selected="false" data-shot="colorful-vocals">Colorful Vocals</button>
+    </div>
+    <div class="showcase__frame">
+      <img data-shot-img="spinning-record" class="is-on" src="img/app/spinning-record-1600.webp" srcset="img/app/spinning-record-800.webp 800w, img/app/spinning-record-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1100px" width="1600" height="900" loading="lazy" alt="Spinning Record theme: Pink Pony Club by Chappell Roan, the cover turning as a vinyl disc beside the lyrics">
+      <img data-shot-img="recover" src="img/app/recover-1600.webp" srcset="img/app/recover-800.webp 800w, img/app/recover-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1100px" width="1600" height="900" loading="lazy" alt="reCover theme: Abracadabra by Lady Gaga, the cover filling the left side and fading into the lyrics">
+      <img data-shot-img="apple-music-v3" src="img/app/apple-music-v3-1600.webp" srcset="img/app/apple-music-v3-800.webp 800w, img/app/apple-music-v3-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1100px" width="1600" height="900" loading="lazy" alt="Apple Music Refine theme: Saturn by SZA with large lyrics over a warped backdrop">
+      <img data-shot-img="burn" src="img/app/burn-1600.webp" srcset="img/app/burn-800.webp 800w, img/app/burn-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1100px" width="1600" height="900" loading="lazy" alt="Burn theme: Sports car by Tate McRae, white lyrics over a darkened cover with sung words burning out">
+      <img data-shot-img="expressive" src="img/app/expressive-1600.webp" srcset="img/app/expressive-800.webp 800w, img/app/expressive-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1100px" width="1600" height="900" loading="lazy" alt="Expressive theme: NOKIA by Drake, with lyrics alternating sides">
+      <img data-shot-img="spotlight" src="img/app/spotlight-1600.webp" srcset="img/app/spotlight-800.webp 800w, img/app/spotlight-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1100px" width="1600" height="900" loading="lazy" alt="Spotlight theme: we can't be friends by Ariana Grande, past lines blurring away while the current line stays sharp">
+      <img data-shot-img="colorful-vocals" src="img/app/colorful-vocals-1600.webp" srcset="img/app/colorful-vocals-800.webp 800w, img/app/colorful-vocals-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1100px" width="1600" height="900" loading="lazy" alt="Colorful Vocals theme: APT. by ROSÉ and Bruno Mars, each singer's lines tinted their own colour">
+    </div>
+  </div>
+</section>
+
+<!-- ============ ENGINE ============ -->
+<section class="section engine" id="engine" aria-labelledby="engine-title">
+  <div class="section__head">
+    <p class="eyebrow">Under the hood</p>
+    <h2 id="engine-title">No Chromium anywhere in the player.</h2>
+    <p class="lede">The interface is <a href="https://github.com/emilk/egui" rel="noopener">egui</a> on OpenGL. Audio is <a href="https://github.com/RustAudio/rodio" rel="noopener">rodio</a> and Symphonia. Browsing goes straight to YouTube Music's own internal API. It all compiles into a single executable of about 20&nbsp;MB.</p>
+  </div>
+
+  <div class="beams" data-beams>
+    <svg class="beams__svg" data-beams-svg aria-hidden="true">
+    </svg>
+    <div class="beams__col">
+      <div class="node" data-node="in"><span class="node__dot"></span><div><b>YouTube Music</b><small>innertube API</small></div></div>
+      <div class="node" data-node="in"><span class="node__dot"></span><div><b>Better Lyrics</b><small>every lyrics source</small></div></div>
+      <div class="node" data-node="in"><span class="node__dot"></span><div><b>Unison + Google</b><small>romaji + translation</small></div></div>
+    </div>
+    <div class="beams__hub" data-node="hub">
+      <img src="icon-192.png" alt="" width="64" height="64">
+      <b>bitchord</b>
+      <small>Rust · tokio</small>
+    </div>
+    <div class="beams__col">
+      <div class="node" data-node="out"><span class="node__dot"></span><div><b>egui + OpenGL</b><small>every pixel</small></div></div>
+      <div class="node" data-node="out"><span class="node__dot"></span><div><b>rodio + Symphonia</b><small>AAC decoding</small></div></div>
+      <div class="node" data-node="out"><span class="node__dot"></span><div><b>System media controls</b><small>SMTC · MPRIS · Discord</small></div></div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <article class="note">
+      <span class="note__k">streams</span>
+      <h3>An unusual client</h3>
+      <p>Playback asks YouTube's player endpoint as the visionOS client. It hands back plain stream URLs that allow any byte range, so there's no signature puzzle to solve first. If YouTube returns a 403 halfway through a song, the stream gets a fresh URL and keeps going.</p>
+    </article>
+    <article class="note">
+      <span class="note__k">quickjs</span>
+      <h3>16 minutes down to 5 seconds</h3>
+      <p>Signed-in Premium streams need YouTube's player JavaScript solved. bitchord runs yt-dlp's EJS solver in an embedded QuickJS. The older engine took 16 minutes to prepare one player. rquickjs 0.14 takes about 5 seconds, once per player version.</p>
+    </article>
+    <article class="note">
+      <span class="note__k">audio</span>
+      <h3>Plays before it finishes downloading</h3>
+      <p>Opening an MP4 for seeking normally means reading every fragment first. bitchord starts on a streaming decoder right away, then swaps in a seekable one built over the same buffer the moment you seek.</p>
+    </article>
+    <article class="note">
+      <span class="note__k">frames</span>
+      <h3>Frames on a budget</h3>
+      <p>egui lays out the whole window on every frame, so frames cost CPU. Browsing runs at 15 fps and now playing at 30, except while a lyric line fills, which gets every frame so the sweep stays smooth. When nothing moves, nothing gets drawn.</p>
+    </article>
+    <article class="note">
+      <span class="note__k">shader</span>
+      <h3>Kawarp, ported</h3>
+      <p>The warped album-art background is a native shader port of Kawarp from Better Lyrics, and it reacts to the music. The backgrounds on this page run a WebGL version of the same idea.</p>
+    </article>
+    <article class="note">
+      <span class="note__k">lyrics</span>
+      <h3>Real blur, real glow</h3>
+      <p>The lyrics renderer is a port of Better Lyrics. The glow is a real blur of the lit letters, never a box behind them, and theme blur is rendered properly instead of stacked fake copies. CJK lines render bold, shifted onto the same baseline as Latin text.</p>
+    </article>
+  </div>
+</section>
+
+<!-- ============ DOWNLOAD ============ -->
+<section class="section download" id="download" aria-labelledby="download-title">
+  <div class="dl">
+    <div class="dl__beam" aria-hidden="true"></div>
+    <img class="dl__icon" src="icon-512.png" alt="" width="96" height="96" loading="lazy">
+    <h2 id="download-title">Get bitchord</h2>
+    <p class="dl__ver"><span data-version>v0.2.25</span> · <span data-date>October 2026</span> · Free and open source</p>
+
+    <div class="platforms">
+      <a class="platform" href="https://github.com/grapedjuice/ytm-rs/releases/latest" data-os="windows" rel="noopener">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.5 10.4 4.5v7H3zM11.4 4.36 21 3v8.5h-9.6zM3 12.5h7.4v7L3 18.5zM11.4 12.5H21V21l-9.6-1.36z"/></svg>
+        <b>Windows</b>
+        <small><span data-size="windows">Installer</span> · x64 and ARM</small>
+      </a>
+      <a class="platform" href="https://github.com/grapedjuice/ytm-rs/releases/latest" data-os="macos" rel="noopener">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.37 12.6c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.83-.81-3-.79-1.55.02-2.97.9-3.77 2.28-1.6 2.78-.41 6.9 1.15 9.16.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.77.74 2.98.72 1.23-.02 2.01-1.12 2.76-2.23.87-1.28 1.23-2.52 1.25-2.58-.03-.01-2.4-.92-2.42-3.65zM14.1 5.86c.63-.77 1.06-1.83.94-2.89-.91.04-2.01.61-2.66 1.37-.58.67-1.09 1.75-.96 2.79 1.02.08 2.05-.51 2.68-1.27z"/></svg>
+        <b>macOS</b>
+        <small><span data-size="macos">Disk image</span> · 11 or later</small>
+      </a>
+      <a class="platform" href="https://github.com/grapedjuice/ytm-rs/releases/latest" data-os="linux" rel="noopener">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2c-1.9 0-3.2 1.7-3.2 4.1 0 1.2.3 2.1-.4 3.3-.8 1.4-2.6 3.6-2.6 6.3 0 .7.1 1.3.4 1.9-.8.4-1.9.8-1.9 1.8 0 1.3 1.9 1.4 3.6 2 1.1.4 1.9.6 2.6.1.3-.2.6-.3 1.5-.3s1.2.1 1.5.3c.7.5 1.5.3 2.6-.1 1.7-.6 3.6-.7 3.6-2 0-1-1.1-1.4-1.9-1.8.3-.6.4-1.2.4-1.9 0-2.7-1.8-4.9-2.6-6.3-.7-1.2-.4-2.1-.4-3.3C15.2 3.7 13.9 2 12 2zm-1.4 4.2c.4 0 .7.5.7 1s-.3 1-.7 1-.7-.5-.7-1 .3-1 .7-1zm2.8 0c.4 0 .7.5.7 1s-.3 1-.7 1-.7-.5-.7-1 .3-1 .7-1zM12 9c.9 0 2 .6 2 1s-1.1 1-2 1-2-.6-2-1 1.1-1 2-1z"/></svg>
+        <b>Linux</b>
+        <small><span data-size="linux">x86_64</span> · one-line install</small>
+      </a>
+    </div>
+    <p class="dl__small">Every platform also has a portable download. bitchord updates itself on all of them. <a href="https://github.com/grapedjuice/ytm-rs/releases/latest" rel="noopener">All downloads</a></p>
+
+    <div class="build">
+      <div class="build__head"><span>Linux, one line</span><button type="button" class="copy" data-copy="#linux-cmd">Copy</button></div>
+      <pre id="linux-cmd"><code><span class="c-p">$</span> curl -fsSL https://raw.githubusercontent.com/grapedjuice/ytm-rs/main/linux/install.sh | sh</code></pre>
+      <p>Installs for your user in <code>~/.local/lib/ytm-rs</code>, with a <code>bitchord</code> command and an app menu entry. <a href="https://github.com/grapedjuice/ytm-rs#building-from-source" rel="noopener">Build from source</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FAQ ============ -->
+<section class="section faq" id="faq" aria-labelledby="faq-title">
+  <div class="section__head">
+    <p class="eyebrow">FAQ</p>
+    <h2 id="faq-title">Questions, answered.</h2>
+  </div>
+  <div class="faq__list">
+    <details open><summary>Is bitchord free?</summary><div class="faq__a"><p>Yes. bitchord is free and open source under the GPL-3.0 license. The app has no ads, accounts or paid tiers of its own.</p></div></details>
+    <details><summary>Is it an official YouTube Music app?</summary><div class="faq__a"><p>No. bitchord is an unofficial client built by an independent developer. It talks to the same services music.youtube.com uses, so changes on YouTube's side can occasionally affect playback, sign-in or lyrics.</p></div></details>
+    <details><summary>Do I need YouTube Premium?</summary><div class="faq__a"><p>No. You can browse, search and play without signing in. Signing in unlocks your home feed, library, likes and history. If your account has Premium, Premium-only songs play natively and everything plays at 256 kbps.</p></div></details>
+    <details><summary>Does it run on macOS or Linux?</summary><div class="faq__a"><p>Yes. Every release has a Windows installer, a macOS disk image for Apple silicon and Intel (macOS 11 or later), and a Linux build with a one-line installer. Each platform also has a portable download. The macOS app isn't notarized yet, so the first time, right-click it and choose Open.</p></div></details>
+    <details><summary>How does signing in work?</summary><div class="faq__a"><p>Open Settings → Sign in with Google. Google's own sign-in page opens in a temporary system webview window (WebView2 on Windows), and the session stays on your computer, in Credential Manager, the Keychain or your keyring. The player itself never runs in a webview.</p></div></details>
+    <details><summary>Where do the lyrics come from?</summary><div class="faq__a"><p>Synced lyrics come from every source the Better Lyrics extension uses: Better Lyrics, Unison, Musixmatch, LRCLib and others. If one has nothing for a song, the next takes over. Romanization and translations come from the lyrics when they include them, otherwise from Unison or Google Translate. Machine translations can have rough spots.</p></div></details>
+    <details><summary>How does it update?</summary><div class="faq__a"><p>The installed app checks GitHub for new releases, downloads them in the background and installs when you close it. Choose Restart to update to install right away, or turn updates off in Settings → Updates.</p></div></details>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <img src="icon-192.png" alt="" width="32" height="32" loading="lazy">
+      <div><b>bitchord</b><span>YouTube Music, without the browser.</span></div>
+    </div>
+    <nav class="footer__links" aria-label="Project links">
+      <a href="https://github.com/grapedjuice/ytm-rs" rel="noopener">GitHub</a>
+      <a href="https://github.com/grapedjuice/ytm-rs/releases" rel="noopener">Releases</a>
+      <a href="https://github.com/grapedjuice/ytm-rs/issues" rel="noopener">Report a bug</a>
+      <a href="https://github.com/grapedjuice/ytm-rs/blob/main/LICENSE" rel="noopener">GPL-3.0</a>
+    </nav>
+    <p class="footer__fine">bitchord is an independent, unofficial client. It isn't affiliated with or endorsed by YouTube or Google. Themes are adapted from the <a href="https://github.com/better-lyrics/themes" rel="noopener">Better Lyrics theme store</a>, with credit to each creator. Album art in screenshots belongs to its owners.</p>
+  </div>
+</footer>
+
+<script src="vendor/lenis.min.js?v=__V__" defer></script>
+<script src="main.js?v=__V__" defer></script>
+</body>
+</html>

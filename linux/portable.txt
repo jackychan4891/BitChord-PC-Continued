@@ -1,0 +1,6 @@
+This is the portable bitchord. While this file sits next to the bitchord binary, the app
+keeps its settings and caches in the "data" folder here, and updates itself in this
+folder. Sign-ins are kept in your keyring (or, without one, in the data folder).
+
+Delete this file to use the normal location (~/.local/share/ytm-rs) instead, or run
+./install.sh from the regular download to install bitchord for your user.

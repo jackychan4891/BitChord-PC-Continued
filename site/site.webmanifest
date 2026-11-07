@@ -1,0 +1,13 @@
+{
+  "name": "bitchord",
+  "short_name": "bitchord",
+  "description": "A fast, native YouTube Music desktop app written in Rust.",
+  "start_url": "./",
+  "display": "browser",
+  "background_color": "#0b0707",
+  "theme_color": "#0b0707",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

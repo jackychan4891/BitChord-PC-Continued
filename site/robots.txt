@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://grapedjuice.github.io/ytm-rs/sitemap.xml

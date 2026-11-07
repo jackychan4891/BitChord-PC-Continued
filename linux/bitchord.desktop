@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=BitChord
+GenericName=Music Player
+Comment=Native BitChord music client
+Exec=bitchord
+Icon=bitchord
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;player;
+StartupWMClass=bitchord

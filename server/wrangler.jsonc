@@ -1,0 +1,21 @@
+{
+  "name": "ytm-rs-jam",
+  "main": "build/worker/shim.mjs",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "build": {
+    "command": "cargo install -q worker-build && worker-build --release"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "Room" },
+      { "name": "STATS", "class_name": "Stats" }
+    ]
+  },
+  // SQLite-backed Durable Objects are what the free plan allows.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Room"] },
+    { "tag": "v2", "new_sqlite_classes": ["Stats"] }
+  ],
+  "observability": { "enabled": true }
+}

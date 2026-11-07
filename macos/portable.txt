@@ -1,0 +1,3 @@
+This is the portable bitchord. While this file is inside bitchord.app (Contents/Resources),
+the app keeps its settings and caches in the "data" folder beside bitchord.app, and
+updates itself in place. Sign-ins are kept in your login Keychain.

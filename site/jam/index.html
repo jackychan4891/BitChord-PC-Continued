@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Join the jam · bitchord</title>
+<meta name="description" content="You've been invited to listen together in bitchord.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0b0707">
+<meta name="color-scheme" content="dark">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="bitchord">
+<meta property="og:title" content="Join the jam on bitchord">
+<meta property="og:description" content="Listen together, in sync, in the bitchord YouTube Music app.">
+<meta property="og:image" content="https://grapedjuice.github.io/ytm-rs/og.png">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="../styles.css?v=__V__">
+<style>
+  body {
+    min-height: 100vh; min-height: 100svh;
+    display: flex; flex-direction: column;
+    background: radial-gradient(90% 60% at 50% 0%, #4a0710 0%, var(--bg) 70%) var(--bg);
+  }
+  .jam-top { display: flex; padding: 20px var(--gutter); }
+  .jam-top a { display: flex; align-items: center; gap: 10px; text-decoration: none; font: 700 18px/1 var(--display); letter-spacing: -0.02em; }
+  .jam {
+    flex: 1; display: grid; place-items: center;
+    padding: 24px var(--gutter) 64px; text-align: center;
+  }
+  .jam__card { width: 100%; max-width: 520px; }
+  .jam__eyebrow { margin: 0 0 10px; color: var(--muted); font: 500 13px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; }
+  .jam h1 { margin: 0 0 20px; font: 800 clamp(34px, 8vw, 52px)/1.05 var(--display); letter-spacing: -0.035em; }
+  .jam__code {
+    display: inline-flex; gap: clamp(4px, 1.6vw, 10px); margin: 0 0 28px; padding: 0;
+    font: 500 clamp(30px, 10vw, 54px)/1 var(--mono); list-style: none;
+  }
+  .jam__code li {
+    display: grid; place-items: center;
+    width: clamp(40px, 12vw, 66px); height: clamp(52px, 15vw, 80px);
+    border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface-2);
+  }
+  .jam__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-bottom: 22px; }
+  .jam p { margin: 0 0 10px; color: var(--ink-2); font-size: 15px; }
+  .jam p.jam__hint { color: var(--muted); font-size: 14px; }
+  .jam strong { color: var(--ink); font-weight: 600; }
+  .jam a.inline { color: var(--ink); text-underline-offset: 3px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 420px) { .jam__actions .btn { width: 100%; } }
+</style>
+</head>
+<body>
+<header class="jam-top">
+  <a href="../" aria-label="bitchord home"><img src="../icon-192.png" alt="" width="28" height="28"><span>bitchord</span></a>
+</header>
+
+<main class="jam">
+  <div class="jam__card" id="ok" hidden>
+    <p class="jam__eyebrow">Listen together</p>
+    <h1>Join the jam</h1>
+    <ol class="jam__code" id="code" aria-label="Room code"></ol>
+    <div class="jam__actions">
+      <a class="btn btn--primary btn--lg" id="open" href="#">Open in bitchord</a>
+    </div>
+    <p>Don't have bitchord? <a class="inline" href="https://github.com/grapedjuice/ytm-rs/releases/latest" rel="noopener">Download it</a> for Windows, macOS or Linux, then open this link again. On macOS, type the code under <strong>Listen together</strong> instead.</p>
+    <p class="jam__hint">If bitchord is already open, you can also type the code under <strong>Listen together</strong>.</p>
+  </div>
+
+  <div class="jam__card" id="bad" hidden>
+    <p class="jam__eyebrow">Listen together</p>
+    <h1>This invite doesn't look right</h1>
+    <p>The link is missing its room code, or the code got cut off. Ask whoever shared it to send it again. Codes are 6 letters and numbers.</p>
+    <div class="jam__actions" style="margin-top:24px">
+      <a class="btn btn--ghost btn--lg" href="../">About bitchord</a>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  var ALPHABET = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
+  var code = (new URLSearchParams(location.search).get('c') || '').trim().toUpperCase();
+  if (!ALPHABET.test(code)) {
+    document.getElementById('bad').hidden = false;
+    return;
+  }
+  document.getElementById('ok').hidden = false;
+  document.title = 'Join jam ' + code + ' · bitchord';
+  var list = document.getElementById('code');
+  list.setAttribute('aria-label', 'Room code ' + code.split('').join(' '));
+  code.split('').forEach(function (ch) {
+    var li = document.createElement('li');
+    li.textContent = ch;
+    list.appendChild(li);
+  });
+  var app = 'bitchord://jam/' + code;
+  var open = document.getElementById('open');
+  open.href = app;
+  open.addEventListener('click', function (e) { e.preventDefault(); location.href = app; });
+  // bitchord is a Windows app; elsewhere an unknown scheme only shows an error.
+  if (/Windows/i.test(navigator.userAgent)) location.href = app;
+})();
+</script>
+</body>
+</html>
