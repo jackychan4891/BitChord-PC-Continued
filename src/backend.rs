@@ -293,6 +293,8 @@ pub enum Resp {
     PlayError { generation: u64, msg: String },
     /// What `generation` is playing from a hi-res source (codec, rate, depth, size).
     AudioInfo { generation: u64, info: crate::hires::Info },
+    /// What `generation`'s decoder is being fed, whatever the source (stats for nerds).
+    StreamStats { generation: u64, stats: stream::Stats },
     /// Play `generation` is the song version of the music video that was asked for
     /// (`None`: that song wouldn't start, and the music video plays after all).
     PlayingAs { generation: u64, listed: String, song: Option<Track> },
@@ -1129,13 +1131,14 @@ impl Backend {
         tokio::task::spawn_blocking(move || match open() {
             Ok(decoder) => {
                 log::debug!("play gen {generation}: decoder ready at {at:?} in {:?}", t0.elapsed());
+                let _ = tx.send(Resp::StreamStats { generation, stats: stream::Stats::of(&shared2, &decoder) });
                 // What a hi-res stream is, as the decoder actually reads it.
                 if let Some(mut info) = shared2.info.clone() {
                     info.sample_rate = Some(rodio::Source::sample_rate(&decoder).get());
                     info.channels = Some(rodio::Source::channels(&decoder).get() as u8);
                     let _ = tx.send(Resp::AudioInfo { generation, info });
-                    wake();
                 }
+                wake();
                 audio.send(AudioCmd::Start { generation, decoder, shared: shared2, at });
                 // Skipped past before it started: that one doesn't count.
                 if let Some((this, id)) = report.filter(|_| audio.status.wanted_gen.load(Ordering::Relaxed) == generation) {

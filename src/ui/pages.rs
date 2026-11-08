@@ -1299,6 +1299,10 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
                 app.backend.set_prefer_atmos(app.prefer_atmos);
             }
         });
+        divider(ui);
+        setting_row(ui, "Stats for nerds", Some("Show the codec, sample rate and bitrate of what's playing at the foot of the cover in Now Playing, whatever the source."), |ui| {
+            toggle(ui, &mut app.show_nerd_stats, "Stats for nerds");
+        });
     });
 }
 

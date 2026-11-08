@@ -469,6 +469,11 @@ impl App {
                     self.audio_info = Some((generation, info));
                 }
             }
+            Resp::StreamStats { generation, stats } => {
+                if generation == self.generation {
+                    self.stream_stats = Some((generation, stats));
+                }
+            }
             Resp::ServerQueue(q) => self.adopt_server_queue(q),
             Resp::Account { name, photo } => {
                 self.account_name = name.or(self.account_name.take());
