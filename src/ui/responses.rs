@@ -259,6 +259,9 @@ impl App {
                 if l.albums_failed {
                     l.albums = self.library.as_ref().map(|o| o.albums.clone()).unwrap_or_default();
                 }
+                if l.podcasts_failed {
+                    l.podcasts = self.library.as_ref().map(|o| o.podcasts.clone()).unwrap_or_default();
+                }
                 self.library = Some(l);
                 self.loading = false;
             }
