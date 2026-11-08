@@ -1,5 +1,6 @@
 //! What clicks and keys ask for: the actions pages queue up, and keyboard shortcuts.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::backend::Req;
@@ -225,12 +226,18 @@ impl App {
                 let listed = self.current_id().map(str::to_owned);
                 let playing = self.playing_track().map(|t| t.id.clone()).or(listed.clone());
                 let Some(id) = playing else { return };
-                let at = self.audio.status.position();
                 self.backend.upgrade_quality(&id);
                 if let Some(listed) = listed.filter(|l| l != &id) {
                     self.backend.upgrade_quality(&listed);
                 }
-                self.play_current_at(at, false);
+                if self.audio_info.is_none() && self.playing_track().is_some() && self.audio.status.wanted_gen.load(Ordering::Relaxed) == self.generation {
+                    self.upgrading_quality = true;
+                    let meta = self.playing_track().cloned();
+                    self.backend.try_upgrade_active(self.generation, meta);
+                } else {
+                    let at = self.audio.status.position();
+                    self.play_current_at(at, false);
+                }
             }
         }
     }

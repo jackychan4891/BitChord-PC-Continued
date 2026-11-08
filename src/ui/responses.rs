@@ -467,6 +467,12 @@ impl App {
                 // The stream that answered may already have been skipped past.
                 if generation == self.generation {
                     self.audio_info = Some((generation, info));
+                    self.upgrading_quality = false;
+                }
+            }
+            Resp::UpgradingQuality { generation, active } => {
+                if generation == self.generation {
+                    self.upgrading_quality = active;
                 }
             }
             Resp::ServerQueue(q) => self.adopt_server_queue(q),

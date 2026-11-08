@@ -22,6 +22,8 @@ pub enum AudioCmd {
     Start { generation: u64, decoder: TrackDecoder, shared: Arc<Shared>, at: Duration },
     /// A decoder positioned at `at`, replacing the current one; only the latest seek's lands.
     Replace { generation: u64, seek: u64, decoder: TrackDecoder, at: Duration, seekable: bool },
+    /// Seamlessly upgrade the current stream to hi-res in place.
+    Upgrade { generation: u64, decoder: TrackDecoder, shared: Arc<Shared>, at: Duration, seekable: bool },
     Pause,
     Resume,
     Stop,
@@ -944,7 +946,16 @@ fn run(
                 log::info!("audio: loudness {:?} dB, normalization gain {gain:.3}", s.loudness_db);
                 player.set_volume(slider_gain(&status, f32::from_bits(status.volume.load(Ordering::Relaxed))) * gain);
                 // Fade in only over a song still playing, both over the same length.
-                fading.retain(|f| !f.player.empty());
+                fading.retain(|f| {
+                    if f.player.empty() {
+                        if let Some(s) = &f.shared {
+                            s.cancel();
+                        }
+                        false
+                    } else {
+                        true
+                    }
+                });
                 let skip_len = status.crossfade_ms.load(Ordering::Relaxed);
                 let natural_len = mix_ms(&status, length);
                 let mut fade_in = 0;
@@ -992,6 +1003,48 @@ fn run(
                     player.play();
                 }
                 offset = at;
+            }
+            Ok(AudioCmd::Upgrade { generation, decoder, shared: s, at, seekable: s_seekable }) => {
+                if generation != current || generation != status.wanted_gen.load(Ordering::Relaxed) {
+                    s.cancel();
+                    continue;
+                }
+                log::debug!("audio: upgrade generation {generation} to hi-res stream at {at:?}");
+                seek_seq += 1;
+                if output.sink.is_none() || output.default_changed() {
+                    output.open(tx.clone(), &status);
+                }
+                let paused = player.is_paused();
+                if !paused && !player.empty() {
+                    fade_out.store(QUICK_FADE_MS, Ordering::Relaxed);
+                    let old = std::mem::replace(&mut player, Player::connect_new(&output.mixer));
+                    fading.push(Fading { player: old, offset, shared: shared.take(), out: fade_out.clone(), waiting: None, natural: false });
+                } else {
+                    player.clear();
+                    if let Some(old) = shared.take() {
+                        old.cancel();
+                    }
+                }
+                let gain = norm_gain(&status, Some(&*s));
+                log::info!("audio: hi-res loudness {:?} dB, normalization gain {gain:.3}", s.loudness_db);
+                player.set_volume(slider_gain(&status, f32::from_bits(status.volume.load(Ordering::Relaxed))) * gain);
+                fade_out = Arc::new(AtomicU32::new(0));
+                let fade_in = if !paused { QUICK_FADE_MS } else { 0 };
+                let analysis = s.tempo.clone();
+                status.bpm.store(s.tempo.get().copied().flatten().unwrap_or(0.0).to_bits(), Ordering::Relaxed);
+                player.append(Meter::new(decoder, status.clone(), fade_in, fade_out.clone(), false, analysis));
+                if !paused {
+                    player.play();
+                }
+                if s.duration_ms > 0 {
+                    status.duration_ms.store(s.duration_ms, Ordering::Relaxed);
+                }
+                length = status.duration();
+                shared = Some(s);
+                offset = at;
+                seekable = s_seekable;
+                ending_sent = false;
+                status.set_position(at.as_millis() as u64);
             }
             Ok(AudioCmd::Pause) => {
                 log::debug!("audio: pause at {:?}", offset + player.get_pos());
@@ -1170,7 +1223,16 @@ fn run(
                 let len = if f.natural { mix_ms(&status, length) } else { status.crossfade_ms.load(Ordering::Relaxed) };
                 log::debug!("audio: next song not ready, fading out over {} ms", f.start(len, status.automix.load(Ordering::Relaxed)));
             }
-            fading.retain(|f| !f.player.empty());
+            fading.retain(|f| {
+                if f.player.empty() {
+                    if let Some(s) = &f.shared {
+                        s.cancel();
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
             if fading.is_empty() {
                 status.mix_active.store(false, Ordering::Relaxed);
                 wake();

@@ -40,6 +40,7 @@ pub const SETTINGS: &[u8] = include_bytes!("../../assets/icon/glyphs/settings.pn
 pub const PERSON_CIRCLE: &[u8] = include_bytes!("../../assets/icon/glyphs/person_circle.png");
 pub const MENU: &[u8] = include_bytes!("../../assets/icon/glyphs/menu.png");
 pub const SPARKLES: &[u8] = include_bytes!("../../assets/icon/glyphs/sparkles.png");
+pub const WAVE: &[u8] = include_bytes!("../../assets/icon/glyphs/wave.png");
 
 /// The size the desktop app draws an Apple silhouette at (`DesktopAppleGlyph`).
 pub const APPLE_GLYPH: f32 = 24.0;

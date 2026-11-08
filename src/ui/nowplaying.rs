@@ -875,7 +875,14 @@ fn paint_quality_icon(ui: &Ui, center: egui::Pos2, height: f32, atmos: bool, tin
 
 /// How wide the quality mark is, so a line can leave room for it.
 pub(super) fn audio_badge_width(ui: &Ui, app: &App, small: bool) -> f32 {
-    let Some((_, info)) = app.audio_info.as_ref() else { return 0.0 };
+    let Some((_, info)) = app.audio_info.as_ref() else {
+        if app.upgrading_quality {
+            let label = "Upgrading quality";
+            let text = widgets::galley(ui, label, badge_font(small), Color32::WHITE, 200.0).size().x;
+            return text + glyph_side(small) + 5.0;
+        }
+        return 0.0;
+    };
     let label = if app.mixing() { "Mixing" } else { info.badge() };
     let text = widgets::galley(ui, label, badge_font(small), Color32::WHITE, 200.0).size().x;
     if has_quality_glyph(info) { text + glyph_side(small) * quality_icon_aspect(info.atmos) + 5.0 } else { text }
@@ -884,6 +891,28 @@ pub(super) fn audio_badge_width(ui: &Ui, app: &App, small: bool) -> f32 {
 /// The quality mark — a glyph and the stream's name, tinted with the theme — drawn at
 /// `at`; a click opens its details. Returns how much room it took.
 pub(super) fn audio_badge(app: &App, ui: &mut Ui, at: egui::Pos2, small: bool) -> f32 {
+    if app.audio_info.is_none() && app.upgrading_quality {
+        let font = badge_font(small);
+        let gh = glyph_side(small);
+        let now = ui.input(|i| i.time);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        let pulse = ((now * 3.5).sin() * 0.5 + 0.5) as f32;
+        let alpha = 0.35 + 0.65 * pulse;
+        let accent = app.accent_color();
+        let ink = theme::with_alpha(theme::lerp_color(accent, Color32::WHITE, 0.20), alpha);
+        let mark = theme::with_alpha(accent, alpha);
+        let g = widgets::galley(ui, "Upgrading quality", font, ink, 200.0);
+        let w = audio_badge_width(ui, app, small);
+        let h = g.size().y.max(gh);
+        let rect = Rect::from_min_size(at, vec2(w, h));
+        let resp = ui.interact(rect, ui.scope_id().with("audio-badge-upgrading"), Sense::hover());
+        named(resp, "Audio quality").on_hover_text("Checking hi-res addons and upgrading audio quality...");
+        let mut x = at.x;
+        super::glyphs::draw(ui, pos2(x + gh / 2.0, at.y + h / 2.0), gh, super::glyphs::WAVE, mark);
+        x += gh + 5.0;
+        ui.painter().galley(pos2(x, at.y + (h - g.size().y) / 2.0), g, ink);
+        return w;
+    }
     let Some((_, info)) = app.audio_info.as_ref() else { return 0.0 };
     let font = badge_font(small);
     // A mix in progress wears its own name over the quality mark; the details keep the truth.
@@ -917,11 +946,25 @@ pub(super) fn audio_badge(app: &App, ui: &mut Ui, at: egui::Pos2, small: bool) -
 
 /// Just the quality glyph, centred on `center`, for the mini player's artist line.
 pub(super) fn audio_badge_icon_width(app: &App, small: bool) -> f32 {
+    if app.audio_info.is_none() && app.upgrading_quality {
+        return glyph_side(small);
+    }
     let Some((_, info)) = app.audio_info.as_ref().filter(|(_, i)| has_quality_glyph(i)) else { return 0.0 };
     glyph_side(small) * quality_icon_aspect(info.atmos)
 }
 
 pub(super) fn audio_badge_icon(app: &App, ui: &mut Ui, center: egui::Pos2, small: bool) {
+    if app.audio_info.is_none() && app.upgrading_quality {
+        let gh = glyph_side(small);
+        let now = ui.input(|i| i.time);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        let pulse = ((now * 3.5).sin() * 0.5 + 0.5) as f32;
+        let alpha = 0.35 + 0.65 * pulse;
+        let accent = app.accent_color();
+        let mark = theme::with_alpha(accent, alpha);
+        super::glyphs::draw(ui, center, gh, super::glyphs::WAVE, mark);
+        return;
+    }
     let Some((_, info)) = app.audio_info.as_ref().filter(|(_, i)| has_quality_glyph(i)) else { return };
     let gh = glyph_side(small);
     let rect = Rect::from_center_size(center, vec2(gh * quality_icon_aspect(info.atmos), gh));

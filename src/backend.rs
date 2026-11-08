@@ -293,6 +293,8 @@ pub enum Resp {
     PlayError { generation: u64, msg: String },
     /// What `generation` is playing from a hi-res source (codec, rate, depth, size).
     AudioInfo { generation: u64, info: crate::hires::Info },
+    /// Whether `generation` is actively attempting to upgrade quality from hi-res addons.
+    UpgradingQuality { generation: u64, active: bool },
     /// Play `generation` is the song version of the music video that was asked for
     /// (`None`: that song wouldn't start, and the music video plays after all).
     PlayingAs { generation: u64, listed: String, song: Option<Track> },
@@ -1119,6 +1121,7 @@ impl Backend {
         let seek = !at.is_zero();
         let shared2 = shared.clone();
         let report = (report && self.is_logged_in() && reports_plays()).then(|| (self.clone(), video_id.to_owned()));
+        let upgrade = shared2.info.is_none().then(|| (self.clone(), video_id.to_owned(), meta));
         let open = move || -> anyhow::Result<crate::audio::TrackDecoder> {
             let mut d = stream::decoder(shared.clone(), seek)?;
             if seek {
@@ -1148,6 +1151,12 @@ impl Backend {
                             }
                             Err(e) => log::warn!("couldn't report play of {id}: {e:#}"),
                         }
+                    });
+                }
+                if let Some((this, id, Some(track))) = upgrade.filter(|_| audio.status.wanted_gen.load(Ordering::Relaxed) == generation) {
+                    let rt = this.rt.clone();
+                    rt.spawn(async move {
+                        this.try_upgrade_hires(id, generation, track).await;
                     });
                 }
             }
@@ -1307,7 +1316,7 @@ impl Backend {
         if let Some(shared) = tokio::task::spawn_blocking(move || crate::downloads::open(&id)).await? {
             return Ok(shared);
         }
-        let (source, s) = self.resolve(video_id, false, track, true).await?;
+        let (source, s) = self.resolve(video_id, false, track, false).await?;
         // Atmos arrives already decoded: a complete buffer, no download to run.
         if let Some(data) = s.data {
             return Ok(Shared::from_bytes_with_format(data, s.duration_ms, s.loudness_db, s.format, s.info));
@@ -1501,6 +1510,128 @@ impl Backend {
         None
     }
 
+    /// After playback starts on YouTube, opportunistically look for a hi-res
+    /// rendition from addons and upgrade the playing stream in place.
+    async fn try_upgrade_hires(&self, video_id: String, generation: u64, track: Track) {
+        if self.audio.status.wanted_gen.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        if self.reverted.lock().unwrap().contains(&video_id) {
+            return;
+        }
+        let hires = self.hires.read().unwrap().clone();
+        if hires.is_empty() {
+            return;
+        }
+
+        let _ = self.tx.send(Resp::UpgradingQuality { generation, active: true });
+        self.wake();
+        struct UpgradeGuard<'a> {
+            backend: &'a Backend,
+            generation: u64,
+        }
+        impl<'a> Drop for UpgradeGuard<'a> {
+            fn drop(&mut self) {
+                let _ = self.backend.tx.send(Resp::UpgradingQuality { generation: self.generation, active: false });
+                self.backend.wake();
+            }
+        }
+        let _guard = UpgradeGuard { backend: self, generation };
+
+        let started = std::time::Instant::now();
+        let stream_res = match tokio::time::timeout(HIRES_WAIT, self.from_hires(&hires, &track)).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                log::info!("{video_id}: no hi-res source has a copy ({:.1}s)", started.elapsed().as_secs_f32());
+                return;
+            }
+            Err(_) => {
+                log::info!("{video_id}: the hi-res sources gave no answer in {HIRES_WAIT:?}");
+                return;
+            }
+        };
+
+        if self.audio.status.wanted_gen.load(Ordering::Relaxed) != generation {
+            log::debug!("hi-res upgrade for {video_id} dropped: generation changed");
+            return;
+        }
+        if self.reverted.lock().unwrap().contains(&video_id) {
+            log::debug!("hi-res upgrade for {video_id} dropped: reverted to YouTube");
+            return;
+        }
+
+        if let Some(info) = stream_res.info.as_ref() {
+            log::info!("{video_id}: upgrading to {} audio from {}", info.badge(), info.source);
+        }
+
+        let (source, s) = (Source::HiRes, stream_res);
+        let shared = if let Some(data) = s.data {
+            Shared::from_bytes_with_format(data, s.duration_ms, s.loudness_db, s.format.clone(), s.info.clone())
+        } else {
+            let shared = Shared::new(s.size, s.duration_ms, s.loudness_db, s.format.clone(), s.info.clone(), false);
+            self.rt.spawn(stream::download(
+                self.http(),
+                s.url,
+                s.user_agent,
+                shared.clone(),
+                Some(self.refresher(source, &video_id, s.format.clone(), Some(track.clone()))),
+                s.ranging,
+            ));
+            shared
+        };
+
+        let pos = self.audio.status.position();
+        let sampled = std::time::Instant::now();
+        let is_playing = self.audio.status.playing.load(Ordering::Relaxed);
+        let shared_decode = shared.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            let seekable = !pos.is_zero();
+            let mut d = stream::decoder(shared_decode.clone(), seekable)?;
+            let actual_pos = if is_playing { pos + sampled.elapsed() } else { pos };
+            if seekable {
+                rodio::Source::try_seek(&mut d, actual_pos).map_err(|e| anyhow::anyhow!("seek: {e}"))?;
+            }
+            Ok::<_, anyhow::Error>((d, actual_pos, seekable))
+        })
+        .await;
+
+        let (decoder, actual_pos, seekable) = match res {
+            Ok(Ok(tuple)) => tuple,
+            Ok(Err(e)) => {
+                log::warn!("failed to decode hi-res stream for {video_id} ({e:#}); continuing with standard quality");
+                return;
+            }
+            Err(e) => {
+                log::warn!("hi-res decoder task failed for {video_id} ({e:#}); continuing with standard quality");
+                return;
+            }
+        };
+
+        if self.audio.status.wanted_gen.load(Ordering::Relaxed) != generation {
+            shared.cancel();
+            return;
+        }
+        if self.reverted.lock().unwrap().contains(&video_id) {
+            shared.cancel();
+            return;
+        }
+
+        *self.current.lock().unwrap() = Some((video_id, shared.clone()));
+        if let Some(mut info) = shared.info.clone() {
+            info.sample_rate = Some(rodio::Source::sample_rate(&decoder).get());
+            info.channels = Some(rodio::Source::channels(&decoder).get() as u8);
+            let _ = self.tx.send(Resp::AudioInfo { generation, info });
+            self.wake();
+        }
+        self.audio.send(AudioCmd::Upgrade {
+            generation,
+            decoder,
+            shared,
+            at: actual_pos,
+            seekable,
+        });
+    }
+
     /// Get the signed-in playback path ready in the background, so the first Premium-only
     /// or age-restricted song doesn't wait for the Premium check or the solver setup that
     /// each new YouTube player version needs (~5 s, every few days).
@@ -1591,6 +1722,23 @@ impl Backend {
     /// Allow hi-res sources again for a song that was sent back to YouTube audio.
     pub fn upgrade_quality(&self, video_id: &str) {
         self.reverted.lock().unwrap().remove(video_id);
+    }
+
+    /// Upgrade the active song if it is playing standard YouTube quality and not reverted.
+    pub fn try_upgrade_active(&self, generation: u64, track: Option<Track>) {
+        let (video_id, has_hires) = {
+            let current = self.current.lock().unwrap();
+            let Some((id, shared)) = current.as_ref() else { return };
+            (id.clone(), shared.info.is_some())
+        };
+        if has_hires {
+            return;
+        }
+        let Some(track) = track else { return };
+        let this = self.clone();
+        self.rt.spawn(async move {
+            this.try_upgrade_hires(video_id, generation, track).await;
+        });
     }
 
     /// Point the hi-res sources at the links in `links`, one per line (empty: none). The

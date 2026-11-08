@@ -409,6 +409,8 @@ pub struct App {
     /// What the playing stream is (codec, rate, depth, size), when a hi-res source
     /// supplied it, with the generation it belongs to.
     audio_info: Option<(u64, crate::hires::Info)>,
+    /// Whether this playback generation is actively checking addons to upgrade audio quality.
+    upgrading_quality: bool,
     accent: Color32,
     /// Selected theme preset (see `preset.rs`).
     theme_id: String,
@@ -718,6 +720,7 @@ impl App {
             hires_focus: false,
             prefer_atmos,
             audio_info: None,
+            upgrading_quality: false,
             art_changed: -10.0,
             accent: theme::RED,
             theme_id: crate::preset::DEFAULT_ID.to_owned(),
