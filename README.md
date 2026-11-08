@@ -19,10 +19,6 @@
   </p>
 </div>
 
-<p align="center">
-  <img src="docs/readme/screenshot-1.png" alt="BitChord player with artwork, lyrics and controls" width="100%">
-</p>
-
 > BitChord is an independent, unofficial client. It is not affiliated with, endorsed by, or connected to YouTube, Google, or Apple.
 
 ## Screenshots
