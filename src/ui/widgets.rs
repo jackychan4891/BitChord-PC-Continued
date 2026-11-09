@@ -618,6 +618,11 @@ pub fn song_menu(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, act
 
 /// The song menu's items, for menus that add their own (now playing's options).
 pub fn song_actions(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, acts: &mut Vec<Action>) {
+    if let Some(id) = t.album.as_ref().and_then(|album| album.id.as_ref()).filter(|id| !id.is_empty())
+        && menu_action(ui, Some(icon::MUSIC), "Open album")
+    {
+        acts.push(Action::Open(Target::Album(id.clone())));
+    }
     if menu_action_star(ui, liked, if liked { "Remove like" } else { "Like song" }) {
         acts.push(Action::Like(t.clone(), !liked));
     }
