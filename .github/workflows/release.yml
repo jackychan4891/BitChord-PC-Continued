@@ -46,6 +46,16 @@ jobs:
       - name: Build ARM64
         run: cargo build --release --locked --target aarch64-pc-windows-msvc
 
+      # webview2-com-sys extracts WebView2Loader.dll into its build OUT_DIR rather than
+      # next to the exe; the installer expects it in BinDir, so copy it there per arch.
+      - name: Stage WebView2Loader.dll
+        run: |
+          foreach ($t in @(@{ bin = "target\release"; arch = "x64" }, @{ bin = "target\aarch64-pc-windows-msvc\release"; arch = "arm64" })) {
+            $dll = Get-ChildItem -Path "$($t.bin)\build\webview2-com-sys-*\out\$($t.arch)\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $dll) { Write-Error "WebView2Loader.dll ($($t.arch)) not found under $($t.bin)\build"; exit 1 }
+            Copy-Item $dll.FullName "$($t.bin)\WebView2Loader.dll" -Force
+          }
+
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
