@@ -6,7 +6,7 @@ use egui::{Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use super::widgets::{self, icon_button, named, text_at};
 use super::{Action, App, NpTab, Repeat, karaoke};
-use crate::lyrics::{Lyrics, Provider, Sync, SyncKind};
+use crate::lyrics::{Lyrics, Sync, SyncKind};
 use crate::shader::Params;
 use crate::theme::{self, icon};
 
@@ -563,6 +563,8 @@ fn decorations<'a>(
 ) -> (Vec<Option<karaoke::Roman<'a>>>, Vec<Option<&'a str>>) {
     let extras = extras.filter(|(v, s, t, _)| v == id && s == lyrics.provider.key() && t == target).map(|(_, _, _, e)| e);
     let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+    // A blank romanization would draw an empty pill box with nothing inside it.
+    let worth = |r: &str, l: &crate::lyrics::Line| !r.trim().is_empty() && !same(r, &l.text);
     let roman = lyrics
         .lines
         .iter()
@@ -571,11 +573,11 @@ fn decorations<'a>(
             if !show_roman || l.instrumental {
                 return None;
             }
-            if let Some(r) = l.romanization.as_deref().filter(|r| !same(r, &l.text)) {
+            if let Some(r) = l.romanization.as_deref().filter(|r| worth(r, l)) {
                 return Some(if l.timed_roman.is_empty() { karaoke::Roman::Text(r) } else { karaoke::Roman::Timed(&l.timed_roman, r) });
             }
             let r = extras?.roman.get(i)?.as_deref()?;
-            (!same(r, &l.text)).then_some(karaoke::Roman::Text(r))
+            worth(r, l).then_some(karaoke::Roman::Text(r))
         })
         .collect();
     let trans = lyrics
@@ -836,7 +838,7 @@ fn has_quality_glyph(info: &crate::hires::Info) -> bool {
     info.atmos || info.lossless()
 }
 
-/// Apple's own marks, from its "Symbols used in Music" page.
+/// Apple's lossless wave, and Dolby's own Atmos lockup from its newsroom asset page.
 fn quality_icon(atmos: bool) -> &'static [u8] {
     if atmos {
         include_bytes!("../../assets/quality/atmos.png")
@@ -845,40 +847,56 @@ fn quality_icon(atmos: bool) -> &'static [u8] {
     }
 }
 
+/// The whole mark: Dolby's lockup carries its own words, so it stands alone.
 fn quality_icon_aspect(atmos: bool) -> f32 {
-    if atmos { 78.0 / 60.0 } else { 86.0 / 60.0 }
+    if atmos { 665.0 / 95.0 } else { 86.0 / 60.0 }
+}
+
+/// Just the glyph: the double-D cropped off the lockup's left, for the mini player and
+/// the mixing badge where the words come from elsewhere.
+fn quality_mark_aspect(atmos: bool) -> f32 {
+    if atmos { 106.0 / 95.0 } else { 86.0 / 60.0 }
 }
 
 /// The icon as white pixels with its own alpha, so it takes the badge's tint.
-fn quality_icon_texture(ui: &Ui, atmos: bool) -> egui::TextureHandle {
+fn quality_icon_texture(ui: &Ui, atmos: bool, mark: bool) -> egui::TextureHandle {
     let ctx = ui.ctx();
-    let id = egui::Id::new(("quality-icon", atmos));
+    let id = egui::Id::new(("quality-icon", atmos, mark));
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return tex;
     }
     let rgba = image::load_from_memory(quality_icon(atmos)).expect("quality icon").to_rgba8();
+    let rgba = if mark && atmos {
+        image::imageops::crop_imm(&rgba, 0, 0, 106, rgba.height()).to_image()
+    } else {
+        rgba
+    };
     let mut img = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
     for p in &mut img.pixels {
         *p = Color32::from_white_alpha(p.a());
     }
-    let tex = ctx.load_texture(if atmos { "apple-atmos" } else { "apple-lossless" }, img, egui::TextureOptions::LINEAR);
+    let tex = ctx.load_texture(if atmos { "dolby-atmos" } else { "apple-lossless" }, img, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
     tex
 }
 
-fn paint_quality_icon(ui: &Ui, center: egui::Pos2, height: f32, atmos: bool, tint: Color32) {
-    let w = height * quality_icon_aspect(atmos);
+fn paint_quality_icon(ui: &Ui, center: egui::Pos2, height: f32, atmos: bool, tint: Color32, mark: bool) {
+    let w = height * if mark { quality_mark_aspect(atmos) } else { quality_icon_aspect(atmos) };
     let rect = Rect::from_center_size(center, vec2(w, height));
     let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-    ui.painter().image(quality_icon_texture(ui, atmos).id(), rect, uv, tint);
+    ui.painter().image(quality_icon_texture(ui, atmos, mark).id(), rect, uv, tint);
 }
 
 /// How wide the quality mark is, so a line can leave room for it.
 pub(super) fn audio_badge_width(ui: &Ui, app: &App, small: bool) -> f32 {
     let Some((_, info)) = app.audio_info.as_ref() else { return 0.0 };
+    let gh = glyph_side(small);
+    if info.atmos && !app.mixing() {
+        return gh * quality_icon_aspect(true);
+    }
     let label = if app.mixing() { "Mixing" } else { info.badge() };
     let text = widgets::galley(ui, label, badge_font(small), Color32::WHITE, 200.0).size().x;
-    if has_quality_glyph(info) { text + glyph_side(small) * quality_icon_aspect(info.atmos) + 5.0 } else { text }
+    if has_quality_glyph(info) { text + gh * quality_mark_aspect(info.atmos) + 5.0 } else { text }
 }
 
 /// The quality mark — a glyph and the stream's name, tinted with the theme — drawn at
@@ -889,28 +907,34 @@ pub(super) fn audio_badge(app: &App, ui: &mut Ui, at: egui::Pos2, small: bool) -
     // A mix in progress wears its own name over the quality mark; the details keep the truth.
     let g = widgets::galley(ui, if app.mixing() { "Mixing" } else { info.badge() }, font, Color32::WHITE, 200.0);
     let gh = glyph_side(small);
-    let glyph = has_quality_glyph(info);
+    // Dolby's lockup carries its own words, so it stands alone instead of beside them.
+    let lockup = info.atmos && !app.mixing();
+    let glyph = has_quality_glyph(info) && !lockup;
     let w = audio_badge_width(ui, app, small);
-    let h = g.size().y.max(if glyph { gh } else { 0.0 });
+    let h = if lockup { gh } else { g.size().y.max(if glyph { gh } else { 0.0 }) };
     let rect = Rect::from_min_size(at, vec2(w, h));
     let resp = ui.interact(rect, ui.scope_id().with("audio-badge"), Sense::click());
     let resp = named(resp, "Audio quality").on_hover_cursor(egui::CursorIcon::PointingHand);
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     let hover = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || open, 0.12);
     // Lossless and Atmos wear the song's colour; anything lossy stays quiet.
-    let (ink, mark) = if info.lossless() || info.atmos {
+    let (ink, tint) = if info.lossless() || info.atmos {
         let accent = app.accent_color();
         (theme::lerp_color(accent, Color32::WHITE, 0.10 + 0.30 * hover), theme::with_alpha(accent, 0.85 + 0.15 * hover))
     } else {
         (theme::with_alpha(theme::text_dim(), 0.85 + 0.15 * hover), theme::text_dim())
     };
-    let mut x = at.x;
-    if glyph {
-        let icon_w = gh * quality_icon_aspect(info.atmos);
-        paint_quality_icon(ui, pos2(x + icon_w / 2.0, at.y + h / 2.0), gh, info.atmos, mark);
-        x += icon_w + 5.0;
+    if lockup {
+        paint_quality_icon(ui, rect.center(), gh, true, tint, false);
+    } else {
+        let mut x = at.x;
+        if glyph {
+            let icon_w = gh * quality_mark_aspect(info.atmos);
+            paint_quality_icon(ui, pos2(x + icon_w / 2.0, at.y + h / 2.0), gh, info.atmos, tint, true);
+            x += icon_w + 5.0;
+        }
+        ui.painter().galley(pos2(x, at.y + (h - g.size().y) / 2.0), g, ink);
     }
-    ui.painter().galley(pos2(x, at.y + (h - g.size().y) / 2.0), g, ink);
     egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| audio_info_menu(ui, info));
     w
 }
@@ -918,20 +942,20 @@ pub(super) fn audio_badge(app: &App, ui: &mut Ui, at: egui::Pos2, small: bool) -
 /// Just the quality glyph, centred on `center`, for the mini player's artist line.
 pub(super) fn audio_badge_icon_width(app: &App, small: bool) -> f32 {
     let Some((_, info)) = app.audio_info.as_ref().filter(|(_, i)| has_quality_glyph(i)) else { return 0.0 };
-    glyph_side(small) * quality_icon_aspect(info.atmos)
+    glyph_side(small) * quality_mark_aspect(info.atmos)
 }
 
 pub(super) fn audio_badge_icon(app: &App, ui: &mut Ui, center: egui::Pos2, small: bool) {
     let Some((_, info)) = app.audio_info.as_ref().filter(|(_, i)| has_quality_glyph(i)) else { return };
     let gh = glyph_side(small);
-    let rect = Rect::from_center_size(center, vec2(gh * quality_icon_aspect(info.atmos), gh));
+    let rect = Rect::from_center_size(center, vec2(gh * quality_mark_aspect(info.atmos), gh));
     let resp = ui.interact(rect, ui.scope_id().with("audio-badge"), Sense::click());
     let resp = named(resp, "Audio quality").on_hover_cursor(egui::CursorIcon::PointingHand);
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     let hover = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || open, 0.12);
     let accent = app.accent_color();
-    let mark = theme::with_alpha(accent, 0.85 + 0.15 * hover);
-    paint_quality_icon(ui, center, gh, info.atmos, mark);
+    let tint = theme::with_alpha(accent, 0.85 + 0.15 * hover);
+    paint_quality_icon(ui, center, gh, info.atmos, tint, true);
     egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| audio_info_menu(ui, info));
 }
 
@@ -944,13 +968,20 @@ fn audio_info_menu(ui: &mut Ui, info: &crate::hires::Info) {
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
     let g = widgets::galley(ui, info.badge(), theme::semibold(17.0), theme::text(), 200.0);
     let mut x = r.left() + 12.0;
-    if has_quality_glyph(info) {
-        let ih = 17.0;
-        let icon_w = ih * quality_icon_aspect(info.atmos);
-        paint_quality_icon(ui, pos2(x + icon_w / 2.0, r.center().y), ih, info.atmos, theme::text());
-        x += icon_w + 8.0;
+    if info.atmos {
+        // The lockup says "Dolby Atmos" itself.
+        let ih = 15.0;
+        let icon_w = ih * quality_icon_aspect(true);
+        paint_quality_icon(ui, pos2(x + icon_w / 2.0, r.center().y), ih, true, theme::text(), false);
+    } else {
+        if has_quality_glyph(info) {
+            let ih = 17.0;
+            let icon_w = ih * quality_mark_aspect(false);
+            paint_quality_icon(ui, pos2(x + icon_w / 2.0, r.center().y), ih, false, theme::text(), true);
+            x += icon_w + 8.0;
+        }
+        ui.painter().galley(pos2(x, r.center().y - g.size().y / 2.0), g.clone(), theme::text());
     }
-    ui.painter().galley(pos2(x, r.center().y - g.size().y / 2.0), g.clone(), theme::text());
     menu_divider(ui);
     info_row(ui, "Source", if info.source.is_empty() { &info.host } else { &info.source });
     if !info.codec.is_empty() {

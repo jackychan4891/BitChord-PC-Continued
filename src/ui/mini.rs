@@ -179,6 +179,10 @@ pub struct Mini {
     shown_at: f64,
     /// The scale the size limits were last sent at: winit keeps them in pixels.
     limits_scale: Option<f32>,
+    /// The window level last sent, and when: a topmost strip is re-stamped now and
+    /// then, since another window's z-order change can knock it down.
+    level: Option<WindowLevel>,
+    level_at: f64,
     screens: Screens,
     /// The full window's normal place after coming back maximized, until it's restored down.
     restored_max: Option<Place>,
@@ -196,6 +200,8 @@ impl Mini {
             wanted: None,
             shown_at: f64::NEG_INFINITY,
             limits_scale: None,
+            level: None,
+            level_at: f64::NEG_INFINITY,
             screens: SYSTEM,
             restored_max: None,
         }
@@ -293,9 +299,26 @@ impl Mini {
 
     pub fn set_pinned(&mut self, ctx: &egui::Context, on: bool) {
         self.pinned = on;
-        if self.active() {
-            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if on { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }));
+        self.apply_level(ctx);
+    }
+
+    /// Push the level the current mode asks for. A pinned strip is re-stamped every
+    /// couple of seconds: raising another window can drop it out of the topmost band.
+    fn apply_level(&mut self, ctx: &egui::Context) {
+        let want = if self.active() && self.pinned { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal };
+        let now = ctx.input(|i| i.time);
+        let since = now - self.level_at;
+        let stale = want == WindowLevel::AlwaysOnTop && since > 2.0;
+        if self.level == Some(want) && !stale {
+            // Wake for the next re-stamp even when nothing else is animating.
+            if want == WindowLevel::AlwaysOnTop {
+                ctx.request_repaint_after(Duration::from_secs_f64((2.0 - since).max(0.2)));
+            }
+            return;
         }
+        self.level = Some(want);
+        self.level_at = now;
+        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(want));
     }
 
     /// Once a frame: drive a switch, note the strip's place, keep the size limits right.
@@ -308,6 +331,8 @@ impl Mini {
         if self.restored_max.is_some() && self.switch.is_none() && ctx.input(|i| i.viewport().maximized == Some(false)) {
             self.restored_max = None;
         }
+        // The strip keeps the level its pin asks for; the full window never stays on top.
+        self.apply_level(ctx);
         let (minimized, maximized) = ctx.input(|i| (i.viewport().minimized == Some(true), i.viewport().maximized == Some(true)));
         // Win+Up or a drag onto the screen's top edge: the strip has one height.
         if self.showing() && maximized && !minimized {
@@ -398,13 +423,12 @@ impl Mini {
                     corner_place(area, frame, scale, ctx.zoom_factor())
                 }
             };
-            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if self.pinned { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }));
-            self.go(ctx, target, false, true)
-        } else {
+            self.apply_level(ctx);
+            self.go(ctx, target, false, true)        } else {
             if let Some(p) = now_place {
                 self.place = Some(clamp_size(p));
             }
-            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
+            self.apply_level(ctx);
             // Kept until the window has settled: a save meanwhile still writes it.
             match self.full {
                 Some((p, max)) if self.visible(p, frame) => self.go(ctx, p, max, false),
@@ -550,8 +574,9 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
         if resp.has_focus() {
             ui.painter().rect_stroke(b.shrink(1.0), 6.0, egui::Stroke::new(1.5, theme::text()), egui::StrokeKind::Inside);
         }
-        // Not while still hidden: a quick click there was meant for the strip.
-        resp.clicked() && (reveal > 0.5 || resp.has_focus())
+        // A click that landed on the button counts even before the reveal finishes;
+        // only a press the drag area already claimed stays a window move.
+        resp.clicked() && (reveal > 0.5 || resp.has_focus() || resp.hovered())
     };
     // The system's frame has its own close button.
     if titlebar::custom() && top_btn(ui, icon::X, "close", "Close", true, false) {

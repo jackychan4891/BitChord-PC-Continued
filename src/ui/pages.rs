@@ -49,15 +49,23 @@ pub fn page(app: &mut App, ui: &mut Ui, now: f64) {
     ui.set_opacity(0.15 + 0.85 * t);
     let page = app.page.clone();
     // Each page (each album, each search) keeps its own scroll position.
-    let mut area = egui::ScrollArea::vertical().id_salt(("page", &page)).auto_shrink(false);
-    // At the window's right edge: clear of where it resizes the window.
-    ui.spacing_mut().scroll.bar_outer_margin += super::titlebar::edge_inset();
+    let mut area = egui::ScrollArea::vertical().id_salt(("page", &page)).auto_shrink(false)
+        // The bar is drawn here instead, from the window's top edge: egui's own one is
+        // clipped to the scroll area, which starts below the title bar.
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    let drag_id = egui::Id::new(("page-scroll", &page));
+    // A bar drag lands here for one frame; the area keeps the offset in its own state after.
+    if let Some(y) = ui.ctx().data_mut(|d| d.remove_temp::<f32>(drag_id.with("to"))) {
+        area = area.vertical_scroll_offset(y);
+    }
     // Dev hook: YTM_SCROLL=<px> pins the page scroll, for screenshots of lower sections.
     if let Some(y) = super::dev_var("YTM_SCROLL").and_then(|v| v.parse::<f32>().ok()) {
         area = area.vertical_scroll_offset(y);
     }
     let out = area.show(ui, |ui| {
-        ui.set_max_width((ui.available_width() - 20.0).max(0.0));
+        // The panel now reaches the window side so the floating bar sits flush; the
+        // content keeps its measured right edge instead of following the panel.
+        ui.set_max_width((ui.available_width() - 48.0).max(0.0));
         ui.add_space(18.0 * (1.0 - t));
         match &page {
             Page::Home => home(app, ui, now),
@@ -75,6 +83,7 @@ pub fn page(app: &mut App, ui: &mut Ui, now: f64) {
         ui.add_space(96.0);
     });
     selection_bar(app, ui.ctx(), &page, out.inner_rect);
+    page_scrollbar(ui, &page, &out);
     // Infinite scroll on home: fetch the next shelves when nearing the bottom.
     if page == Page::Home {
         let remaining = out.content_size.y - (out.state.clamped_offset().y + out.inner_rect.height());
@@ -90,6 +99,48 @@ pub fn page(app: &mut App, ui: &mut Ui, now: f64) {
                 app.backend.request(crate::backend::Req::HomeMore(token));
             }
         }
+    }
+}
+
+/// The page's scrollbar: a thumb on the window's right edge running from its top to the
+/// page's bottom, so the title bar's margin doesn't cut it short. A drag hands the offset
+/// back for one frame; the scroll area keeps it in its own state after that.
+fn page_scrollbar(ui: &mut Ui, page: &Page, out: &egui::scroll_area::ScrollAreaOutput<()>) {
+    let ctx = ui.ctx();
+    let viewport = out.inner_rect.height();
+    let content = out.content_size.y;
+    let max = content - viewport;
+    if max <= 1.0 || viewport <= 0.0 {
+        return;
+    }
+    let screen = ctx.content_rect();
+    let width = 10.0;
+    let track = Rect::from_min_max(pos2(screen.right() - width, screen.top()), pos2(screen.right(), out.inner_rect.bottom()));
+    let thumb_h = (viewport / content * track.height()).clamp(28.0, track.height());
+    let travel = (track.height() - thumb_h).max(0.0);
+    let off = out.state.clamped_offset().y.clamp(0.0, max);
+    let thumb = Rect::from_min_size(pos2(track.left() + 2.0, track.top() + off / max * travel), vec2(width - 4.0, thumb_h));
+    let id = egui::Id::new(("page-scroll", page));
+    let resp = ui.interact(track.expand2(vec2(5.0, 0.0)), id, Sense::click_and_drag());
+    let to = if resp.dragged() && travel > 0.0 {
+        Some((off + resp.drag_delta().y * max / travel).clamp(0.0, max))
+    } else if resp.clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+        && !thumb.contains(p)
+    {
+        Some(((p.y - track.top() - thumb_h * 0.5) / travel.max(1.0) * max).clamp(0.0, max))
+    } else {
+        None
+    };
+    if let Some(y) = to {
+        ctx.data_mut(|d| d.insert_temp(id.with("to"), y));
+    }
+    let active = resp.dragged() || resp.hovered() || out.state.velocity().y.abs() > 1.0;
+    let lift = theme::anim_bool(ctx, id.with("lift"), active, 0.15);
+    ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, id))
+        .rect_filled(thumb, (width - 4.0) * 0.5, theme::with_alpha(theme::text(), 0.22 + 0.33 * lift));
+    if to.is_some() || lift > 0.0 && lift < 1.0 {
+        ctx.request_repaint();
     }
 }
 

@@ -30,9 +30,17 @@ impl App {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
         let start_ms = now - self.audio.status.position().as_millis() as i64;
         let dur = self.audio.status.duration_ms.load(Ordering::Relaxed) as i64;
+        // The full quality line the player's track-info shows; YouTube's own audio is
+        // the plain compressed one, so it has no detail numbers.
+        let quality = self.audio_info.as_ref().map_or_else(|| "High".to_owned(), |(_, i)| i.details_line());
         // Position ticks every 100 ms; only a jump of 2 s or more is a real seek.
         let same = match (track, &self.discord_sent) {
-            (Some(t), Some(b)) => b.video_id == t.id && (start_ms - b.start_ms).abs() < 2000 && b.end_ms.is_some() == (dur > 0),
+            (Some(t), Some(b)) => {
+                b.video_id == t.id
+                    && (start_ms - b.start_ms).abs() < 2000
+                    && b.end_ms.is_some() == (dur > 0)
+                    && b.quality.as_deref() == Some(quality.as_str())
+            }
             (None, None) => true,
             _ => false,
         };
@@ -45,6 +53,7 @@ impl App {
             artist: t.artist_line(),
             album: t.album.as_ref().map(|a| a.name.clone()),
             art: backend::art_url(t),
+            quality: Some(quality),
             start_ms,
             end_ms: (dur > 0).then_some(start_ms + dur),
         });

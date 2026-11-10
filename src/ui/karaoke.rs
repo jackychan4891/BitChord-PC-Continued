@@ -1137,6 +1137,8 @@ impl View {
                 0.0
             };
             let text_alpha = 0.6 * lerp(dim, 1.0, text_lit);
+            // The pill belongs to its line: it fades out with the line's text.
+            let fade = lerp(dim, 1.0, text_lit);
             if b.instrumental {
                 animating |= paint_instrumental(&painter, &cfg, b, &xf, t, line_w - cfg.size * 0.5);
             } else if blur > 0.05 {
@@ -1164,7 +1166,7 @@ impl View {
                     .collect();
                 let words: Vec<(&Word, f32)> = b.words.iter().map(|w| (w, if w.bg { dim * 0.78 } else { dim })).chain(deco_words).collect();
                 // The romanization pill is part of the line, so it's blurred with it.
-                let pills: Vec<(Rect, f32)> = b.decos.iter().filter(|d| d.pill).map(|d| (d.rect, cfg.rem())).collect();
+                let pills: Vec<(Rect, f32, f32)> = b.decos.iter().filter(|d| d.pill).map(|d| (d.rect, cfg.rem(), fade)).collect();
                 if let Some((tex, rr, uv)) = self.glow.blurred_line(&ctx, (f.key, i), r, &words, &texts, &pills, scale, atlas, ppp) {
                     // Rendered at the line's scale; snapped so it lands 1:1 on screen pixels.
                     let to = xf.rect(rr);
@@ -1181,7 +1183,7 @@ impl View {
                     if d.pill {
                         let r = dxf.rect(d.rect);
                         let radius = (cfg.rem() * scale).min(255.0) as u8;
-                        painter.rect(r, radius, theme::with_alpha(Color32::WHITE, 0.05 * a), egui::Stroke::new(1.0, theme::with_alpha(Color32::WHITE, 0.1 * a)), egui::StrokeKind::Inside);
+                        painter.rect(r, radius, theme::with_alpha(Color32::WHITE, 0.05 * a * fade), egui::Stroke::new(1.0, theme::with_alpha(Color32::WHITE, 0.1 * a * fade)), egui::StrokeKind::Inside);
                     }
                     match &d.body {
                         DecoBody::Timed { words, groups } => {
@@ -1815,9 +1817,9 @@ pub struct GlowJob {
     rtl: bool,
     /// Blur radius in points (CSS: std deviation = radius / 2).
     radius: f32,
-    /// Romanization pills under the text (box, corner radius): `rgba(255,255,255,.05)` with
-    /// a 1px `rgba(255,255,255,.1)` border.
-    pills: Vec<(Rect, f32)>,
+    /// Romanization pills under the text (box, corner radius, alpha): `rgba(255,255,255,.05)`
+    /// with a 1px `rgba(255,255,255,.1)` border.
+    pills: Vec<(Rect, f32, f32)>,
     color: Color32,
     /// Placeholder in the paint list, under the word's lit text.
     layer: ShapeIdx,
@@ -1960,7 +1962,7 @@ impl Glow {
         radius: f32,
         words: &[(&Word, f32)],
         texts: &[(Arc<Galley>, Pos2, f32)],
-        pills: &[(Rect, f32)],
+        pills: &[(Rect, f32, f32)],
         scale: f32,
         atlas_size: [usize; 2],
         ppp: f32,
@@ -1971,7 +1973,7 @@ impl Glow {
         let now = ctx.input(|i| i.time);
         let weights: Vec<u8> = words.iter().map(|(_, a)| (a.clamp(0.0, 1.0) * 255.0).round() as u8)
             .chain(texts.iter().map(|(_, _, a)| (a.clamp(0.0, 1.0) * 255.0).round() as u8))
-            .chain(pills.iter().map(|(_, a)| (a.clamp(0.0, 1.0) * 255.0).round() as u8))
+            .chain(pills.iter().map(|(_, _, a)| (a.clamp(0.0, 1.0) * 255.0).round() as u8))
             .collect();
         let step = ((radius * 4.0) as i32, (scale * 1000.0).round() as i32, hash(&weights));
         if let Some((s, r, rect, used)) = self.lines.get_mut(&key)
@@ -2075,8 +2077,8 @@ fn rasterize_glow(atlas: &Coverage, j: &GlowJob, ppp: f32, scratch: &mut Vec<f32
     }
     scratch.clear();
     scratch.resize(w * h, 0.0);
-    for &(r, radius) in &j.pills {
-        paint_pill(scratch, w, h, (r.min - origin) * ppp, r.size() * ppp, radius * ppp, ppp);
+    for &(r, radius, alpha) in &j.pills {
+        paint_pill(scratch, w, h, (r.min - origin) * ppp, r.size() * ppp, radius * ppp, ppp, alpha);
     }
     let (aw, ah) = (atlas.size[0] as f32, atlas.size[1] as f32);
     for &(r, uv, letter, letters, weight) in &j.quads {
@@ -2191,7 +2193,10 @@ fn convolve(src: &[f32], dst: &mut [f32], w: usize, h: usize, k: &[f32], horizon
 
 /// A romanization pill into an alpha bitmap, anti-aliased like egui's rect: the 5% fill
 /// with its 1-point 10% border inside (`min`/`size`/`radius` in bitmap pixels).
-fn paint_pill(buf: &mut [f32], w: usize, h: usize, min: Vec2, size: Vec2, radius: f32, ppp: f32) {
+fn paint_pill(buf: &mut [f32], w: usize, h: usize, min: Vec2, size: Vec2, radius: f32, ppp: f32, alpha: f32) {
+    if alpha <= 0.0 {
+        return;
+    }
     let radius = radius.min(size.x * 0.5).min(size.y * 0.5);
     let half = size * 0.5;
     let centre = min + half;
@@ -2207,8 +2212,8 @@ fn paint_pill(buf: &mut [f32], w: usize, h: usize, min: Vec2, size: Vec2, radius
             let inside = (0.5 - d).clamp(0.0, 1.0);
             let border = inside - (0.5 - (d + ppp)).clamp(0.0, 1.0);
             let px = &mut buf[y * w + x];
-            over(px, 0.05 * inside);
-            over(px, 0.1 * border);
+            over(px, 0.05 * alpha * inside);
+            over(px, 0.1 * alpha * border);
         }
     }
 }

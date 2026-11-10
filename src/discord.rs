@@ -15,9 +15,6 @@ use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 /// as "Listening to <name>" in the profile card.
 const CLIENT_ID: &str = "1521756469433991299";
 
-/// The name the profile card shows, in place of the Discord app's registered name.
-const APP_NAME: &str = "BitChord PC Continued";
-
 const RETRY: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +24,8 @@ pub struct Presence {
     pub artist: String,
     pub album: Option<String>,
     pub art: Option<String>,
+    /// The audio quality mark beside the artist ("Dolby Atmos", "Lossless", …).
+    pub quality: Option<String>,
     /// Unix ms when the song (virtually) started, so Discord draws elapsed time.
     pub start_ms: i64,
     pub end_ms: Option<i64>,
@@ -128,18 +127,21 @@ fn activity(p: &Presence) -> Activity<'_> {
         }
     }
     let url = format!("https://music.youtube.com/watch?v={}", p.video_id);
-    Activity::new()
-        // What the profile card calls the app: the Discord app's own name is fixed by
-        // the client ID, so the activity overrides it.
-        .name(APP_NAME)
+    // Three card lines, the way the player reads: the bold title, the artist, then the
+    // full quality string. The card's bold line is the activity `name` (it overrides the
+    // fixed app name), so the title lives there; details and state carry the rest.
+    let mut act = Activity::new()
+        .name(field(&p.title))
         .activity_type(ActivityType::Listening)
-        .status_display_type(StatusDisplayType::Details)
-        .details(field(&p.title))
-        .details_url(url.clone())
-        .state(field(&p.artist))
+        .status_display_type(StatusDisplayType::Name)
+        .details(field(&p.artist))
         .timestamps(ts)
         .assets(assets)
-        .buttons(vec![Button::new("Listen on YouTube Music", url)])
+        .buttons(vec![Button::new("Listen on YouTube Music", url)]);
+    if let Some(quality) = &p.quality {
+        act = act.state(field(quality));
+    }
+    act
 }
 
 /// Discord rejects text fields shorter than 2 or longer than 128 characters.

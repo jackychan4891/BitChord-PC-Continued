@@ -8,6 +8,10 @@
 use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 
+/// The name the desktop build has always given: the signature service and Wikimedia
+/// both refuse a request that carries no user agent.
+const USER_AGENT: &str = "BitChord-Desktop/1.8 (https://github.com/jackychan4891/BitChord-PC-Continued)";
+
 /// A signature ready to be drawn: pixels whitened, alpha kept, so it reads as ink
 /// over the artist's banner.
 pub struct Signature {
@@ -53,41 +57,91 @@ pub fn key(name: &str) -> String {
         .collect()
 }
 
+/// The artist behind a YouTube channel name: `Billie Eilish - Topic` and
+/// `Billie Eilish VEVO` both mean `Billie Eilish`. The service keys by the artist, so
+/// these suffixes have to go before asking.
+pub fn canonical(name: &str) -> String {
+    const SUFFIXES: [&str; 4] = [" - topic", " - official channel", " - official", " vevo"];
+    let mut s = name.trim();
+    loop {
+        let lower = s.to_ascii_lowercase();
+        let cut = SUFFIXES.iter().find_map(|suffix| lower.strip_suffix(suffix).map(str::len));
+        // A bare trailing "VEVO" (`Billie Eilish VEVO` without the space is rare, but
+        // YouTube writes it) as long as it isn't the whole name.
+        let cut = cut.or_else(|| lower.strip_suffix("vevo").filter(|rest| !rest.trim().is_empty()).map(str::len));
+        match cut {
+            Some(end) => s = s[..end].trim_end(),
+            None => return s.to_owned(),
+        }
+    }
+}
+
 /// Looks one artist up and returns their signature, if the service has a drawable one.
 pub async fn lookup(http: &reqwest::Client, endpoint: &str, name: &str) -> Option<Signature> {
-    if endpoint.is_empty() || key(name).is_empty() {
+    let name = canonical(name);
+    if endpoint.is_empty() || key(&name).is_empty() {
         return None;
     }
     let encoded: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
     let url = request_url(endpoint, &encoded);
-    let body = match http.get(&url).send().await.and_then(|r| r.error_for_status()) {
-        Ok(r) => r.bytes().await.ok()?,
+    let resp = match http.get(&url).header(reqwest::header::USER_AGENT, USER_AGENT).send().await {
+        Ok(r) => r,
         Err(e) => {
-            log::debug!("artist signature: the service did not answer ({e})");
+            log::info!("artist signature: the service did not answer for '{name}' ({e})");
             return None;
         }
     };
+    let status = resp.status();
+    let body = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            log::info!("artist signature: the answer from the service broke off ({e})");
+            return None;
+        }
+    };
+    if !status.is_success() {
+        log::info!("artist signature: the service answered {status} for '{name}'");
+        return None;
+    }
     let root: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
-            log::debug!("artist signature: the answer is not JSON ({e})");
+            log::info!("artist signature: the answer for '{name}' is not JSON ({e})");
             return None;
         }
     };
     let asset = match pick_url(&root) {
         Some(a) => a,
         None => {
-            log::debug!("artist signature: nothing in the answer for '{name}' can be drawn");
+            // Some services only ever answer with a match list: saying so is the
+            // difference between "wrong link" and "they have no signature".
+            let matched = root.get("matches").and_then(Value::as_array).is_some_and(|m| !m.is_empty());
+            log::info!(
+                "artist signature: {} for '{name}'",
+                if matched { "the link matched artists but carries no signature" } else { "nothing in the answer can be drawn" }
+            );
             return None;
         }
     };
-    let bytes = match http.get(&asset).send().await.and_then(|r| r.error_for_status()) {
-        Ok(r) => r.bytes().await.ok()?,
+    let resp = match http.get(&asset).header(reqwest::header::USER_AGENT, USER_AGENT).send().await {
+        Ok(r) => r,
         Err(e) => {
-            log::debug!("artist signature: the asset did not download ({e})");
+            log::info!("artist signature: the asset for '{name}' did not download ({e})");
             return None;
         }
     };
+    let status = resp.status();
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            log::info!("artist signature: the asset for '{name}' broke off ({e})");
+            return None;
+        }
+    };
+    if !status.is_success() {
+        log::info!("artist signature: the asset for '{name}' answered {status}");
+        return None;
+    }
     let img = match image::load_from_memory(&bytes) {
         Ok(i) => i.to_rgba8(),
         Err(e) => {
@@ -199,6 +253,16 @@ mod tests {
     fn keys_ignore_accents_case_and_punctuation() {
         assert_eq!(key("Beyoncé"), "beyonce");
         assert_eq!(key("Tyler, The Creator"), "tylerthecreator");
+    }
+
+    #[test]
+    fn channel_suffixes_are_not_part_of_the_artist() {
+        assert_eq!(canonical("Billie Eilish - Topic"), "Billie Eilish");
+        assert_eq!(canonical("Billie Eilish VEVO"), "Billie Eilish");
+        assert_eq!(canonical("Billie Eilish - Official Channel"), "Billie Eilish");
+        assert_eq!(canonical("Billie Eilish - Official"), "Billie Eilish");
+        assert_eq!(canonical("Billie Eilish"), "Billie Eilish");
+        assert_eq!(canonical("VEVO"), "VEVO");
     }
 
     #[test]

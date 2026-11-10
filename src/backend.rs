@@ -1465,40 +1465,26 @@ impl Backend {
         })
     }
 
-    /// The first of the listener's addons that holds `track`. Every source is asked at
-    /// once, so the fastest copy wins and a slow one doesn't hold the others up. `None`:
-    /// none of them has it, which is a miss rather than a fault.
+    /// The listener's addons, searched together. Atmos leads when the preference is on,
+    /// then hi-res/lossless; `None` when none of them has a copy (a miss, not a fault).
     async fn from_hires(&self, sources: &[Arc<hires::Client>], track: &Track) -> Option<ResolvedStream> {
         let atmos = self.atmos.load(Ordering::Relaxed);
-        let mut tasks = tokio::task::JoinSet::new();
-        for client in sources {
-            let (http, track, client) = (self.http(), track.clone(), client.clone());
-            tasks.spawn(async move {
-                let found = client.find(&http, &track, atmos).await;
-                (client, found)
-            });
-        }
-        while let Some(joined) = tasks.join_next().await {
-            match joined {
-                Ok((_, Ok(Some(found)))) => {
-                    return Some(ResolvedStream {
-                        url: found.url,
-                        size: found.size,
-                        duration_ms: found.duration_ms,
-                        user_agent: hires::USER_AGENT.to_owned(),
-                        loudness_db: None,
-                        format: found.format,
-                        info: Some(found.info),
-                        ranging: stream::Ranging::Header,
-                        data: found.data,
-                    });
-                }
-                Ok((client, Ok(None))) => log::info!("hi-res {}: no copy of \"{}\"", client.host(), track.title),
-                Ok((client, Err(e))) => log::info!("hi-res {}: {e:#}", client.host()),
-                Err(e) => log::info!("hi-res: a lookup stopped: {e}"),
-            }
-        }
-        None
+        let http = self.http();
+        let Some(found) = hires::find_all(&http, sources, track, atmos).await else {
+            log::info!("hi-res: no copy of \"{}\" on {} source(s)", track.title, sources.len());
+            return None;
+        };
+        Some(ResolvedStream {
+            url: found.url,
+            size: found.size,
+            duration_ms: found.duration_ms,
+            user_agent: hires::USER_AGENT.to_owned(),
+            loudness_db: None,
+            format: found.format,
+            info: Some(found.info),
+            ranging: stream::Ranging::Header,
+            data: found.data,
+        })
     }
 
     /// Get the signed-in playback path ready in the background, so the first Premium-only

@@ -991,7 +991,8 @@ impl App {
     /// the service has none for them.
     fn signature_texture(&mut self, ctx: &egui::Context, name: &str) -> Option<egui::TextureHandle> {
         let endpoint = crate::artist_signature::endpoint(&self.signature_api);
-        let canon = crate::artist_signature::key(name);
+        let name = crate::artist_signature::canonical(name);
+        let canon = crate::artist_signature::key(&name);
         if endpoint.is_empty() || canon.is_empty() {
             return None;
         }
@@ -1015,7 +1016,7 @@ impl App {
             return None;
         }
         if self.signature_waiting.insert(key.clone()) {
-            self.backend.request(Req::ArtistSignature { key, endpoint, name: name.to_owned() });
+            self.backend.request(Req::ArtistSignature { key, endpoint, name });
         }
         None
     }
@@ -1295,7 +1296,14 @@ impl eframe::App for App {
             }
             let main_right = ui.available_rect_before_wrap().right();
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().inner_margin(egui::Margin { left: 28, right: 28, top: titlebar::top_margin(14, 42.0), bottom: 0 }))
+                .frame(egui::Frame::new().inner_margin(egui::Margin {
+                    left: 28,
+                    // The page's floating scrollbar rides the panel's right edge: the panel
+                    // reaches the window side so the bar sits flush with it.
+                    right: 0,
+                    top: titlebar::top_margin(14, 42.0),
+                    bottom: 0,
+                }))
                 .show(ui, |ui| {
                     shell::top_bar(self, ui);
                     ui.add_space(2.0);
