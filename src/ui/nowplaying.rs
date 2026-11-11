@@ -279,6 +279,10 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
             ui.painter().rect_filled(art, cr, theme::shade(1.0 - cs.brightness));
         }
     }
+    // A handoff still shows the outgoing song; the stats are the incoming one's.
+    if hold.is_none() {
+        nerd_stats(app, ui, art, round);
+    }
     // Title and artists: 17 semibold over 15 secondary, left-aligned to the art.
     let w = side;
     let x0 = art.left();
@@ -966,12 +970,7 @@ fn audio_info_menu(ui: &mut Ui, info: &crate::hires::Info) {
         info_row(ui, "Bit depth", &format!("{bits}-bit"));
     }
     if let Some(n) = info.channels {
-        let text = match n {
-            1 => "Mono".to_owned(),
-            2 => "Stereo".to_owned(),
-            _ => format!("{n} channels"),
-        };
-        info_row(ui, "Channels", &text);
+        info_row(ui, "Channels", &channels_text(n.into()));
     }
     if info.size > 0 {
         info_row(ui, "Size", &size_text(info.size));
@@ -980,6 +979,48 @@ fn audio_info_menu(ui: &mut Ui, info: &crate::hires::Info) {
         info_row(ui, "Duration", &super::fmt_time((info.duration_ms / 1000) as u32));
     }
     ui.add_space(6.0);
+}
+
+/// Stats for nerds, on the foot of the sleeve: what the decoder is being fed, from
+/// whichever source. Nothing while the setting is off.
+fn nerd_stats(app: &App, ui: &Ui, art: Rect, round: bool) {
+    let Some((_, stats)) = app.stream_stats.as_ref().filter(|_| app.show_nerd_stats) else { return };
+    let ink = theme::with_alpha(Color32::WHITE, 0.65);
+    let g = widgets::galley(ui, &stats_line(stats), theme::semibold(11.0), ink, art.width() - 20.0);
+    // A disc narrows toward its foot: the line rises until it fits across.
+    let foot = if round {
+        let r = art.width() / 2.0;
+        let half = (g.size().x / 2.0 + 10.0).min(r);
+        art.center().y + (r * r - half * half).sqrt() - 8.0
+    } else {
+        art.bottom() - 8.0
+    };
+    let at = pos2(art.center().x - g.size().x / 2.0, foot - g.size().y);
+    // Plain white washes out over a pale cover; the shadow under it keeps it legible.
+    ui.painter().galley_with_override_text_color(at + vec2(0.0, 1.0), g.clone(), Color32::from_black_alpha(140));
+    ui.painter().galley(at, g, ink);
+}
+
+/// The stats as one line, the way the phone app writes them: `Opus · 48 kHz · 133 kbps · Stereo`.
+fn stats_line(s: &crate::stream::Stats) -> String {
+    let mut parts = vec![s.codec.clone()];
+    if let Some(bits) = s.bit_depth {
+        parts.push(format!("{bits}-bit"));
+    }
+    parts.push(rate_text(s.sample_rate));
+    if let Some(kbps) = s.bitrate_kbps {
+        parts.push(format!("{} kbps", thousands(kbps)));
+    }
+    parts.push(channels_text(s.channels));
+    parts.join(" · ")
+}
+
+fn channels_text(n: u16) -> String {
+    match n {
+        1 => "Mono".to_owned(),
+        2 => "Stereo".to_owned(),
+        _ => format!("{n} channels"),
+    }
 }
 
 fn info_row(ui: &mut Ui, label: &str, value: &str) {

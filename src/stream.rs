@@ -603,6 +603,58 @@ pub fn decoder(shared: Arc<Shared>, seekable: bool) -> anyhow::Result<TrackDecod
     }
 }
 
+/// What the decoder is being fed, for stats for nerds: the codec, the rate and channels
+/// it decodes to, and the bitrate. The bit depth is the one a hi-res source states, as
+/// rodio's decoders don't report theirs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stats {
+    pub codec: String,
+    pub bit_depth: Option<u32>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub bitrate_kbps: Option<u32>,
+}
+
+impl Stats {
+    /// `shared` as `decoder` reads it.
+    pub fn of(shared: &Shared, decoder: &TrackDecoder) -> Self {
+        let rate = rodio::Source::sample_rate(decoder).get();
+        let channels = rodio::Source::channels(decoder).get();
+        Self::from_parts(&shared.format, shared.info.as_ref(), shared.total, shared.duration_ms, rate, channels)
+    }
+
+    fn from_parts(format: &Format, info: Option<&crate::hires::Info>, size: u64, duration_ms: u64, sample_rate: u32, channels: u16) -> Self {
+        let codec = match info.map(|i| i.codec.trim()).filter(|c| !c.is_empty()) {
+            Some(c) => codec_label(c),
+            None => match format {
+                Format::Aac => "AAC".to_owned(),
+                Format::Opus => "Opus".to_owned(),
+                Format::File { hint, .. } => codec_label(hint),
+                Format::Pcm { .. } => "PCM".to_owned(),
+            },
+        };
+        let bit_depth = info.and_then(|i| i.bit_depth);
+        // Lossless reads as the rate its samples decode to (1,411 kbps for a CD), the
+        // figure Tidal, Qobuz and Apple Music print; lossy as the rate its source stated,
+        // or else the one the file's size and length make (when the size is known).
+        let measured = (duration_ms > 0 && size != crate::hires::UNKNOWN_SIZE).then(|| (size * 8 / duration_ms) as u32);
+        let bitrate_kbps = match bit_depth {
+            Some(bits) if info.is_some_and(|i| i.lossless()) => Some(sample_rate * bits * channels as u32 / 1000),
+            _ => info.and_then(|i| i.bitrate_kbps).or(measured),
+        };
+        Self { codec, bit_depth, sample_rate, channels, bitrate_kbps: bitrate_kbps.filter(|k| *k > 0) }
+    }
+}
+
+/// A codec under its usual name: Opus and Vorbis as they're written, the rest in capitals.
+fn codec_label(codec: &str) -> String {
+    match codec.to_ascii_lowercase().as_str() {
+        "opus" => "Opus".to_owned(),
+        "vorbis" => "Vorbis".to_owned(),
+        _ => codec.to_ascii_uppercase(),
+    }
+}
+
 /// A song's decoder: Opus (our own), in-process PCM (decoded Atmos), or a file
 /// rodio decodes (AAC/MP4 included).
 pub enum TrackDecoder {
@@ -698,5 +750,52 @@ impl rodio::Source for PcmSource {
         let byte = frame * self.channels as u64 * 2;
         self.reader.seek(SeekFrom::Start(byte)).map_err(|e| rodio::source::SeekError::Other(std::sync::Arc::new(e)))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(codec: &str, bits: Option<u32>, kbps: Option<u32>) -> crate::hires::Info {
+        crate::hires::Info {
+            source: "Addon".into(),
+            host: "example".into(),
+            codec: codec.into(),
+            quality: String::new(),
+            bitrate_kbps: kbps,
+            sample_rate: None,
+            bit_depth: bits,
+            channels: None,
+            atmos: false,
+            size: 1,
+            duration_ms: 1,
+        }
+    }
+
+    #[test]
+    fn youtube_stats_come_from_the_stream() {
+        // 3.5 MB of Opus over 3:30: about 133 kbps.
+        let s = Stats::from_parts(&Format::Opus, None, 3_500_000, 210_000, 48_000, 2);
+        assert_eq!((s.codec.as_str(), s.bit_depth, s.bitrate_kbps), ("Opus", None, Some(133)));
+        assert_eq!(Stats::from_parts(&Format::Aac, None, 3_360_000, 210_000, 44_100, 2).codec, "AAC");
+        // A length nobody reported leaves the bitrate out rather than guessing.
+        assert_eq!(Stats::from_parts(&Format::Aac, None, 3_360_000, 0, 44_100, 2).bitrate_kbps, None);
+        // So does a size that's only the placeholder for one nobody reported.
+        let mp3 = Format::File { hint: "mp3", mime: None };
+        assert_eq!(Stats::from_parts(&mp3, Some(&info("mp3", None, None)), crate::hires::UNKNOWN_SIZE, 210_000, 44_100, 2).bitrate_kbps, None);
+    }
+
+    #[test]
+    fn lossless_reads_as_its_pcm_rate() {
+        let flac = Format::File { hint: "flac", mime: None };
+        let cd = Stats::from_parts(&flac, Some(&info("flac", Some(16), None)), 30_000_000, 210_000, 44_100, 2);
+        assert_eq!((cd.codec.as_str(), cd.bit_depth, cd.bitrate_kbps), ("FLAC", Some(16), Some(1411)));
+        let hires = Stats::from_parts(&flac, Some(&info("FLAC", Some(24), None)), 90_000_000, 210_000, 96_000, 2);
+        assert_eq!(hires.bitrate_kbps, Some(4608));
+        // Lossy from an addon keeps the rate it stated.
+        let mp3 = Stats::from_parts(&Format::File { hint: "mp3", mime: None }, Some(&info("mp3", None, Some(320))), 8_000_000, 210_000, 44_100, 2);
+        assert_eq!((mp3.codec.as_str(), mp3.bitrate_kbps), ("MP3", Some(320)));
+        assert_eq!(Stats::from_parts(&Format::Opus, Some(&info("OPUS", None, None)), 1, 1, 48_000, 2).codec, "Opus");
     }
 }

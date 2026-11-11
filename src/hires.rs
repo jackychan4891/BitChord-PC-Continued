@@ -20,6 +20,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SEARCH_LIMIT: usize = 25;
 /// How many of the search's candidates get a `/stream` call before giving up.
 const STREAM_TRIES: usize = 3;
+/// The size given a stream whose addon and server don't say how big it is.
+pub const UNKNOWN_SIZE: u64 = 512 * 1024 * 1024;
 
 /// What the player says about the stream it is playing.
 #[derive(Clone, Debug, PartialEq)]
@@ -269,7 +271,7 @@ impl Client {
         // large enough for ranged reads and let the download determine the real end.
         if size == 0 {
             log::info!("hi-res: stream size unknown for \"{}\", using ranged placeholder", candidate.title);
-            size = 512 * 1024 * 1024;
+            size = UNKNOWN_SIZE;
         }
         let sample_rate = json.get("sampleRate").and_then(Value::as_f64).filter(|r| *r > 0.0).map(|r| if r < 1000.0 { (r * 1000.0) as u32 } else { r as u32 })
             .or_else(|| number_before(&label, "khz").map(|r| (r * 1000.0) as u32));
