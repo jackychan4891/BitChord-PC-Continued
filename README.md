@@ -104,4 +104,5 @@ BitChord is licensed under [GPL-3.0](LICENSE).
 
 - [egui](https://github.com/emilk/egui) for the interface.
 - [rodio](https://github.com/RustAudio/rodio) and Symphonia for audio playback and decoding.
+- [ytm-rs](https://github.com/grapedjuice/ytm-rs) for the basic rust backend.
 - Lyrics, metadata, playback, and integrations depend on the upstream libraries and third-party services used by this project.
