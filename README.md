@@ -21,6 +21,7 @@
 > [!IMPORTANT]
 > BitChord is not affiliated with, endorsed by, or connected to YouTube, Google or Apple.
 > Use it at your own discretion.
+
 > [!TIP]
 > Need help, want to hear about new releases first, or say what should come next?
 > [Join the Discord server](https://discord.gg/cWQSGjpXM).
