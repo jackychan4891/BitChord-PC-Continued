@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>BitChord PC Continued - The ONLY Official Bitchord fork.</h1>
+  <h1>BitChord PC Continued</h1>
   <p><strong>A fast, native YouTube Music desktop app — rebuilt in Rust.</strong></p>
   <p>Built with egui and rodio. No Electron, no embedded browser player, and light on memory while playing.</p>
 
