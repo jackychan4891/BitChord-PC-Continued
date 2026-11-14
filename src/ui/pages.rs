@@ -1300,6 +1300,10 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
             }
         });
         divider(ui);
+        setting_row(ui, "Quality badge", Some("Show the playing quality between the times in Now Playing: Opus or AAC from YouTube, Lossless, Hi-Res Lossless, or Dolby Atmos from a hi-res source."), |ui| {
+            toggle(ui, &mut app.show_quality, "Quality badge");
+        });
+        divider(ui);
         setting_row(ui, "Stats for nerds", Some("Show the codec, sample rate and bitrate of what's playing at the foot of the cover in Now Playing, whatever the source."), |ui| {
             toggle(ui, &mut app.show_nerd_stats, "Stats for nerds");
         });

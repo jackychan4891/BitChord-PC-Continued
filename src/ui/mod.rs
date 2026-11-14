@@ -411,6 +411,9 @@ pub struct App {
     audio_info: Option<(u64, crate::hires::Info)>,
     /// Stats for nerds: the playing stream's codec, rate and bitrate on the cover.
     show_nerd_stats: bool,
+    /// Show the playing quality (Opus, AAC, Lossless, Hi-Res Lossless, Dolby Atmos)
+    /// between the times in Now Playing.
+    show_quality: bool,
     /// What the decoder is being fed, whatever the source, with its generation.
     stream_stats: Option<(u64, crate::stream::Stats)>,
     accent: Color32,
@@ -723,6 +726,7 @@ impl App {
             prefer_atmos,
             audio_info: None,
             show_nerd_stats: get("show_nerd_stats").is_some_and(|v| v == "1"),
+            show_quality: get("show_quality").is_none_or(|v| v == "1"),
             stream_stats: None,
             art_changed: -10.0,
             accent: theme::RED,
@@ -1456,6 +1460,7 @@ impl eframe::App for App {
         storage.set_string("hires_source", self.hires_sources.join("\n"));
         storage.set_string("prefer_atmos", b(self.prefer_atmos));
         storage.set_string("show_nerd_stats", b(self.show_nerd_stats));
+        storage.set_string("show_quality", b(self.show_quality));
         storage.set_string("sponsorblock", b(self.sponsorblock));
         storage.set_string("crossfade", b(self.crossfade));
         storage.set_string("automix", b(self.automix));

@@ -769,6 +769,8 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
                 app.actions.push(Action::UpgradeQuality);
             }
         }
+        menu_divider(ui);
+        switch_row(ui, "Quality badge", &mut app.show_quality);
         ui.add_space(4.0);
     });
 }
@@ -827,6 +829,63 @@ fn menu_divider(ui: &mut Ui) {
 
 // ------------------------------------------------------------------ audio quality
 
+/// What the player calls the stream it is decoding.
+#[derive(Clone, Debug, PartialEq)]
+struct AudioQuality {
+    label: String,
+    /// `Some(true)` draws Dolby's double-D, `Some(false)` Apple's lossless wave.
+    glyph: Option<bool>,
+    /// Lossless and Atmos wear the song's colour.
+    featured: bool,
+}
+
+/// The quality to name for what is playing. `info` is an addon stream's own description
+/// (with its Atmos flag and resolution); `stats` is what any decoder is actually fed, so
+/// YouTube's Opus and AAC are named too.
+fn quality_of(info: Option<&crate::hires::Info>, stats: Option<&crate::stream::Stats>) -> Option<AudioQuality> {
+    if let Some(info) = info {
+        if info.atmos {
+            return Some(AudioQuality { label: "Dolby Atmos".into(), glyph: Some(true), featured: true });
+        }
+        if info.lossless() {
+            // The addon's stated resolution, or what the decoder actually reports.
+            let hires = info.hires() || stats.is_some_and(|s| s.sample_rate > 48_000 || s.bit_depth.is_some_and(|b| b > 16));
+            let label = if hires { "Hi-Res Lossless" } else { "Lossless" };
+            return Some(AudioQuality { label: label.into(), glyph: Some(false), featured: true });
+        }
+    }
+    let stats = stats?;
+    let codec = stats.codec.trim();
+    if codec.is_empty() {
+        // An addon that named no codec can still call its lossy stream "320 kbps".
+        return info.map(|i| AudioQuality { label: i.badge().to_owned(), glyph: None, featured: false });
+    }
+    let lower = codec.to_ascii_lowercase();
+    if lower.contains("atmos") || lower.contains("joc") {
+        return Some(AudioQuality { label: "Dolby Atmos".into(), glyph: Some(true), featured: true });
+    }
+    if matches!(lower.as_str(), "flac" | "alac" | "wav" | "aiff") {
+        // A lossless codec without an addon's description is still lossless; the
+        // decoder's rate and the source's bit depth say whether it beats CD.
+        let hires = stats.sample_rate > 48_000 || stats.bit_depth.is_some_and(|b| b > 16);
+        let label = if hires { "Hi-Res Lossless" } else { "Lossless" };
+        return Some(AudioQuality { label: label.into(), glyph: Some(false), featured: true });
+    }
+    // Addon lossy streams keep their own wording ("320 kbps", "High"); YouTube and
+    // downloads, which have no addon description, are named by their codec.
+    if let Some(info) = info {
+        return Some(AudioQuality { label: info.badge().to_owned(), glyph: None, featured: false });
+    }
+    Some(AudioQuality { label: codec.to_owned(), glyph: None, featured: false })
+}
+
+/// The quality of the current play, once its stream has described itself.
+fn audio_quality(app: &App) -> Option<AudioQuality> {
+    let info = app.audio_info.as_ref().filter(|(generation, _)| *generation == app.generation).map(|(_, info)| info);
+    let stats = app.stream_stats.as_ref().filter(|(generation, _)| *generation == app.generation).map(|(_, stats)| stats);
+    quality_of(info, stats)
+}
+
 fn badge_font(small: bool) -> egui::FontId {
     theme::semibold(if small { 9.0 } else { 11.0 })
 }
@@ -879,64 +938,111 @@ fn paint_quality_icon(ui: &Ui, center: egui::Pos2, height: f32, atmos: bool, tin
 
 /// How wide the quality mark is, so a line can leave room for it.
 pub(super) fn audio_badge_width(ui: &Ui, app: &App, small: bool) -> f32 {
-    let Some((_, info)) = app.audio_info.as_ref() else { return 0.0 };
-    let label = if app.mixing() { "Mixing" } else { info.badge() };
+    let Some(quality) = audio_quality(app).filter(|_| app.show_quality) else { return 0.0 };
+    let label = if app.mixing() { "Mixing" } else { quality.label.as_str() };
     let text = widgets::galley(ui, label, badge_font(small), Color32::WHITE, 200.0).size().x;
-    if has_quality_glyph(info) { text + glyph_side(small) * quality_icon_aspect(info.atmos) + 5.0 } else { text }
+    match quality.glyph {
+        Some(atmos) => text + glyph_side(small) * quality_icon_aspect(atmos) + 5.0,
+        None => text,
+    }
 }
 
 /// The quality mark — a glyph and the stream's name, tinted with the theme — drawn at
 /// `at`; a click opens its details. Returns how much room it took.
 pub(super) fn audio_badge(app: &App, ui: &mut Ui, at: egui::Pos2, small: bool) -> f32 {
-    let Some((_, info)) = app.audio_info.as_ref() else { return 0.0 };
+    let Some(quality) = audio_quality(app).filter(|_| app.show_quality) else { return 0.0 };
     let font = badge_font(small);
     // A mix in progress wears its own name over the quality mark; the details keep the truth.
-    let g = widgets::galley(ui, if app.mixing() { "Mixing" } else { info.badge() }, font, Color32::WHITE, 200.0);
+    let label = if app.mixing() { "Mixing" } else { quality.label.as_str() };
+    let g = widgets::galley(ui, label, font, Color32::WHITE, 200.0);
     let gh = glyph_side(small);
-    let glyph = has_quality_glyph(info);
     let w = audio_badge_width(ui, app, small);
-    let h = g.size().y.max(if glyph { gh } else { 0.0 });
+    let h = g.size().y.max(if quality.glyph.is_some() { gh } else { 0.0 });
     let rect = Rect::from_min_size(at, vec2(w, h));
     let resp = ui.interact(rect, ui.scope_id().with("audio-badge"), Sense::click());
     let resp = named(resp, "Audio quality").on_hover_cursor(egui::CursorIcon::PointingHand);
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     let hover = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || open, 0.12);
     // Lossless and Atmos wear the song's colour; anything lossy stays quiet.
-    let (ink, mark) = if info.lossless() || info.atmos {
+    let (ink, mark) = if quality.featured {
         let accent = app.accent_color();
         (theme::lerp_color(accent, Color32::WHITE, 0.10 + 0.30 * hover), theme::with_alpha(accent, 0.85 + 0.15 * hover))
     } else {
         (theme::with_alpha(theme::text_dim(), 0.85 + 0.15 * hover), theme::text_dim())
     };
     let mut x = at.x;
-    if glyph {
-        let icon_w = gh * quality_icon_aspect(info.atmos);
-        paint_quality_icon(ui, pos2(x + icon_w / 2.0, at.y + h / 2.0), gh, info.atmos, mark);
+    if let Some(atmos) = quality.glyph {
+        let icon_w = gh * quality_icon_aspect(atmos);
+        paint_quality_icon(ui, pos2(x + icon_w / 2.0, at.y + h / 2.0), gh, atmos, mark);
         x += icon_w + 5.0;
     }
     ui.painter().galley(pos2(x, at.y + (h - g.size().y) / 2.0), g, ink);
-    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| audio_info_menu(ui, info));
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| quality_menu(app, ui));
     w
 }
 
 /// Just the quality glyph, centred on `center`, for the mini player's artist line.
 pub(super) fn audio_badge_icon_width(app: &App, small: bool) -> f32 {
-    let Some((_, info)) = app.audio_info.as_ref().filter(|(_, i)| has_quality_glyph(i)) else { return 0.0 };
-    glyph_side(small) * quality_icon_aspect(info.atmos)
+    let Some(atmos) = audio_quality(app).filter(|_| app.show_quality).and_then(|q| q.glyph) else { return 0.0 };
+    glyph_side(small) * quality_icon_aspect(atmos)
 }
 
 pub(super) fn audio_badge_icon(app: &App, ui: &mut Ui, center: egui::Pos2, small: bool) {
-    let Some((_, info)) = app.audio_info.as_ref().filter(|(_, i)| has_quality_glyph(i)) else { return };
+    let Some(atmos) = audio_quality(app).filter(|_| app.show_quality).and_then(|q| q.glyph) else { return };
     let gh = glyph_side(small);
-    let rect = Rect::from_center_size(center, vec2(gh * quality_icon_aspect(info.atmos), gh));
+    let rect = Rect::from_center_size(center, vec2(gh * quality_icon_aspect(atmos), gh));
     let resp = ui.interact(rect, ui.scope_id().with("audio-badge"), Sense::click());
     let resp = named(resp, "Audio quality").on_hover_cursor(egui::CursorIcon::PointingHand);
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     let hover = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || open, 0.12);
     let accent = app.accent_color();
     let mark = theme::with_alpha(accent, 0.85 + 0.15 * hover);
-    paint_quality_icon(ui, center, gh, info.atmos, mark);
-    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| audio_info_menu(ui, info));
+    paint_quality_icon(ui, center, gh, atmos, mark);
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| quality_menu(app, ui));
+}
+
+/// The badge's details: an addon stream's own description, or the decoder's numbers for
+/// a YouTube stream or a download.
+fn quality_menu(app: &App, ui: &mut Ui) {
+    let info = app.audio_info.as_ref().filter(|(generation, _)| *generation == app.generation).map(|(_, info)| info);
+    let stats = app.stream_stats.as_ref().filter(|(generation, _)| *generation == app.generation).map(|(_, stats)| stats);
+    if let Some(info) = info {
+        audio_info_menu(ui, info);
+    } else if let Some(stats) = stats {
+        stream_quality_menu(ui, stats);
+    }
+}
+
+/// What the decoder is being fed, for a stream an addon didn't describe: YouTube's Opus
+/// and AAC, or a saved file.
+fn stream_quality_menu(ui: &mut Ui, stats: &crate::stream::Stats) {
+    ui.set_width(300.0);
+    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    ui.add_space(4.0);
+    menu_caption(ui, "AUDIO QUALITY");
+    let quality = quality_of(None, Some(stats));
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
+    let label = quality.as_ref().map_or(stats.codec.as_str(), |q| q.label.as_str());
+    let g = widgets::galley(ui, label, theme::semibold(17.0), theme::text(), 200.0);
+    let mut x = r.left() + 12.0;
+    if let Some(atmos) = quality.as_ref().and_then(|q| q.glyph) {
+        let ih = 17.0;
+        let icon_w = ih * quality_icon_aspect(atmos);
+        paint_quality_icon(ui, pos2(x + icon_w / 2.0, r.center().y), ih, atmos, theme::text());
+        x += icon_w + 8.0;
+    }
+    ui.painter().galley(pos2(x, r.center().y - g.size().y / 2.0), g.clone(), theme::text());
+    menu_divider(ui);
+    info_row(ui, "Codec", &stats.codec);
+    if let Some(kbps) = stats.bitrate_kbps {
+        info_row(ui, "Bitrate", &format!("{} kbps", thousands(kbps)));
+    }
+    info_row(ui, "Sample rate", &rate_text(stats.sample_rate));
+    if let Some(bits) = stats.bit_depth {
+        info_row(ui, "Bit depth", &format!("{bits}-bit"));
+    }
+    info_row(ui, "Channels", &channels_text(stats.channels));
+    ui.add_space(6.0);
 }
 
 /// What the stream is: its source, format and the numbers under those.
@@ -1128,4 +1234,69 @@ fn mini_text(ui: &mut Ui, text: &str, on: bool, tip: &str) -> egui::Response {
 
 fn lang_name(code: &str) -> &str {
     super::lyric_prefs::LANGUAGES.iter().find(|(c, _)| *c == code).map_or(code, |(_, n)| n)
+}
+
+#[cfg(test)]
+mod quality_tests {
+    use super::{AudioQuality, quality_of};
+    use crate::hires::Info;
+    use crate::stream::Stats;
+
+    fn info(codec: &str, rate: Option<u32>, bits: Option<u32>, atmos: bool) -> Info {
+        Info {
+            source: "Addon".into(),
+            host: "addon.example".into(),
+            codec: codec.into(),
+            quality: String::new(),
+            bitrate_kbps: None,
+            sample_rate: rate,
+            bit_depth: bits,
+            channels: Some(2),
+            atmos,
+            size: 0,
+            duration_ms: 0,
+        }
+    }
+
+    fn stats(codec: &str, rate: u32, bits: Option<u32>) -> Stats {
+        Stats { codec: codec.into(), bit_depth: bits, sample_rate: rate, channels: 2, bitrate_kbps: Some(160) }
+    }
+
+    fn label(q: Option<AudioQuality>) -> String {
+        q.expect("a quality").label
+    }
+
+    #[test]
+    fn youtube_streams_are_named_by_their_codec() {
+        assert_eq!(label(quality_of(None, Some(&stats("Opus", 48_000, None)))), "Opus");
+        assert_eq!(label(quality_of(None, Some(&stats("AAC", 44_100, None)))), "AAC");
+        assert_eq!(label(quality_of(None, Some(&stats("MP3", 44_100, None)))), "MP3");
+        assert_eq!(label(quality_of(None, Some(&stats("E-AC-3 JOC", 48_000, None)))), "Dolby Atmos");
+    }
+
+    #[test]
+    fn addon_lossless_and_atmos_keep_their_marks() {
+        let cd = quality_of(Some(&info("FLAC", Some(44_100), Some(16), false)), None).unwrap();
+        assert_eq!((cd.label.as_str(), cd.glyph, cd.featured), ("Lossless", Some(false), true));
+        let hires = quality_of(Some(&info("FLAC", Some(96_000), Some(24), false)), None).unwrap();
+        assert_eq!((hires.label.as_str(), hires.glyph, hires.featured), ("Hi-Res Lossless", Some(false), true));
+        // The addon missed the resolution but the decoder reports it.
+        let measured = quality_of(Some(&info("FLAC", Some(44_100), Some(16), false)), Some(&stats("FLAC", 96_000, Some(24)))).unwrap();
+        assert_eq!(measured.label, "Hi-Res Lossless");
+        let atmos = quality_of(Some(&info("EAC3", Some(48_000), Some(16), true)), None).unwrap();
+        assert_eq!((atmos.label.as_str(), atmos.glyph, atmos.featured), ("Dolby Atmos", Some(true), true));
+    }
+
+    #[test]
+    fn a_measured_lossless_stream_needs_no_addon_description() {
+        let cd = quality_of(None, Some(&stats("FLAC", 44_100, Some(16)))).unwrap();
+        assert_eq!((cd.label.as_str(), cd.glyph), ("Lossless", Some(false)));
+        let hires = quality_of(None, Some(&stats("FLAC", 96_000, Some(24)))).unwrap();
+        assert_eq!((hires.label.as_str(), hires.glyph), ("Hi-Res Lossless", Some(false)));
+    }
+
+    #[test]
+    fn nothing_is_named_before_the_stream_describes_itself() {
+        assert!(quality_of(None, None).is_none());
+    }
 }

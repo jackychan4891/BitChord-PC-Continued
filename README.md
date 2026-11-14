@@ -46,6 +46,7 @@
 - **YouTube Music, natively** — search, browse, albums, playlists, artist pages, radio, mixes, charts and your library.
 - **Lossless / Hi-Res Lossless / Dolby Atmos** — play higher-quality copies from configured hi-res addon sources when a matching copy is available, with YouTube audio as the fallback.
 - **Quality controls in the player** — see the active audio quality, prefer Dolby Atmos when available, and revert or upgrade quality from the player menu.
+- **Quality badge** — see whether the current stream is Opus, AAC, Lossless, Hi-Res Lossless or Dolby Atmos, toggled from the player menu or Settings › Playback.
 - **Automix and crossfade** — DJ-style transitions between songs, with a mixing state shown in the player during transitions.
 - **Queue and playback controls** — shuffle, repeat, autoplay, song radio, next-track prefetch, volume normalization, and output device selection.
 - **Downloads** — save songs for offline playback.
