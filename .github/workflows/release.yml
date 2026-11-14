@@ -48,12 +48,22 @@ jobs:
 
       # webview2-com-sys extracts WebView2Loader.dll into its build OUT_DIR rather than
       # next to the exe; the installer expects it in BinDir, so copy it there per arch.
+      # The build tree is searched by shape, not by package hash, and the crate's own
+      # vendored copy is the fallback, so neither a layout change nor a pruned cache
+      # can strand the installer step looking for a file that was never placed.
       - name: Stage WebView2Loader.dll
         run: |
           foreach ($t in @(@{ bin = "target\release"; arch = "x64" }, @{ bin = "target\aarch64-pc-windows-msvc\release"; arch = "arm64" })) {
-            $dll = Get-ChildItem -Path "$($t.bin)\build\webview2-com-sys-*\out\$($t.arch)\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $dll) { Write-Error "WebView2Loader.dll ($($t.arch)) not found under $($t.bin)\build"; exit 1 }
+            $dll = Get-ChildItem -Path "$($t.bin)\build\*\out\$($t.arch)\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $dll) { $dll = Get-ChildItem -Path "$HOME\.cargo\registry\src\*\webview2-com-sys-*\$($t.arch)\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+            if (-not $dll) {
+              Get-ChildItem -Path "$($t.bin)\build" -Filter "webview2*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                Get-ChildItem -Path $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { Write-Host "saw: $($_.FullName)" }
+              }
+              Write-Error "WebView2Loader.dll ($($t.arch)) not found under $($t.bin)\build"; exit 1
+            }
             Copy-Item $dll.FullName "$($t.bin)\WebView2Loader.dll" -Force
+            Write-Host "staged $($dll.FullName) -> $($t.bin)\WebView2Loader.dll"
           }
 
       - name: Install Inno Setup
