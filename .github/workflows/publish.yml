@@ -1,0 +1,39 @@
+name: Publish release
+
+# The release workflow attaches every build to a draft and leaves it there, because a
+# release without its files would reach the updater. This gives such a draft its title
+# and notes — taken from .github/release-notes/<tag>.md, so the wording lives in the
+# repo and not in a token holder's shell — and publishes it.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of the draft release to publish
+        required: true
+        type: string
+      title:
+        description: Release title
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          TITLE: ${{ inputs.title }}
+        run: |
+          notes=".github/release-notes/$TAG.md"
+          [ -f "$notes" ] || { echo "no $notes"; exit 1; }
+          gh release view "$TAG" --json isDraft,name,assets
+          gh release edit "$TAG" --draft=false --latest --title "$TITLE" --notes-file "$notes"
+          gh release view "$TAG" --json isDraft,name,assets,url
