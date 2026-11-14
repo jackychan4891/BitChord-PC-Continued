@@ -18,6 +18,9 @@
 </div>
 
 > [!IMPORTANT]
+> Bitchord PC Continued is the ONLY official Bitchord fork.
+
+> [!IMPORTANT]
 > BitChord is not affiliated with, endorsed by, or connected to YouTube, Google or Apple.
 > Use it at your own discretion.
 
