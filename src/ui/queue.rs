@@ -37,6 +37,10 @@ pub struct Queue {
     /// The queue is a playlist played while its songs were still coming in: the rest
     /// join the queue as they arrive.
     pub fill: Option<QueueFill>,
+    /// Playback ran out: the last song ended and stopped waiting for more. A station
+    /// that arrives now starts playing; a song that is still loading, paused, or failed
+    /// to start is not exhausted and must stay put.
+    pub exhausted: bool,
 }
 
 /// How many songs before and after the current one a saved session keeps: liked-songs
@@ -46,7 +50,7 @@ const SAVED_AFTER: usize = 150;
 
 impl Queue {
     pub fn new(repeat: Repeat) -> Self {
-        Self { tracks: Vec::new(), index: None, repeat, fill: None }
+        Self { tracks: Vec::new(), index: None, repeat, fill: None, exhausted: false }
     }
 
     pub fn current(&self) -> Option<&Track> {
@@ -67,6 +71,7 @@ impl Queue {
         self.fill = fill;
         self.index = Some(start.min(tracks.len() - 1));
         self.tracks = tracks;
+        self.exhausted = false;
         true
     }
 
@@ -76,6 +81,7 @@ impl Queue {
         self.tracks = tracks;
         self.index = Some(index);
         self.fill = None;
+        self.exhausted = false;
     }
 
     /// Next, or the end of a song: true when there's a song to play. At the end of a
@@ -91,8 +97,12 @@ impl Queue {
         } else if self.repeat == Repeat::All && !self.tracks.is_empty() {
             self.index = Some(0);
         } else {
+            // Nothing followed the last song: the queue has run out. A pause, a start
+            // still loading, or a song that failed to play leaves it alone.
+            self.exhausted = true;
             return false;
         }
+        self.exhausted = false;
         true
     }
 
@@ -117,11 +127,13 @@ impl Queue {
         }
     }
 
-    /// A song started: it no longer waits for a playlist's next songs.
+    /// A song started: it no longer waits for a playlist's next songs, nor for the
+    /// station that was loading when the one before it ran out.
     pub fn started(&mut self) {
         if let Some(fill) = &mut self.fill {
             fill.ran_out = false;
         }
+        self.exhausted = false;
     }
 
     /// Shuffle what's still to come (and what of a playlist is still coming in): false
@@ -307,6 +319,42 @@ mod tests {
         assert!(q.add_radio("seed", vec![track("seed"), track("a"), track("b"), track("c")]));
         assert_eq!(ids(&q), ["seed", "a", "b", "c"]);
         assert!(!q.add_radio("seed", vec![track("d")]));
+    }
+
+    #[test]
+    fn a_single_song_queue_runs_out_only_when_that_song_ends() {
+        // Clicking a song on Home queues it alone while its radio loads. Being the last
+        // song is not the same as having ended: the station must not skip it.
+        let mut q = queue(&["a"], 0, Repeat::Off);
+        assert!(q.at_end());
+        assert!(!q.exhausted);
+        assert!(q.add_radio("a", vec![track("b"), track("c")]));
+        assert!(!q.exhausted);
+        assert_eq!(q.current().unwrap().id, "a");
+
+        // The song ends before the station arrives: playback waits, then carries on.
+        let mut q = queue(&["a"], 0, Repeat::Off);
+        assert!(!q.advance());
+        assert!(q.exhausted);
+        assert!(q.add_radio("a", vec![track("b")]));
+        assert!(q.advance());
+        assert_eq!(q.current().unwrap().id, "b");
+        q.started();
+        assert!(!q.exhausted);
+        // Starting another song (or picking a new queue) clears it too.
+        assert!(!q.advance());
+        assert!(q.exhausted);
+        assert!(q.replace(vec![track("x")], 0, None));
+        assert!(!q.exhausted);
+    }
+
+    #[test]
+    fn a_playlist_still_coming_in_waits_rather_than_running_out() {
+        let mut q = Queue::new(Repeat::Off);
+        q.replace(vec![track("a")], 0, filling("PL1", 1, false));
+        assert!(!q.advance());
+        assert!(q.fill.as_ref().unwrap().ran_out);
+        assert!(!q.exhausted);
     }
 
     #[test]

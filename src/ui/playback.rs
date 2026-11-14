@@ -475,6 +475,12 @@ impl App {
             return;
         }
         let playing = self.playing();
+        // Nothing loaded for this song (its start failed, or it played out): start it
+        // again. A paused song still has its stream, so that one resumes where it was.
+        if !playing && !self.buffering && self.audio.status.started_gen.load(Ordering::Relaxed) != self.generation {
+            self.play_current();
+            return;
+        }
         // The media controls catch up in `logic` once the player has switched.
         self.audio.send(if playing { AudioCmd::Pause } else { AudioCmd::Resume });
     }

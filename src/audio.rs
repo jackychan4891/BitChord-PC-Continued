@@ -66,6 +66,10 @@ pub struct AudioStatus {
     pub playing: AtomicBool,
     /// Generation the UI most recently asked for; the engine ignores older decoders.
     pub wanted_gen: AtomicU64,
+    /// Generation whose stream the engine is actually playing; 0 when nothing is loaded.
+    /// Lets the UI tell "the new song has started" from "the previous one is still
+    /// playing until its stop lands".
+    pub started_gen: AtomicU64,
     /// f32 bits
     volume: AtomicU32,
     /// Turn loud tracks down to YouTube's loudness target.
@@ -125,6 +129,12 @@ impl AudioStatus {
     pub fn duration(&self) -> Option<Duration> {
         let d = self.duration_ms.load(Ordering::Relaxed);
         (d > 0).then(|| Duration::from_millis(d))
+    }
+
+    /// The engine is playing the stream of this generation, not a previous one still
+    /// running until its stop reaches the audio thread.
+    pub fn playing_generation(&self, generation: u64) -> bool {
+        self.playing.load(Ordering::Relaxed) && self.started_gen.load(Ordering::Acquire) == generation
     }
 
     /// Automix's handoff window for a song of this length, in seconds: how much of the
@@ -975,6 +985,7 @@ fn run(
                 offset = at;
                 seekable = !at.is_zero();
                 ending_sent = false;
+                status.started_gen.store(generation, Ordering::Release);
                 status.playing.store(true, Ordering::Relaxed);
             }
             Ok(AudioCmd::Replace { generation, seek, decoder, at, seekable: s }) => {
@@ -1061,6 +1072,7 @@ fn run(
                     old.cancel();
                 }
                 status.playing.store(false, Ordering::Relaxed);
+                status.started_gen.store(0, Ordering::Release);
                 status.set_position(0);
             }
             Ok(cmd @ (AudioCmd::Seek(_) | AudioCmd::SeekLive { .. })) => {
@@ -1205,6 +1217,7 @@ fn run(
                 current = 0;
                 shared = None;
                 status.playing.store(false, Ordering::Relaxed);
+                status.started_gen.store(0, Ordering::Release);
                 wake();
             }
         }
@@ -1223,6 +1236,20 @@ mod tests {
         assert_eq!(status.outgoing_position(), Duration::from_secs(180));
         status.set_position(2500);
         assert_eq!(status.outgoing_position(), Duration::from_secs(180));
+    }
+
+    #[test]
+    fn only_the_started_generation_counts_as_playing() {
+        let status = AudioStatus::default();
+        assert!(!status.playing_generation(1));
+        // The previous song is still playing while the new one's stop lands.
+        status.started_gen.store(0, Ordering::Release);
+        status.playing.store(true, Ordering::Relaxed);
+        assert!(!status.playing_generation(1));
+        status.started_gen.store(1, Ordering::Release);
+        assert!(status.playing_generation(1));
+        status.playing.store(false, Ordering::Relaxed);
+        assert!(!status.playing_generation(1));
     }
 
     #[test]

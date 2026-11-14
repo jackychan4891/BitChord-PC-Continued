@@ -95,7 +95,7 @@ impl App {
                 _ => {}
             }
         }
-        if self.buffering && self.playing() {
+        if self.buffering && self.audio.status.playing_generation(self.generation) {
             self.buffering = false;
             self.skip_streak = 0;
             self.prefetch_next();
@@ -363,9 +363,15 @@ impl App {
             }
             Resp::Radio { seed, tracks } => {
                 self.radio_pending = false;
-                let was_at_end = self.queue.add_radio(&seed, tracks);
-                if was_at_end && self.queue.index.is_some() && !self.buffering && !self.playing() {
-                    // The track ended while radio was loading: continue now.
+                // A station that arrives after playback moved on is not this queue's.
+                if self.current_id() != Some(seed.as_str()) {
+                    return;
+                }
+                // The station follows the song only when that song actually ran out while
+                // it loaded. A song still starting (or paused, or failed) stays where it is.
+                let ran_out = self.queue.exhausted;
+                self.queue.add_radio(&seed, tracks);
+                if ran_out {
                     self.next();
                 } else if !self.buffering {
                     self.prefetch_next();
@@ -599,12 +605,16 @@ impl App {
                 msg
             };
             let has_next = !self.queue.at_end() && self.queue.index.is_some();
+            // A song picked on Home or in Search is the one the listener asked for: when
+            // its station is already queued behind it, don't trade it for the first
+            // recommendation. Play retries it instead.
+            let picked = self.queue_source.is_none() && self.queue.index == Some(0);
             // Skipping can't help when the account is the problem: the rest of
             // an album like this needs it too. Stop on the song instead.
             if let Some(why) = account_block(&reason, self.logged_in) {
                 self.skip_streak = 0;
                 self.toast(why.replace("{title}", &title));
-            } else if has_next && self.skip_streak < MAX_SKIPS {
+            } else if skips_failed_song(has_next, picked, self.skip_streak) {
                 // Don't stall the queue on one unplayable song.
                 self.skip_streak += 1;
                 self.toast(format!("Skipped \"{title}\": {reason}"));
@@ -683,6 +693,13 @@ impl App {
 /// Unplayable songs skipped in a row before playback stops.
 const MAX_SKIPS: u32 = 3;
 
+/// Whether a song that failed to play is skipped. A song picked on Home or in Search
+/// stays put: the station behind it is a recommendation, not what the listener asked
+/// for. The rest of the queue moves on, but only a few failures in a row.
+fn skips_failed_song(has_next: bool, picked: bool, skip_streak: u32) -> bool {
+    has_next && !picked && skip_streak < MAX_SKIPS
+}
+
 /// When a song failed because of the account (Premium-only, or needs signing in),
 /// the message to show instead of skipping: the rest of an album like that fails the
 /// same way.
@@ -694,6 +711,26 @@ fn account_block(msg: &str, logged_in: bool) -> Option<&'static str> {
         Some("Sign in to play \"{title}\"")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod play_error_tests {
+    use super::{MAX_SKIPS, skips_failed_song};
+
+    #[test]
+    fn a_picked_song_is_not_skipped_for_a_station() {
+        // Home/Search: the song is the one asked for, even with its radio behind it.
+        assert!(!skips_failed_song(true, true, 0));
+        // A queue with nothing after it can't skip either.
+        assert!(!skips_failed_song(false, false, 0));
+    }
+
+    #[test]
+    fn a_queue_moves_on_but_not_forever() {
+        assert!(skips_failed_song(true, false, 0));
+        assert!(skips_failed_song(true, false, MAX_SKIPS - 1));
+        assert!(!skips_failed_song(true, false, MAX_SKIPS));
     }
 }
 
