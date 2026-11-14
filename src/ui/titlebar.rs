@@ -75,7 +75,7 @@ pub fn drag_area(ui: &Ui, rect: Rect, id: &str) {
     if !shown(ui.ctx()) {
         return;
     }
-    if drag_strip(ui, rect, id).double_clicked() {
+    if drag_strip(ui, rect, id, &[]).double_clicked() {
         let max = maximized(ui.ctx());
         ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!max));
     }
@@ -83,12 +83,17 @@ pub fn drag_area(ui: &Ui, rect: Rect, id: &str) {
 
 /// [`drag_area`] without the double-click, with or without the system's frame (the mini
 /// player moves by its background everywhere): the response, for the caller's double-click.
-pub fn drag_strip(ui: &Ui, rect: Rect, id: &str) -> egui::Response {
+///
+/// `avoid` is where something else on `rect` lives: a press inside it is that thing's, and
+/// never starts a move. A window that slid away under the pointer would turn the click into
+/// a drag and lose it, which is what a button in a draggable strip looks like when it breaks.
+pub fn drag_strip(ui: &Ui, rect: Rect, id: &str, avoid: &[Rect]) -> egui::Response {
     let resp = ui.interact(rect, Id::unique(("titlebar-drag", id)), Sense::CLICK);
     let pressed_here = resp.id.with("pressed");
     let (pressed, down, dragging) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.is_decidedly_dragging()));
     if pressed {
-        let here = resp.is_pointer_button_down_on();
+        let at = ui.input(|i| i.pointer.hover_pos());
+        let here = resp.is_pointer_button_down_on() && at.is_none_or(|p| !avoid.iter().any(|a| a.contains(p)));
         ui.ctx().data_mut(|d| d.insert_temp(pressed_here, here));
     } else if !down {
         ui.ctx().data_mut(|d| d.remove::<bool>(pressed_here));

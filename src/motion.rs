@@ -65,6 +65,8 @@ static STREAMS: LazyLock<Mutex<HashMap<String, Weak<Motion>>>> = LazyLock::new(D
 pub fn play(ctx: &egui::Context, master: &str, max_width: u32) -> Arc<Motion> {
     let key = format!("{max_width}:{master}");
     if let Ok(mut streams) = STREAMS.lock() {
+        // Entries whose view is gone would otherwise pile up for the whole session.
+        streams.retain(|_, w| w.strong_count() > 0);
         if let Some(m) = streams.get(&key).and_then(Weak::upgrade) {
             return m;
         }
@@ -82,7 +84,7 @@ fn run(motion: Arc<Motion>, ctx: egui::Context, master: String, max_width: u32) 
         log::info!("apple: no motion clip downloaded");
         return;
     };
-    decode(&motion, &path, &ctx);
+    decode(&motion, &path, &ctx, max_width);
 }
 
 /// Pick a variant and save the clip to the cache; a saved copy is reused.
@@ -100,27 +102,25 @@ fn fetch(master: &str, max_width: u32) -> Option<PathBuf> {
         if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > 1024 {
             return Some(path);
         }
-        let bytes = http
-            .get(&file)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .bytes()
-            .await
-            .ok()?;
+        // Stream to disk a chunk at a time: holding the whole clip in RAM would
+        // cost megabytes per sleeve on top of the decoder.
+        let mut resp = http.get(&file).timeout(Duration::from_secs(60)).send().await.ok()?.error_for_status().ok()?;
         let tmp = path.with_extension("part");
-        std::fs::write(&tmp, &bytes).ok()?;
+        let mut out = std::fs::File::create(&tmp).ok()?;
+        let mut total = 0usize;
+        while let Some(chunk) = resp.chunk().await.ok()? {
+            std::io::Write::write_all(&mut out, &chunk).ok()?;
+            total += chunk.len();
+        }
+        drop(out);
         std::fs::rename(&tmp, &path).ok()?;
-        log::info!("apple: motion clip {:.0} KB cached", bytes.len() as f64 / 1024.0);
+        log::info!("apple: motion clip {:.0} KB cached", total as f64 / 1024.0);
         Some(path)
     })
 }
 
 #[cfg(windows)]
-fn decode(motion: &Arc<Motion>, path: &std::path::Path, ctx: &egui::Context) {
+fn decode(motion: &Arc<Motion>, path: &std::path::Path, ctx: &egui::Context, max_width: u32) {
     use windows::Win32::Media::MediaFoundation::{MFShutdown, MFStartup, MFSTARTUP_FULL, MF_VERSION};
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
     unsafe {
@@ -136,7 +136,7 @@ fn decode(motion: &Arc<Motion>, path: &std::path::Path, ctx: &egui::Context) {
         let url = windows::core::PCWSTR(wide.as_ptr());
         // Each pass plays the clip once; then it starts again from the top.
         for _ in 0..100 {
-            if motion.stop.load(Ordering::Relaxed) || !play_once(motion, ctx, url) {
+            if motion.stop.load(Ordering::Relaxed) || !play_once(motion, ctx, url, max_width) {
                 break;
             }
         }
@@ -146,7 +146,7 @@ fn decode(motion: &Arc<Motion>, path: &std::path::Path, ctx: &egui::Context) {
 }
 
 #[cfg(windows)]
-unsafe fn play_once(motion: &Motion, ctx: &egui::Context, url: windows::core::PCWSTR) -> bool {
+unsafe fn play_once(motion: &Motion, ctx: &egui::Context, url: windows::core::PCWSTR, max_width: u32) -> bool {
     use windows::Win32::Media::MediaFoundation::*;
     let played = unsafe {
         (|| -> windows::core::Result<bool> {
@@ -162,7 +162,26 @@ unsafe fn play_once(motion: &Motion, ctx: &egui::Context, url: windows::core::PC
         let ty = MFCreateMediaType()?;
         ty.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
         ty.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
-        reader.SetCurrentMediaType(stream, None, &ty)?;
+        // Decode straight to the size on screen: a native 1080p frame is ~4.6 MB of
+        // RGBA and the texture holds another copy. The video processor does the scale.
+        if max_width >= 2
+            && let Ok(native) = reader.GetNativeMediaType(stream, 0)
+            && let Ok(size) = native.GetUINT64(&MF_MT_FRAME_SIZE)
+        {
+            let (nw, nh) = ((size >> 32) as u32, (size & 0xffff_ffff) as u32);
+            if nw > 0 && nh > 0 && max_width < nw {
+                let w = max_width & !1;
+                let h = (((nh as u64 * w as u64) / nw as u64) as u32 & !1).max(2);
+                let _ = ty.SetUINT64(&MF_MT_FRAME_SIZE, ((w as u64) << 32) | h as u64);
+            }
+        }
+        if reader.SetCurrentMediaType(stream, None, &ty).is_err() {
+            // A clip that refuses the scaled type still plays at its native size.
+            let ty = MFCreateMediaType()?;
+            ty.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            ty.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
+            reader.SetCurrentMediaType(stream, None, &ty)?;
+        }
         let current = reader.GetCurrentMediaType(stream)?;
         let size = current.GetUINT64(&MF_MT_FRAME_SIZE)?;
         let (w, h) = ((size >> 32) as usize, (size & 0xffff_ffff) as usize);
@@ -173,6 +192,7 @@ unsafe fn play_once(motion: &Motion, ctx: &egui::Context, url: windows::core::PC
         let row = w * 4;
         let start = Instant::now();
         let mut base: Option<i64> = None;
+        let mut last: Option<Instant> = None;
         loop {
             if motion.stop.load(Ordering::Relaxed) {
                 return Ok(false);
@@ -194,6 +214,11 @@ unsafe fn play_once(motion: &Motion, ctx: &egui::Context, url: windows::core::PC
             if due > elapsed {
                 std::thread::sleep(due - elapsed);
             }
+            // 30 fps is plenty for a sleeve; faster clips would only churn uploads.
+            if last.is_some_and(|t| t.elapsed() < Duration::from_millis(33)) {
+                continue;
+            }
+            last = Some(Instant::now());
             let buffer = sample.ConvertToContiguousBuffer()?;
             let (mut src, mut len) = (std::ptr::null_mut(), 0u32);
             buffer.Lock(&mut src, None, Some(&mut len))?;
@@ -234,7 +259,7 @@ unsafe fn play_once(motion: &Motion, ctx: &egui::Context, url: windows::core::PC
 }
 
 #[cfg(not(windows))]
-fn decode(_motion: &Arc<Motion>, _path: &std::path::Path, _ctx: &egui::Context) {}
+fn decode(_motion: &Arc<Motion>, _path: &std::path::Path, _ctx: &egui::Context, _max_width: u32) {}
 
 /// The frame buffer's real row length in bytes, and whether its rows run bottom-up. Media
 /// Foundation's video processor pads the frame (a 1080 px clip comes back 1088 px wide, rows
@@ -277,7 +302,7 @@ mod tests {
         let ctx = egui::Context::default();
         let motion = Arc::new(Motion::new("test"));
         let this = motion.clone();
-        std::thread::spawn(move || decode(&this, &path, &ctx));
+        std::thread::spawn(move || decode(&this, &path, &ctx, 512));
         let start = Instant::now();
         while motion.latest().is_none() && start.elapsed() < Duration::from_secs(15) {
             std::thread::sleep(Duration::from_millis(50));

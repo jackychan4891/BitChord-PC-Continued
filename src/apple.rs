@@ -355,14 +355,26 @@ pub async fn song_motion(http: &reqwest::Client, title: &str, artist: &str, albu
     );
     let v = api(http, &q).await?;
     let hits = v.pointer("/results/songs/data")?.as_array()?;
-    let (_, hit) = best(hits, title, artist, album, false)?;
+    let Some((s, hit)) = best(hits, title, artist, album, false) else {
+        log::debug!("apple: song motion '{title}' by '{artist}': {} hits, none matched", hits.len());
+        return None;
+    };
+    log::debug!("apple: song motion '{title}' matched '{}' (score {s})", hit.pointer("/attributes/name").and_then(Value::as_str).unwrap_or("?"));
     if let Some(m) = hit.pointer("/attributes/editorialVideo").map(motion_urls)
         && m.square.is_some()
     {
         return Some(m);
     }
-    let id = album_id(hit)?;
-    album_by_id(http, &id).await
+    let m = match album_id(hit) {
+        Some(id) => album_by_id(http, &id).await,
+        // Search hits carry no album relationship: ask by the release's own name.
+        None => match album.filter(|a| !a.is_empty()) {
+            Some(a) => album_motion(http, a, artist).await,
+            None => None,
+        },
+    };
+    log::debug!("apple: song motion '{title}': album fallback clip {}", if m.is_some() { "found" } else { "absent" });
+    m
 }
 
 /// Motion artwork for a release, by its own name.
@@ -371,8 +383,13 @@ pub async fn album_motion(http: &reqwest::Client, album: &str, artist: &str) -> 
     let q = format!("search?term={}&types=albums&limit=10&extend=editorialVideo", url_escape(&term));
     let v = api(http, &q).await?;
     let hits = v.pointer("/results/albums/data")?.as_array()?;
-    let (_, hit) = best(hits, album, artist, Some(album), true)?;
-    hit.pointer("/attributes/editorialVideo").map(motion_urls).filter(|m| m.square.is_some())
+    let Some((s, hit)) = best(hits, album, artist, Some(album), true) else {
+        log::debug!("apple: album motion '{album}' by '{artist}': {} hits, none matched", hits.len());
+        return None;
+    };
+    let m = hit.pointer("/attributes/editorialVideo").map(motion_urls).filter(|m| m.square.is_some());
+    log::debug!("apple: album motion '{album}' matched '{}' (score {s}), clip {}", hit.pointer("/attributes/name").and_then(Value::as_str).unwrap_or("?"), if m.is_some() { "found" } else { "absent" });
+    m
 }
 
 async fn album_by_id(http: &reqwest::Client, id: &str) -> Option<Motion> {
@@ -488,14 +505,16 @@ fn url_escape(s: &str) -> String {
 
 // ------------------------------------------------------------ HLS picking
 
-/// The best variant of a master playlist no wider than `max_width` (and the
-/// smallest one when they all are), so a sleeve doesn't pull a 1080p clip.
+/// The variant to decode for a sleeve shown at `max_width`: the smallest one at
+/// least that wide (the decoder scales it down), or the largest when every
+/// variant is narrower. A 200 px tile never pulls a 1080p clip.
 pub async fn variant(http: &reqwest::Client, master: &str, max_width: u32) -> Option<String> {
     let (code, text) = get(http, master, None).await.ok()?;
     if code != 200 {
         return None;
     }
-    let mut best: Option<(u32, String)> = None;
+    let mut over: Option<(u32, String)> = None;
+    let mut under: Option<(u32, String)> = None;
     let mut lines = text.lines();
     while let Some(line) = lines.next() {
         if !line.starts_with("#EXT-X-STREAM-INF:") || line.contains("hvc1") {
@@ -504,11 +523,15 @@ pub async fn variant(http: &reqwest::Client, master: &str, max_width: u32) -> Op
         let Some(res) = line.split("RESOLUTION=").nth(1) else { continue };
         let w = res.split('x').next()?.trim().parse::<u32>().ok()?;
         let uri = lines.find(|l| !l.trim().is_empty() && !l.starts_with('#'))?;
-        if w <= max_width && best.as_ref().is_none_or(|b| w > b.0) {
-            best = Some((w, uri.trim().to_owned()));
+        if w >= max_width {
+            if over.as_ref().is_none_or(|b| w < b.0) {
+                over = Some((w, uri.trim().to_owned()));
+            }
+        } else if under.as_ref().is_none_or(|b| w > b.0) {
+            under = Some((w, uri.trim().to_owned()));
         }
     }
-    let uri = best.map(|b| b.1)?;
+    let uri = over.or(under).map(|b| b.1)?;
     Some(resolve(master, &uri))
 }
 

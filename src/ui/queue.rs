@@ -169,6 +169,18 @@ impl Queue {
         }
     }
 
+    /// Slide queue row `i` one place — `dir` negative moves it up. Only what's still to
+    /// come moves, and only past another song still to come: false otherwise.
+    pub fn shift(&mut self, i: usize, dir: isize) -> bool {
+        let first = self.index.map_or(0, |c| c + 1);
+        let Some(j) = i.checked_add_signed(dir) else { return false };
+        if i < first || j < first || j >= self.tracks.len() {
+            return false;
+        }
+        self.tracks.swap(i, j);
+        true
+    }
+
     /// Radio songs for `seed` join the end, without the seed or songs already queued.
     /// Returns whether the song playing was the last one.
     pub fn add_radio(&mut self, seed: &str, tracks: Vec<Track>) -> bool {
@@ -299,6 +311,26 @@ mod tests {
         q.remove(1);
         q.remove(5);
         assert_eq!(ids(&q), ["b", "c"]);
+    }
+
+    #[test]
+    fn a_queued_song_can_move_one_place() {
+        let mut q = queue(&["now", "a", "b", "c"], 0, Repeat::Off);
+        // The song playing and the one before it stay where they are.
+        assert!(!q.shift(0, 1));
+        assert!(!q.shift(1, -1));
+        assert!(q.shift(1, 1));
+        assert_eq!(ids(&q), ["now", "b", "a", "c"]);
+        // The last row has nowhere to go down to.
+        assert!(!q.shift(3, 1));
+        assert!(q.shift(3, -1));
+        assert_eq!(ids(&q), ["now", "b", "c", "a"]);
+        // Nothing playing: every row is coming up, so the first may move down.
+        let mut q = Queue::new(Repeat::Off);
+        q.replace(vec![track("a"), track("b")], 0, None);
+        q.index = None;
+        assert!(q.shift(0, 1));
+        assert_eq!(ids(&q), ["b", "a"]);
     }
 
     #[test]

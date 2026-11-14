@@ -102,15 +102,13 @@ impl App {
         if let Arrival::Done(done) = arrival {
             self.load_done(&id, done);
         }
-        // Its card's play button was pressed before it was here (in someone else's jam the host plays).
+        // Its card's play button was pressed before it was here.
         if let Some((Target::Playlist(p), shuffled)) = &self.play_pending
             && *p == id
         {
             let shuffled = *shuffled;
             self.play_pending = None;
-            if !self.jam.guest() {
-                self.play_opened(id, shuffled);
-            }
+            self.play_opened(id, shuffled);
         }
     }
 

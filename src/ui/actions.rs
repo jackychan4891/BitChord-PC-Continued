@@ -7,19 +7,16 @@ use crate::model::{Target, Track};
 
 use super::lists::LIKED_MUSIC;
 use super::queue::QueueFill;
-use super::{Action, App, Dialog, LibTab, NpTab, Page, jam, transfer};
+use super::{Action, App, Dialog, LibTab, NpTab, Page, jam, keys, nowplaying, shell, transfer};
 
 impl App {
     pub(super) fn apply(&mut self, a: Action) {
-        // In someone else's jam, playback changes become requests to the host.
-        let a = if self.jam.guest() {
-            match jam::guest_action(self, a) {
-                Some(a) => a,
-                None => return,
-            }
-        } else {
-            a
-        };
+        // In a party only the host drives, the relay turns these down for us: say so
+        // instead of clicking into nothing. Playing the current song stays ours (a pause).
+        if self.jam.locked() && jam::refused(self, &a) {
+            self.toast("Only the host can change the party");
+            return;
+        }
         // The first result opened after a search is what Recently Searched remembers.
         self.remember_search_click(&a);
         match a {
@@ -89,6 +86,10 @@ impl App {
                 self.play_current();
             }
             Action::QueueRemove(i) => self.queue.remove(i),
+            Action::QueueMove(i, dir) => {
+                self.queue.shift(i, dir);
+                self.prefetch_next();
+            }
             Action::ViewQueue => {
                 if self.np_open {
                     self.np_tab = NpTab::UpNext;
@@ -225,85 +226,77 @@ impl App {
                 let listed = self.current_id().map(str::to_owned);
                 let playing = self.playing_track().map(|t| t.id.clone()).or(listed.clone());
                 let Some(id) = playing else { return };
-                let at = self.audio.status.position();
                 self.backend.upgrade_quality(&id);
                 if let Some(listed) = listed.filter(|l| l != &id) {
                     self.backend.upgrade_quality(&listed);
                 }
-                self.play_current_at(at, false);
+                if self.hires_sources.is_empty() {
+                    self.toast("No hi-res source is set. Add one in Settings › Playback first.");
+                } else if self.audio_info.is_none() && self.audio.status.wanted_gen.load(std::sync::atomic::Ordering::Relaxed) == self.generation {
+                    // Ask for the stream that is playing, in place. The backend reports the
+                    // attempt either way, so nothing here claims success on its own.
+                    self.upgrade_asked = true;
+                    self.backend.try_upgrade_active(self.generation, self.playing_track().cloned());
+                } else {
+                    let at = self.audio.status.position();
+                    self.play_current_at(at, false);
+                }
             }
         }
     }
 
+    /// The keyboard shortcuts, from the bindings in Settings › Keyboard shortcuts. A
+    /// binding is a key plus the exact modifiers held with it, so `M` and `⌘/Ctrl M` are
+    /// two different things.
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
-        let typing = ctx.egui_wants_keyboard_input();
-        // In a text box, Ctrl+arrows move the cursor by words (and lines) instead; on a
-        // focused button or slider they still skip and change the volume.
-        let editing = ctx.text_edit_focused();
-        let i = ctx.input(|i| {
-            let k = |key| !typing && i.key_pressed(key);
-            let ctrl = |key| !editing && i.modifiers.ctrl && i.key_pressed(key);
-            (
-                k(egui::Key::Space),
-                i.pointer.button_pressed(egui::PointerButton::Extra1)
-                    || (i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft)),
-                i.pointer.button_pressed(egui::PointerButton::Extra2)
-                    || (i.modifiers.alt && i.key_pressed(egui::Key::ArrowRight)),
-                ctrl(egui::Key::ArrowRight),
-                ctrl(egui::Key::ArrowLeft),
-                k(egui::Key::L),
-                k(egui::Key::Q),
-                k(egui::Key::F),
-                i.key_pressed(egui::Key::Escape),
-                ctrl(egui::Key::ArrowUp),
-                ctrl(egui::Key::ArrowDown),
-                // Once per press: holding it doesn't flip back and forth.
-                i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::M, pressed: true, repeat: false, modifiers, .. } if modifiers.ctrl)),
-            )
-        });
-        let (space, back, fwd, next, prev, lyr, queue, full, esc, vol_up, vol_down, mini) = i;
-        if mini {
-            self.actions.push(Action::Mini(!self.mini.target()));
+        // A shortcut row is waiting for a key: the settings page takes this press, not the app.
+        if self.keys_edit.is_some() {
+            return;
         }
+        let hits = keys::pressed(ctx, &self.keys);
+        // The mouse's back and forward buttons: no keyboard binding covers them.
+        let (mb, mf) = ctx.input(|i| (i.pointer.button_pressed(egui::PointerButton::Extra1), i.pointer.button_pressed(egui::PointerButton::Extra2)));
         // The mini player has no pages or now playing to go to, nor does a window on
         // its way back until it's there.
-        let (back, fwd, lyr, queue, full, esc) = if self.mini.busy() { (false, false, false, false, false, false) } else { (back, fwd, lyr, queue, full, esc) };
-        if space {
-            self.toggle();
-        }
-        if back {
-            self.nav_back();
-        }
-        if fwd {
-            self.nav_forward();
-        }
-        if next {
-            self.next();
-        }
-        if prev {
-            self.prev();
-        }
-        if lyr && self.current().is_some() {
-            self.np_open = true;
-            self.np_tab = NpTab::Lyrics;
-        }
-        if queue && self.current().is_some() {
-            self.np_open = true;
-            self.np_tab = NpTab::UpNext;
-        }
-        if full && self.np_open {
-            self.set_fullscreen(ctx, !self.fullscreen);
-        }
-        if esc {
-            if self.fullscreen {
-                self.set_fullscreen(ctx, false);
-            } else {
-                self.np_open = false;
+        let strip = self.mini.busy();
+        for cmd in hits.into_iter().chain(mb.then_some(keys::Cmd::Back)).chain(mf.then_some(keys::Cmd::Forward)) {
+            match cmd {
+                keys::Cmd::PlayPause => self.toggle(),
+                keys::Cmd::Next => self.next(),
+                keys::Cmd::Previous => self.prev(),
+                keys::Cmd::VolumeUp | keys::Cmd::VolumeDown => {
+                    let v = (self.audio.volume() + if cmd == keys::Cmd::VolumeUp { 0.05 } else { -0.05 }).clamp(0.0, 1.0);
+                    self.audio.set_volume(v);
+                }
+                keys::Cmd::Mute => shell::toggle_mute(self, ctx),
+                // The search box keeps its own focus, and asks for it through keys::hit.
+                keys::Cmd::Search => {}
+                keys::Cmd::Lyrics if !strip && self.current().is_some() => {
+                    if nowplaying::lyrics_shown(self, ctx) {
+                        self.np_tab = NpTab::Art;
+                    } else {
+                        nowplaying::ask_lyrics(self, ctx);
+                    }
+                }
+                keys::Cmd::Queue if !strip && self.current().is_some() => {
+                    self.np_open = true;
+                    self.np_tab = NpTab::UpNext;
+                }
+                keys::Cmd::Fullscreen if !strip && self.np_open => self.set_fullscreen(ctx, !self.fullscreen),
+                keys::Cmd::Back if !strip => self.nav_back(),
+                keys::Cmd::Forward if !strip => self.nav_forward(),
+                keys::Cmd::Close if !strip => {
+                    if self.fullscreen {
+                        self.set_fullscreen(ctx, false);
+                    } else {
+                        self.np_open = false;
+                    }
+                }
+                keys::Cmd::MiniPlayer => self.actions.push(Action::Mini(!self.mini.target())),
+                // Held here but nowhere to go: the mini player has no pages, and a song
+                // with nothing playing has no lyrics or queue to show.
+                _ => {}
             }
-        }
-        if vol_up || vol_down {
-            let v = (self.audio.volume() + if vol_up { 0.05 } else { -0.05 }).clamp(0.0, 1.0);
-            self.audio.set_volume(v);
         }
     }
 

@@ -11,7 +11,7 @@ use crate::lyrics::Lyrics;
 use crate::model::Track;
 
 use super::queue::QueueFill;
-use super::{App, MixFrom, PlayingAs, Repeat, Session, jam, lyric_prefs};
+use super::{App, MixFrom, PlayingAs, Repeat, Session, lyric_prefs};
 
 /// Where in the blend the two songs trade places: the outgoing one holds its level for
 /// the first 30% (see `audio::mix_handoff`) and the curves are mirrors, so the next song
@@ -140,25 +140,10 @@ impl App {
         }
     }
 
-    /// Play the current music video as itself again, from where its song is now: a jam
-    /// plays everyone the host's exact upload.
-    pub(super) fn play_listed_upload(&mut self) {
-        if self.playing_as().is_none() {
-            return;
-        }
-        let at = self.audio.status.position();
-        self.playing_as = None;
-        if self.playing() || self.buffering {
-            self.play_current_at(at, false);
-        } else {
-            self.resume_at = Some(at);
-        }
-    }
-
-    /// `t`, when it's a music video to play as its song version. Not in a jam: everyone
-    /// there plays the host's exact upload at the host's position.
+    /// `t`, when it's a music video to play as its song version. A party shares song ids,
+    /// not streams: each device plays the best copy of the song it has.
     pub(super) fn song_of(&self, t: &Track) -> Option<Track> {
-        (self.play_songs && t.music_video && !self.jam.active()).then(|| t.clone())
+        (self.play_songs && t.music_video).then(|| t.clone())
     }
 
     pub(super) fn playing(&self) -> bool {
@@ -284,6 +269,7 @@ impl App {
 
     pub(super) fn play_current(&mut self) {
         self.recoveries = 0;
+        super::jam::hand_picked(self);
         self.play_current_at(Duration::ZERO, true);
     }
 
@@ -299,13 +285,16 @@ impl App {
         }
         // Picking up mid-song (a resume, a download that broke off): the position is the
         // song version's when one was playing, so that goes on; a music video stays one.
-        let carried = if at.is_zero() || self.jam.active() { None } else { self.playing_as().cloned() };
+        let carried = if at.is_zero() { None } else { self.playing_as().cloned() };
         self.queue.started();
         self.resume_at = None;
         self.resume_counts = false;
         self.generation += 1;
         self.audio.status.wanted_gen.store(self.generation, Ordering::Relaxed);
         self.audio_info = None;
+        self.stream_stats = None;
+        self.upgrading_quality = false;
+        self.upgrade_asked = false;
         let shown = carried.clone().unwrap_or_else(|| track.clone());
         self.audio.status.duration_ms.store(shown.duration.map_or(0, |d| d as u64 * 1000), Ordering::Relaxed);
         // A song running into the next crossfades (so does Next, when that's switched
@@ -359,7 +348,7 @@ impl App {
     /// Keep the queue topped up so autoplay never stalls at the end; a playlist still
     /// coming in goes first.
     pub(super) fn top_up(&mut self) {
-        if self.autoplay && !self.radio_pending && !self.jam.guest() && self.queue.fill.is_none() && self.queue.at_end()
+        if self.autoplay && !self.radio_pending && !self.jam.follows() && self.queue.fill.is_none() && self.queue.at_end()
             && let Some(t) = self.current().cloned()
         {
             self.radio_pending = true;
@@ -384,9 +373,10 @@ impl App {
     }
 
     /// Jump over a SponsorBlock segment once playback is inside it; one that runs to the
-    /// end finishes the song. A guest in a jam follows the host, who does the skipping.
+    /// end finishes the song. A member who doesn't drive the party follows it, and the one
+    /// who does skips for everyone.
     pub(super) fn skip_segments(&mut self, ctx: &egui::Context, now: f64) {
-        if !self.sponsorblock || self.jam.guest() || self.resume_at.is_some() || self.buffering || !self.playing() {
+        if !self.sponsorblock || self.jam.follows() || self.resume_at.is_some() || self.buffering || !self.playing() {
             return;
         }
         let Some((id, segs)) = &self.segments else { return };
@@ -427,8 +417,8 @@ impl App {
     }
 
     pub(super) fn next(&mut self) {
-        if self.jam.guest() {
-            return jam::request(self, crate::jam::Cmd::Skip);
+        if self.jam.locked() {
+            return self.toast("Only the host can change the party");
         }
         if !self.queue.advance() {
             return;
@@ -437,8 +427,8 @@ impl App {
     }
 
     pub(super) fn prev(&mut self) {
-        if self.jam.guest() {
-            return jam::request(self, crate::jam::Cmd::Prev);
+        if self.jam.locked() {
+            return self.toast("Only the host can change the party");
         }
         if self.audio.status.position() > Duration::from_secs(3) {
             self.seek_to(Duration::ZERO);
@@ -450,6 +440,12 @@ impl App {
     }
 
     pub(super) fn seek_to(&mut self, at: Duration) {
+        // A needle this device moved is the room's to hear about; `publish` keeps telling
+        // it until the room agrees. Only hand seeks come through here — the sync's own
+        // corrections seek the player directly, so drift never gets reported as a move.
+        if self.jam.active() {
+            self.jam.pending_seek = Some(at.as_millis() as u64);
+        }
         if self.resume_at.is_some() {
             // Restored but not loaded yet (nothing for the player to seek): move the start point instead.
             self.resume_at = Some(at);
@@ -463,8 +459,12 @@ impl App {
         if self.queue.index.is_none() {
             return;
         }
-        if self.jam.guest() {
-            return jam::request(self, crate::jam::Cmd::Toggle);
+        if self.jam.active() && !(self.jam.locked() && !self.playing()) {
+            // Play and pause are the room's to know, so say so here first: that keeps the
+            // sync from walking us straight back to the room's still-unmoved state while
+            // our own ask is on its way. In a room only the host drives, a play stays the
+            // room's alone, and a pause is ours.
+            self.jam.intent = Some(!self.playing());
         }
         if let Some(at) = self.resume_at {
             // Last session's song, already counted when it started then (unless it was
@@ -479,8 +479,8 @@ impl App {
     }
 
     pub(super) fn shuffle_upcoming(&mut self) {
-        if self.jam.guest() {
-            return self.toast("Only the host can shuffle the jam");
+        if self.jam.locked() {
+            return self.toast("Only the host can shuffle the party");
         }
         if self.queue.shuffle_upcoming() {
             self.toast("Shuffled up next");

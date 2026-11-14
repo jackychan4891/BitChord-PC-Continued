@@ -67,6 +67,8 @@ pub enum Req {
     /// A handwritten signature for `name` from the service at `endpoint`; `key` is
     /// what the UI asked for.
     ArtistSignature { key: String, endpoint: String, name: String },
+    /// Test a pasted hi-res source `link`; `key` is what the UI asked for.
+    CheckHiResSource { key: String, link: String },
     /// Radio seeded from a track (`seed`, its id); appended to the queue. `song_of`: the
     /// track, when it's a music video to play as its song: the song's radio is asked for.
     Radio { seed: String, song_of: Option<Track> },
@@ -127,6 +129,7 @@ impl Req {
             Req::AppleArtist { .. } => "Apple artist",
             Req::AppleCover { .. } => "Apple artwork",
             Req::ArtistSignature { .. } => "Artist signature",
+            Req::CheckHiResSource { .. } => "Testing source",
             Req::Radio { .. } => "Loading radio",
             Req::PlayCollection { .. } => "Playback",
             Req::Play { .. } => "Playback",
@@ -148,7 +151,7 @@ impl Req {
 
     /// Background requests fail quietly (logged, no toast).
     fn quiet(&self) -> bool {
-        matches!(self, Req::Suggest { .. } | Req::Account | Req::Channels | Req::ServerQueue | Req::Art { .. } | Req::AppleArtist { .. } | Req::AppleCover { .. } | Req::ArtistSignature { .. } | Req::Prefetch { .. } | Req::HomeMore(_) | Req::Lyrics(_) | Req::Segments { .. } | Req::LyricsExtras { .. })
+        matches!(self, Req::Suggest { .. } | Req::Account | Req::Channels | Req::ServerQueue | Req::Art { .. } | Req::AppleArtist { .. } | Req::AppleCover { .. } | Req::ArtistSignature { .. } | Req::CheckHiResSource { .. } | Req::Prefetch { .. } | Req::HomeMore(_) | Req::Lyrics(_) | Req::Segments { .. } | Req::LyricsExtras { .. })
     }
 }
 
@@ -164,6 +167,24 @@ pub struct SearchResults {
     pub albums: Vec<Card>,
     pub artists: Vec<Card>,
     pub playlists: Vec<Card>,
+}
+
+/// Several relevance-ordered song lists, taken one row at a time in turn, so each keeps
+/// its standing in the merged list. A row repeating a song already taken is dropped (a
+/// video of the song that's already there).
+fn weave(lists: Vec<Vec<Track>>) -> Vec<Track> {
+    let mut out: Vec<Track> = Vec::new();
+    let longest = lists.iter().map(Vec::len).max().unwrap_or(0);
+    for i in 0..longest {
+        for list in &lists {
+            if let Some(t) = list.get(i) {
+                if !out.iter().any(|x| x.id == t.id) {
+                    out.push(t.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// An album or playlist page.
@@ -278,6 +299,9 @@ pub enum Resp {
     AppleCover { key: String, motion: Option<crate::apple::Motion> },
     /// A signature for an artist, already whitened for the header.
     ArtistSignature { key: String, signature: Option<crate::artist_signature::Signature> },
+    /// What a pasted hi-res source link really serves; `key` is what the UI asked with.
+    /// Neither the summary nor the reason names the link, which carries a token.
+    HiResSourceChecked { key: String, result: Result<String, String> },
     Radio { seed: String, tracks: Vec<Track> },
     /// What was asked to play (a `Req::PlayCollection`), and its songs.
     PlayQueue { target: Target, tracks: Vec<Track> },
@@ -293,6 +317,10 @@ pub enum Resp {
     PlayError { generation: u64, msg: String },
     /// What `generation` is playing from a hi-res source (codec, rate, depth, size).
     AudioInfo { generation: u64, info: crate::hires::Info },
+    /// Whether `generation` is actively attempting to upgrade quality from hi-res addons.
+    UpgradingQuality { generation: u64, active: bool },
+    /// What `generation`'s decoder is being fed, whatever the source (stats for nerds).
+    StreamStats { generation: u64, stats: stream::Stats },
     /// Play `generation` is the song version of the music video that was asked for
     /// (`None`: that song wouldn't start, and the music video plays after all).
     PlayingAs { generation: u64, listed: String, song: Option<Track> },
@@ -445,7 +473,7 @@ const PLAY_SONG_WAIT: std::time::Duration = std::time::Duration::from_millis(250
 const PREFETCH_SONG_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 /// How long playback waits for the hi-res sources before falling back to YouTube. A cold
 /// addon mints a lossless URL in a few seconds, and every source is asked at once.
-const HIRES_WAIT: std::time::Duration = std::time::Duration::from_secs(12);
+const HIRES_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[derive(Clone)]
 pub struct Backend {
@@ -473,6 +501,8 @@ pub struct Backend {
     hires: Arc<std::sync::RwLock<Vec<Arc<hires::Client>>>>,
     /// Ask the addons for Dolby Atmos renditions when they offer one.
     atmos: Arc<std::sync::atomic::AtomicBool>,
+    /// Play YouTube first and upgrade to hi-res in the background.
+    disable_direct: Arc<std::sync::atomic::AtomicBool>,
     /// Songs the listener sent back to YouTube audio: no addon copy until they leave.
     reverted: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// Song versions of music videos looked up this session (`None`: there's none), by
@@ -505,7 +535,7 @@ impl Backend {
         {
             log::warn!("proxy relay: {e:#}");
         }
-        let backend = Self { rt: Arc::new(rt), api, tx, audio, wake, prefetched: Default::default(), current: Default::default(), data_dir, lyrics, translate, jsc, premium: Arc::new(tokio::sync::Mutex::new(Err(None))), hq: Default::default(), hires: Default::default(), atmos: Default::default(), reverted: Default::default(), songs: Default::default() };
+        let backend = Self { rt: Arc::new(rt), api, tx, audio, wake, prefetched: Default::default(), current: Default::default(), data_dir, lyrics, translate, jsc, premium: Arc::new(tokio::sync::Mutex::new(Err(None))), hq: Default::default(), hires: Default::default(), atmos: Default::default(), disable_direct: Default::default(), reverted: Default::default(), songs: Default::default() };
         backend.keep_signed_in();
         Ok(backend)
     }
@@ -767,6 +797,15 @@ impl Backend {
                     });
                     Resp::ArtistSignature { key, signature }
                 }
+                Req::CheckHiResSource { key, link } => {
+                    let host = hires::Client::new(&link).map_or_else(|| "?".to_owned(), |c| c.host());
+                    let result = hires::check(&self.http(), &link).await;
+                    match &result {
+                        Ok(summary) => log::info!("hi-res source {host}: {summary}"),
+                        Err(e) => log::warn!("hi-res source {host}: unusable: {e:#}"),
+                    }
+                    Resp::HiResSourceChecked { key, result: result.map_err(|e| e.to_string()) }
+                }
                 Req::Radio { seed, song_of } => {
                     // A music video's radio is music videos; its song's is songs, as from the
                     // song itself. The lookup is shared with its play's (one per video).
@@ -872,18 +911,24 @@ impl Backend {
         }))
     }
 
-    /// Songs, albums, artists and playlists for a search, asked at once. Only the songs
-    /// must arrive.
+    /// Songs, videos, podcast episodes, albums, artists and playlists for a search,
+    /// asked at once. Only the songs must arrive.
     async fn search(&self, query: String, me: bool) -> anyhow::Result<Resp> {
         let api = &*self.api;
-        let (t, al, ar, pl) = tokio::join!(
+        let (t, v, ep, al, ar, pl) = tokio::join!(
             ytm::search_songs(api, &query, me),
+            ytm::search_tracks(api, &query, ytm::Filter::Videos, me),
+            ytm::search_tracks(api, &query, ytm::Filter::Episodes, me),
             ytm::search_cards(api, &query, ytm::Filter::Albums, me),
             ytm::search_cards(api, &query, ytm::Filter::Artists, me),
             ytm::search_cards(api, &query, ytm::Filter::Playlists, me),
         );
+        // Songs, videos and episodes, each already in YouTube's own relevance order,
+        // woven together: a video or a podcast episode earns its place among the songs
+        // instead of waiting below all of them.
+        let tracks = weave(vec![t?, v.unwrap_or_default(), ep.unwrap_or_default()]);
         Ok(Resp::Search(SearchResults {
-            tracks: t?,
+            tracks,
             albums: al.unwrap_or_default(),
             artists: ar.unwrap_or_default(),
             playlists: pl.unwrap_or_default(),
@@ -1119,6 +1164,7 @@ impl Backend {
         let seek = !at.is_zero();
         let shared2 = shared.clone();
         let report = (report && self.is_logged_in() && reports_plays()).then(|| (self.clone(), video_id.to_owned()));
+        let upgrade = shared2.info.is_none().then(|| (self.clone(), video_id.to_owned(), meta));
         let open = move || -> anyhow::Result<crate::audio::TrackDecoder> {
             let mut d = stream::decoder(shared.clone(), seek)?;
             if seek {
@@ -1129,13 +1175,14 @@ impl Backend {
         tokio::task::spawn_blocking(move || match open() {
             Ok(decoder) => {
                 log::debug!("play gen {generation}: decoder ready at {at:?} in {:?}", t0.elapsed());
+                let _ = tx.send(Resp::StreamStats { generation, stats: stream::Stats::of(&shared2, &decoder) });
                 // What a hi-res stream is, as the decoder actually reads it.
                 if let Some(mut info) = shared2.info.clone() {
                     info.sample_rate = Some(rodio::Source::sample_rate(&decoder).get());
                     info.channels = Some(rodio::Source::channels(&decoder).get() as u8);
                     let _ = tx.send(Resp::AudioInfo { generation, info });
-                    wake();
                 }
+                wake();
                 audio.send(AudioCmd::Start { generation, decoder, shared: shared2, at });
                 // Skipped past before it started: that one doesn't count.
                 if let Some((this, id)) = report.filter(|_| audio.status.wanted_gen.load(Ordering::Relaxed) == generation) {
@@ -1148,6 +1195,12 @@ impl Backend {
                             }
                             Err(e) => log::warn!("couldn't report play of {id}: {e:#}"),
                         }
+                    });
+                }
+                if let Some((this, id, Some(track))) = upgrade.filter(|_| audio.status.wanted_gen.load(Ordering::Relaxed) == generation) {
+                    let rt = this.rt.clone();
+                    rt.spawn(async move {
+                        this.try_upgrade_hires(id, generation, track).await;
                     });
                 }
             }
@@ -1307,7 +1360,7 @@ impl Backend {
         if let Some(shared) = tokio::task::spawn_blocking(move || crate::downloads::open(&id)).await? {
             return Ok(shared);
         }
-        let (source, s) = self.resolve(video_id, false, track, true).await?;
+        let (source, s) = self.resolve(video_id, false, track, !self.disable_direct.load(Ordering::Relaxed), prefetch).await?;
         // Atmos arrives already decoded: a complete buffer, no download to run.
         if let Some(data) = s.data {
             return Ok(Shared::from_bytes_with_format(data, s.duration_ms, s.loudness_db, s.format, s.info));
@@ -1341,7 +1394,7 @@ impl Backend {
 
     /// Download a song into the downloads folder, at the best quality the account gets.
     async fn download(&self, t: &Track, for_video: Option<String>) -> anyhow::Result<PathBuf> {
-        let (source, s) = self.resolve(&t.id, true, Some(t), false).await?;
+        let (source, s) = self.resolve(&t.id, true, Some(t), false, false).await?;
         log::info!("download {}: {} bytes from {source:?}", t.id, s.size);
         let shared = Shared::new(s.size, s.duration_ms, s.loudness_db, s.format.clone(), s.info, false);
         stream::download(self.http(), s.url, s.user_agent, shared.clone(), Some(self.refresher(source, &t.id, s.format, None)), s.ranging).await;
@@ -1361,8 +1414,9 @@ impl Backend {
     /// (downloads) takes the high quality stream whatever the setting, and waits for
     /// the solver it needs. Playback without Premium takes Opus where there is one;
     /// downloads stay AAC, which saves as a tagged .m4a. `allow_hires`: try the listener's
-    /// addon source first (playback only).
-    async fn resolve(&self, video_id: &str, best: bool, track: Option<&Track>, allow_hires: bool) -> anyhow::Result<(Source, ResolvedStream)> {
+    /// addon source first (playback only). `prefetch`: only somewhere to start is needed,
+    /// so a source that would have to be fetched and decoded whole is left for the play.
+    async fn resolve(&self, video_id: &str, best: bool, track: Option<&Track>, allow_hires: bool, prefetch: bool) -> anyhow::Result<(Source, ResolvedStream)> {
         // The listener's addons answer for the songs they have; when they miss, YouTube plays.
         let reverted = self.reverted.lock().unwrap().contains(video_id);
         let hires = if allow_hires && !reverted { self.hires.read().unwrap().clone() } else { Vec::new() };
@@ -1370,7 +1424,7 @@ impl Backend {
             && !hires.is_empty()
         {
             let started = std::time::Instant::now();
-            match tokio::time::timeout(HIRES_WAIT, self.from_hires(&hires, track)).await {
+            match tokio::time::timeout(HIRES_WAIT, self.from_hires(&hires, track, prefetch)).await {
                 Ok(Some(s)) => {
                     if let Some(info) = s.info.as_ref() {
                         log::info!("{video_id}: {} audio from {}", info.badge(), info.source);
@@ -1460,17 +1514,17 @@ impl Backend {
                 let track = track.ok_or_else(|| anyhow::anyhow!("no song to look up"))?;
                 let sources = self.hires.read().unwrap().clone();
                 anyhow::ensure!(!sources.is_empty(), "no hi-res source is set");
-                self.from_hires(&sources, track).await.ok_or_else(|| anyhow::anyhow!("no hi-res source has a copy"))?
+                self.from_hires(&sources, track, false).await.ok_or_else(|| anyhow::anyhow!("no hi-res source has a copy"))?
             }
         })
     }
 
     /// The listener's addons, searched together. Atmos leads when the preference is on,
     /// then hi-res/lossless; `None` when none of them has a copy (a miss, not a fault).
-    async fn from_hires(&self, sources: &[Arc<hires::Client>], track: &Track) -> Option<ResolvedStream> {
+    async fn from_hires(&self, sources: &[Arc<hires::Client>], track: &Track, prefetch: bool) -> Option<ResolvedStream> {
         let atmos = self.atmos.load(Ordering::Relaxed);
         let http = self.http();
-        let Some(found) = hires::find_all(&http, sources, track, atmos).await else {
+        let Some(found) = hires::find_all(&http, sources, track, atmos, prefetch).await else {
             log::info!("hi-res: no copy of \"{}\" on {} source(s)", track.title, sources.len());
             return None;
         };
@@ -1478,7 +1532,7 @@ impl Backend {
             url: found.url,
             size: found.size,
             duration_ms: found.duration_ms,
-            user_agent: hires::USER_AGENT.to_owned(),
+            user_agent: hires::agent().to_owned(),
             loudness_db: None,
             format: found.format,
             info: Some(found.info),
@@ -1569,6 +1623,11 @@ impl Backend {
         self.atmos.store(on, Ordering::Relaxed);
     }
 
+    /// Play YouTube immediately and upgrade to hi-res in the background.
+    pub fn set_disable_direct_stream(&self, on: bool) {
+        self.disable_direct.store(on, Ordering::Relaxed);
+    }
+
     /// Send a song back to YouTube audio: later plays of it skip the hi-res sources.
     pub fn revert_quality(&self, video_id: &str) {
         self.reverted.lock().unwrap().insert(video_id.to_owned());
@@ -1579,6 +1638,146 @@ impl Backend {
         self.reverted.lock().unwrap().remove(video_id);
     }
 
+    /// After playback starts on YouTube, opportunistically look for a hi-res
+    /// rendition from addons and upgrade the playing stream in place.
+    async fn try_upgrade_hires(&self, video_id: String, generation: u64, track: Track) {
+        if self.audio.status.wanted_gen.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        if self.reverted.lock().unwrap().contains(&video_id) {
+            return;
+        }
+        let hires = self.hires.read().unwrap().clone();
+        if hires.is_empty() {
+            return;
+        }
+
+        let _ = self.tx.send(Resp::UpgradingQuality { generation, active: true });
+        self.wake();
+        struct UpgradeGuard<'a> {
+            backend: &'a Backend,
+            generation: u64,
+        }
+        impl<'a> Drop for UpgradeGuard<'a> {
+            fn drop(&mut self) {
+                let _ = self.backend.tx.send(Resp::UpgradingQuality { generation: self.generation, active: false });
+                self.backend.wake();
+            }
+        }
+        let _guard = UpgradeGuard { backend: self, generation };
+
+        let started = std::time::Instant::now();
+        let stream_res = match tokio::time::timeout(HIRES_WAIT, self.from_hires(&hires, &track, false)).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                log::info!("{video_id}: no hi-res source has a copy ({:.1}s)", started.elapsed().as_secs_f32());
+                return;
+            }
+            Err(_) => {
+                log::info!("{video_id}: the hi-res sources gave no answer in {HIRES_WAIT:?}");
+                return;
+            }
+        };
+
+        if self.audio.status.wanted_gen.load(Ordering::Relaxed) != generation {
+            log::debug!("hi-res upgrade for {video_id} dropped: generation changed");
+            return;
+        }
+        if self.reverted.lock().unwrap().contains(&video_id) {
+            log::debug!("hi-res upgrade for {video_id} dropped: reverted to YouTube");
+            return;
+        }
+
+        if let Some(info) = stream_res.info.as_ref() {
+            log::info!("{video_id}: upgrading to {} audio from {}", info.badge(), info.source);
+        }
+
+        let (source, s) = (Source::HiRes, stream_res);
+        let shared = if let Some(data) = s.data {
+            Shared::from_bytes_with_format(data, s.duration_ms, s.loudness_db, s.format.clone(), s.info.clone())
+        } else {
+            let shared = Shared::new(s.size, s.duration_ms, s.loudness_db, s.format.clone(), s.info.clone(), false);
+            self.rt.spawn(stream::download(
+                self.http(),
+                s.url,
+                s.user_agent,
+                shared.clone(),
+                Some(self.refresher(source, &video_id, s.format.clone(), Some(track.clone()))),
+                s.ranging,
+            ));
+            shared
+        };
+
+        let pos = self.audio.status.position();
+        let sampled = std::time::Instant::now();
+        let is_playing = self.audio.status.playing.load(Ordering::Relaxed);
+        let shared_decode = shared.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            let seekable = !pos.is_zero();
+            let mut d = stream::decoder(shared_decode.clone(), seekable)?;
+            let actual_pos = if is_playing { pos + sampled.elapsed() } else { pos };
+            if seekable {
+                rodio::Source::try_seek(&mut d, actual_pos).map_err(|e| anyhow::anyhow!("seek: {e}"))?;
+            }
+            Ok::<_, anyhow::Error>((d, actual_pos, seekable))
+        })
+        .await;
+
+        let (decoder, actual_pos, seekable) = match res {
+            Ok(Ok(tuple)) => tuple,
+            Ok(Err(e)) => {
+                log::warn!("failed to decode hi-res stream for {video_id} ({e:#}); continuing with standard quality");
+                return;
+            }
+            Err(e) => {
+                log::warn!("hi-res decoder task failed for {video_id} ({e:#}); continuing with standard quality");
+                return;
+            }
+        };
+
+        if self.audio.status.wanted_gen.load(Ordering::Relaxed) != generation {
+            shared.cancel();
+            return;
+        }
+        if self.reverted.lock().unwrap().contains(&video_id) {
+            shared.cancel();
+            return;
+        }
+
+        *self.current.lock().unwrap() = Some((video_id, shared.clone()));
+        if let Some(mut info) = shared.info.clone() {
+            info.sample_rate = Some(rodio::Source::sample_rate(&decoder).get());
+            info.channels = Some(rodio::Source::channels(&decoder).get() as u8);
+            let _ = self.tx.send(Resp::AudioInfo { generation, info });
+            self.wake();
+        }
+        let _ = self.tx.send(Resp::StreamStats { generation, stats: stream::Stats::of(&shared, &decoder) });
+        self.audio.send(AudioCmd::Upgrade {
+            generation,
+            decoder,
+            shared,
+            at: actual_pos,
+            seekable,
+        });
+    }
+
+    /// Upgrade the active song if it is playing standard YouTube quality and not reverted.
+    pub fn try_upgrade_active(&self, generation: u64, track: Option<Track>) {
+        let (video_id, has_hires) = {
+            let current = self.current.lock().unwrap();
+            let Some((id, shared)) = current.as_ref() else { return };
+            (id.clone(), shared.info.is_some())
+        };
+        if has_hires {
+            return;
+        }
+        let Some(track) = track else { return };
+        let this = self.clone();
+        self.rt.spawn(async move {
+            this.try_upgrade_hires(video_id, generation, track).await;
+        });
+    }
+
     /// Point the hi-res sources at the links in `links`, one per line (empty: none). The
     /// links themselves aren't logged: they can carry a token.
     pub fn set_hires_source(&self, links: &str) {
@@ -1587,6 +1786,10 @@ impl Backend {
         let mut rejected = 0;
         for line in links.lines() {
             let line = line.trim();
+            // One client per distinct link. An exact repeat is skipped (it would fire
+            // duplicate searches and streams at one server, which is how a working
+            // source starts answering 502); a different link on the same host is a
+            // separate source the user asked for and is kept.
             if line.is_empty() || !seen.insert(line.to_owned()) {
                 continue;
             }
@@ -1595,12 +1798,12 @@ impl Backend {
                 None => rejected += 1,
             }
         }
-        let hosts: Vec<String> = clients.iter().map(|c| c.host()).collect();
+        let host_list: Vec<String> = clients.iter().map(|c| c.host()).collect();
         match clients.len() {
             0 if rejected == 0 => log::info!("hi-res sources: none"),
             0 => log::warn!("hi-res sources: none usable ({rejected} not an http(s) link)"),
-            1 => log::info!("hi-res source set: {}", hosts[0]),
-            n => log::info!("{n} hi-res sources set: {}", hosts.join(", ")),
+            1 => log::info!("hi-res source set: {}", host_list[0]),
+            n => log::info!("{n} hi-res sources set: {}", host_list.join(", ")),
         }
         if rejected > 0 && !clients.is_empty() {
             log::warn!("hi-res sources: {rejected} entry(s) aren't http(s) links and were skipped");
@@ -1752,5 +1955,12 @@ mod explore_tests {
         assert!(!saved_playlist_visible(&item("SE", "Auto playlist • 0 episodes")));
         assert!(saved_playlist_visible(&item("SE", "Auto playlist • 2 episodes")));
         assert!(saved_playlist_visible(&item("PLcustom", "Playlist")));
+    }
+
+    #[test]
+    fn woven_results_keep_ranks_and_drop_repeats() {
+        let t = |id: &str| model::Track { id: id.into(), title: id.into(), artists: vec![], album: None, duration: None, thumbs: vec![], track_nr: None, plays: None, music_video: false };
+        let out = weave(vec![vec![t("s1"), t("s2"), t("s3")], vec![t("v1"), t("s2"), t("v3")]]);
+        assert_eq!(out.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["s1", "v1", "s2", "s3", "v3"]);
     }
 }

@@ -13,6 +13,9 @@ impl App {
         if enabled {
             if self.discord.is_none() {
                 self.discord = crate::discord::Discord::spawn();
+                if let Some(d) = &self.discord {
+                    d.set_prefs(self.discord_prefs.clone());
+                }
             }
         } else {
             if let Some(discord) = self.discord.take() {
@@ -32,7 +35,7 @@ impl App {
         let dur = self.audio.status.duration_ms.load(Ordering::Relaxed) as i64;
         // The full quality line the player's track-info shows; YouTube's own audio is
         // the plain compressed one, so it has no detail numbers.
-        let quality = self.audio_info.as_ref().map_or_else(|| "High".to_owned(), |(_, i)| i.details_line());
+        let quality = self.audio_info.as_ref().map_or_else(|| "High".to_owned(), |(_, i)| i.rpc_line());
         // Position ticks every 100 ms; only a jump of 2 s or more is a real seek.
         let same = match (track, &self.discord_sent) {
             (Some(t), Some(b)) => {

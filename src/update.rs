@@ -510,7 +510,7 @@ fn run_detached(script: &str) {
 }
 
 fn client() -> anyhow::Result<reqwest::Client> {
-    Ok(crate::proxy::apply(reqwest::Client::builder()).user_agent(concat!("ytm-rs/", env!("CARGO_PKG_VERSION"))).connect_timeout(std::time::Duration::from_secs(10)).read_timeout(std::time::Duration::from_secs(30)).build()?)
+    Ok(crate::proxy::apply(reqwest::Client::builder()).user_agent(concat!("BitChord/", env!("CARGO_PKG_VERSION"))).connect_timeout(std::time::Duration::from_secs(10)).read_timeout(std::time::Duration::from_secs(30)).build()?)
 }
 
 #[cfg(test)]

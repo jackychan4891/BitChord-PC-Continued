@@ -5,10 +5,43 @@
 use egui::{Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use super::widgets::{self, icon_button, named, text_at};
-use super::{Action, App, NpTab, Repeat, karaoke};
+use super::{Action, App, NpTab, Repeat, glyphs, karaoke};
 use crate::lyrics::{Lyrics, Sync, SyncKind};
 use crate::shader::Params;
 use crate::theme::{self, icon};
+
+/// Where the player remembers the last song whose lyrics were asked for by name.
+fn forced_id() -> egui::Id {
+    egui::Id::new("np-lyrics-forced")
+}
+
+/// Was this song's panel asked for, even though it has nothing to show? The mark is the
+/// song's id, so a skip drops it.
+fn asked(app: &App, ctx: &egui::Context) -> bool {
+    app.current_id().is_some_and(|id| ctx.data(|d| d.get_temp::<String>(forced_id())).is_some_and(|saved| saved == id))
+}
+
+/// The panel actually on screen: a song without lyrics keeps the lyrics tab out of it, so
+/// the artwork shows instead, until the panel is asked for anyway.
+fn view(app: &App, ctx: &egui::Context) -> NpTab {
+    if app.np_tab == NpTab::Lyrics && app.no_lyrics() && !asked(app, ctx) { NpTab::Art } else { app.np_tab }
+}
+
+/// Open the lyrics panel and keep it there, even for a song with nothing to show: its
+/// "no lyrics" note is the answer. The next song forgets the ask, so a song that does have
+/// lyrics opens the panel by itself.
+pub(super) fn ask_lyrics(app: &mut App, ctx: &egui::Context) {
+    if let Some(id) = app.current_id().map(str::to_owned) {
+        ctx.data_mut(|d| d.insert_temp(forced_id(), id));
+    }
+    app.np_tab = NpTab::Lyrics;
+    app.np_open = true;
+}
+
+/// Is the lyrics panel the one showing?
+pub(super) fn lyrics_shown(app: &App, ctx: &egui::Context) -> bool {
+    app.np_open && view(app, ctx) == NpTab::Lyrics
+}
 
 pub fn overlay(app: &mut App, ctx: &egui::Context, now: f64) {
     use crate::preset::BgMode;
@@ -94,6 +127,7 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     let cs = &look.cover;
     let area = ui.max_rect();
     let no_lyrics = app.no_lyrics();
+    let shown_tab = view(app, ui.ctx());
     // The content is this area less its margins: a cover column beside the panel needs
     // 860 points, and below that the cover gives way to the panel.
     let narrow = area.width() - 64.0 < 860.0;
@@ -114,34 +148,35 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
         // standing in for the music video. It lives beside the star under the cover;
         // only when the cover column is hidden (a narrow window showing lyrics) does
         // it stay up here.
-        let cover_hidden = (narrow || cs.layout == Layout::LyricsOnly) && app.np_tab != NpTab::Art && !no_lyrics;
+        let cover_hidden = (narrow || cs.layout == Layout::LyricsOnly) && shown_tab != NpTab::Art;
         if cover_hidden {
             let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
-            options_menu(app, ui, r, &heard, app.np_tab == NpTab::Lyrics && !no_lyrics);
+            options_menu(app, ui, r, &heard, shown_tab == NpTab::Lyrics && !no_lyrics);
         }
     });
 
     let content = Rect::from_min_max(pos2(area.left(), header.bottom() + 12.0), area.max);
-    // The side panel (lyrics / up next) slides in and out when its chip is toggled.
-    // A song without lyrics shows just the artwork, with no transition.
+    // The side panel (lyrics / up next) slides in and out when its chip is toggled. A
+    // song with no lyrics has no lyrics panel to show: it's the artwork instead, unless
+    // the panel was asked for and its "no lyrics" note is what's wanted.
     let last_id = egui::Id::unique("np-last-panel");
-    let panel_tab = if app.np_tab == NpTab::Art {
+    let panel_tab = if shown_tab == NpTab::Art {
         ui.ctx().data(|d| d.get_temp(last_id)).unwrap_or(NpTab::Lyrics)
     } else {
-        ui.ctx().data_mut(|d| d.insert_temp(last_id, app.np_tab));
-        app.np_tab
+        ui.ctx().data_mut(|d| d.insert_temp(last_id, shown_tab));
+        shown_tab
     };
     // Linear 0..1 over the transition; each part eases its own slice of it.
-    let shown = ui.ctx().animate_bool_with_time(egui::Id::unique("np-panel"), app.np_tab != NpTab::Art, 0.6 * theme::SPEED);
+    let shown = ui.ctx().animate_bool_with_time(egui::Id::unique("np-panel"), shown_tab != NpTab::Art, 0.6 * theme::SPEED);
     if shown > 0.0 && shown < 1.0 {
         // Every frame while sliding, not the now-playing view's usual 30 fps.
         ui.ctx().request_repaint();
     }
     let ppp = ui.ctx().pixels_per_point();
-    let p = if panel_tab == NpTab::Lyrics && no_lyrics { 0.0 } else { shown };
+    let p = shown;
     // Whichever is leaving slides and fades out over the first 45%, then the other
     // comes in over the last 70%, both easing out, in either direction.
-    let (panel_vis, art_vis) = if app.np_tab != NpTab::Art {
+    let (panel_vis, art_vis) = if shown_tab != NpTab::Art {
         (theme::ease_out((p - 0.3) / 0.7), 1.0 - theme::ease_out(p / 0.45))
     } else {
         let q = 1.0 - p;
@@ -203,11 +238,14 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
                 let x = ((w - 0.45) / 0.55).clamp(0.0, 1.0);
                 x * x * (3.0 - 2.0 * x)
             };
-            if vis <= 0.001 || (tab == NpTab::Lyrics && no_lyrics) {
+            if vis <= 0.001 {
                 continue;
             }
             let rise = if panel_tab == tab { 18.0 * (1.0 - vis) } else { 0.0 };
-            let r = rect.translate(vec2(0.0, rise));
+            let rect = rect.translate(vec2(0.0, rise));
+            // Up next stops short of the player's bottom edge: the corner toggles are
+            // painted after it and would otherwise land on its last row's buttons.
+            let r = if tab == NpTab::UpNext { Rect::from_min_max(rect.min, pos2(rect.right(), rect.bottom() - 44.0)) } else { rect };
             let mut rui = ui.new_child(egui::UiBuilder::new().max_rect(r));
             rui.set_clip_rect(content.intersect(ui.clip_rect()));
             rui.multiply_opacity(panel_vis * vis);
@@ -216,6 +254,37 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
                 _ => super::shell::queue_list(app, &mut rui, "np"),
             }
         }
+    }
+
+    // Corner toggles, both bottom-right: up next in the corner, lyrics beside it. Each
+    // lights up while its panel is the one showing; clicking the lit one returns to the
+    // artwork alone.
+    let accent = app.accent_color();
+    let ink = |h: f32| theme::lerp_color(theme::text_dim(), theme::text(), h);
+    let corner = |ui: &mut Ui, center: egui::Pos2, key: &str, name: &str| -> egui::Response {
+        let r = Rect::from_center_size(center, Vec2::splat(34.0));
+        let resp = ui.interact(r, ui.scope_id().with(("np-corner", key)), Sense::click());
+        named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand)
+    };
+    let r = corner(ui, pos2(area.right() - 64.0, area.bottom() - 20.0), "lyrics", "Lyrics");
+    let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
+    let on = shown_tab == NpTab::Lyrics;
+    ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
+    glyphs::draw(ui, r.rect.center(), 18.0, if on { glyphs::LYRICS } else { glyphs::LYRICS_OFF }, if on { accent } else { ink(h) });
+    if r.clicked() {
+        if on {
+            app.np_tab = NpTab::Art;
+        } else {
+            ask_lyrics(app, ui.ctx());
+        }
+    }
+    let r = corner(ui, pos2(area.right() - 20.0, area.bottom() - 20.0), "queue", "Up next");
+    let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
+    let on = app.np_tab == NpTab::UpNext;
+    ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
+    glyphs::draw(ui, r.rect.center(), 18.0, glyphs::QUEUE, if on { accent } else { ink(h) });
+    if r.clicked() {
+        app.np_tab = if on { NpTab::Art } else { NpTab::UpNext };
     }
 }
 
@@ -271,13 +340,17 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
         if let Some(album) = track.album.as_ref().map(|a| a.name.clone()).filter(|a| !a.is_empty()) {
             let artist = track.artists.first().map(|a| a.name.clone()).unwrap_or_else(|| track.artist_line());
             app.apple_cover(&album, &artist, Some(&track.title));
-            if let Some(s) = app.apple_sprite(ui.ctx(), &album, &artist, px) {
+            if let Some(s) = app.apple_sprite(ui.ctx(), &album, &artist, Some(&track.title), px) {
                 widgets::paint_motion(ui, art, radius, &s);
             }
         }
         if cs.brightness < 0.99 {
             ui.painter().rect_filled(art, cr, theme::shade(1.0 - cs.brightness));
         }
+    }
+    // A handoff still shows the outgoing song; the stats are the incoming one's.
+    if hold.is_none() {
+        nerd_stats(app, ui, art, round);
     }
     // Title and artists: 17 semibold over 15 secondary, left-aligned to the art.
     let w = side;
@@ -508,24 +581,11 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
             Repeat::One => Repeat::Off,
         };
     }
-
-    if no_lyrics && app.np_tab == NpTab::Lyrics {
-        // A brief note, faded out after a few seconds.
-        let since = ui.ctx().memory_mut(|m| *m.data.get_temp_mut_or_insert_with(egui::Id::unique(("no-lyrics", &track.id)), || now));
-        let a = (1.0 - ((now - since - 3.0) / 1.0) as f32).clamp(0.0, 1.0);
-        if a > 0.0 {
-            let c = theme::with_alpha(theme::text_dim(), a * 0.8);
-            text_at(ui, pos2(x0, ty + 40.0), "No lyrics for this song", theme::regular(14.0), c, w);
-            // Frames only for the fade-out.
-            let wait = (since + 3.0 - now).max(0.0);
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(if wait > 0.0 { wait } else { 0.033 }));
-        }
-    }
 }
 
 // ------------------------------------------------------------------ lyrics
 
-fn lyrics_panel(app: &mut App, ui: &mut Ui, rect: Rect, now: f64, centered: bool) {
+pub(super) fn lyrics_panel(app: &mut App, ui: &mut Ui, rect: Rect, now: f64, centered: bool) {
     // Lent out for the frame rather than cloned (the drawing needs `app` mutably).
     let Some((id, set)) = app.lyrics.take() else {
         ui.add_space(rect.height() * 0.35);
@@ -545,7 +605,9 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, rect: Rect, now: f64, centered: bool
     } else {
         ui.add_space(rect.height() * 0.4);
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("No lyrics found for this song").font(theme::semibold(20.0)).color(theme::text_dim()));
+            ui.label(egui::RichText::new("No lyrics available").font(theme::semibold(20.0)).color(theme::text_dim()));
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("None of the lyric providers has this song.").font(theme::regular(14.0)).color(theme::text_faint()));
         });
     }
     app.lyrics = Some((id, set));
@@ -740,14 +802,8 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
             lyric_options(app, ui);
             menu_divider(ui);
         }
-        widgets::song_actions(ui, track, liked, None, &mut app.actions);
+        widgets::song_actions(ui, track, liked, None, false, &mut app.actions);
         menu_divider(ui);
-        if widgets::menu_action(ui, Some(icon::LIST_PLUS), "Play next") {
-            app.actions.push(Action::PlayNext(track.clone()));
-        }
-        if widgets::menu_action(ui, Some(icon::LIST_MUSIC), "Add to queue") {
-            app.actions.push(Action::Enqueue(track.clone()));
-        }
         let queue = app.np_tab == NpTab::UpNext;
         if widgets::menu_action(ui, Some(icon::LIST_MUSIC), if queue { "View lyrics" } else { "View queue" }) {
             app.np_tab = if queue { NpTab::Lyrics } else { NpTab::UpNext };
@@ -889,7 +945,14 @@ fn paint_quality_icon(ui: &Ui, center: egui::Pos2, height: f32, atmos: bool, tin
 
 /// How wide the quality mark is, so a line can leave room for it.
 pub(super) fn audio_badge_width(ui: &Ui, app: &App, small: bool) -> f32 {
-    let Some((_, info)) = app.audio_info.as_ref() else { return 0.0 };
+    let Some((_, info)) = app.audio_info.as_ref() else {
+        if app.upgrading_quality {
+            let label = "Upgrading quality";
+            let text = widgets::galley(ui, label, badge_font(small), Color32::WHITE, 200.0).size().x;
+            return text + glyph_side(small) + 5.0;
+        }
+        return 0.0;
+    };
     let gh = glyph_side(small);
     if info.atmos && !app.mixing() {
         return gh * quality_icon_aspect(true);
@@ -902,6 +965,28 @@ pub(super) fn audio_badge_width(ui: &Ui, app: &App, small: bool) -> f32 {
 /// The quality mark — a glyph and the stream's name, tinted with the theme — drawn at
 /// `at`; a click opens its details. Returns how much room it took.
 pub(super) fn audio_badge(app: &App, ui: &mut Ui, at: egui::Pos2, small: bool) -> f32 {
+    if app.audio_info.is_none() && app.upgrading_quality {
+        let font = badge_font(small);
+        let gh = glyph_side(small);
+        let now = ui.input(|i| i.time);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        let pulse = ((now * 3.5).sin() * 0.5 + 0.5) as f32;
+        let alpha = 0.35 + 0.65 * pulse;
+        let accent = app.accent_color();
+        let ink = theme::with_alpha(theme::lerp_color(accent, Color32::WHITE, 0.20), alpha);
+        let mark = theme::with_alpha(accent, alpha);
+        let g = widgets::galley(ui, "Upgrading quality", font, ink, 200.0);
+        let w = audio_badge_width(ui, app, small);
+        let h = g.size().y.max(gh);
+        let rect = Rect::from_min_size(at, vec2(w, h));
+        let resp = ui.interact(rect, ui.scope_id().with("audio-badge-upgrading"), Sense::hover());
+        named(resp, "Audio quality").on_hover_text("Checking hi-res addons and upgrading audio quality...");
+        let mut x = at.x;
+        super::glyphs::draw(ui, pos2(x + gh / 2.0, at.y + h / 2.0), gh, super::glyphs::WAVE, mark);
+        x += gh + 5.0;
+        ui.painter().galley(pos2(x, at.y + (h - g.size().y) / 2.0), g, ink);
+        return w;
+    }
     let Some((_, info)) = app.audio_info.as_ref() else { return 0.0 };
     let font = badge_font(small);
     // A mix in progress wears its own name over the quality mark; the details keep the truth.
@@ -941,11 +1026,25 @@ pub(super) fn audio_badge(app: &App, ui: &mut Ui, at: egui::Pos2, small: bool) -
 
 /// Just the quality glyph, centred on `center`, for the mini player's artist line.
 pub(super) fn audio_badge_icon_width(app: &App, small: bool) -> f32 {
+    if app.audio_info.is_none() && app.upgrading_quality {
+        return glyph_side(small);
+    }
     let Some((_, info)) = app.audio_info.as_ref().filter(|(_, i)| has_quality_glyph(i)) else { return 0.0 };
     glyph_side(small) * quality_mark_aspect(info.atmos)
 }
 
 pub(super) fn audio_badge_icon(app: &App, ui: &mut Ui, center: egui::Pos2, small: bool) {
+    if app.audio_info.is_none() && app.upgrading_quality {
+        let gh = glyph_side(small);
+        let now = ui.input(|i| i.time);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        let pulse = ((now * 3.5).sin() * 0.5 + 0.5) as f32;
+        let alpha = 0.35 + 0.65 * pulse;
+        let accent = app.accent_color();
+        let mark = theme::with_alpha(accent, alpha);
+        super::glyphs::draw(ui, center, gh, super::glyphs::WAVE, mark);
+        return;
+    }
     let Some((_, info)) = app.audio_info.as_ref().filter(|(_, i)| has_quality_glyph(i)) else { return };
     let gh = glyph_side(small);
     let rect = Rect::from_center_size(center, vec2(gh * quality_mark_aspect(info.atmos), gh));
@@ -997,12 +1096,7 @@ fn audio_info_menu(ui: &mut Ui, info: &crate::hires::Info) {
         info_row(ui, "Bit depth", &format!("{bits}-bit"));
     }
     if let Some(n) = info.channels {
-        let text = match n {
-            1 => "Mono".to_owned(),
-            2 => "Stereo".to_owned(),
-            _ => format!("{n} channels"),
-        };
-        info_row(ui, "Channels", &text);
+        info_row(ui, "Channels", &channels_text(n.into()));
     }
     if info.size > 0 {
         info_row(ui, "Size", &size_text(info.size));
@@ -1011,6 +1105,48 @@ fn audio_info_menu(ui: &mut Ui, info: &crate::hires::Info) {
         info_row(ui, "Duration", &super::fmt_time((info.duration_ms / 1000) as u32));
     }
     ui.add_space(6.0);
+}
+
+/// Stats for nerds, on the foot of the sleeve: what the decoder is being fed, from
+/// whichever source. Nothing while the setting is off.
+fn nerd_stats(app: &App, ui: &Ui, art: Rect, round: bool) {
+    let Some((_, stats)) = app.stream_stats.as_ref().filter(|_| app.show_nerd_stats) else { return };
+    let ink = theme::with_alpha(Color32::WHITE, 0.65);
+    let g = widgets::galley(ui, &stats_line(stats), theme::semibold(11.0), ink, art.width() - 20.0);
+    // A disc narrows toward its foot: the line rises until it fits across.
+    let foot = if round {
+        let r = art.width() / 2.0;
+        let half = (g.size().x / 2.0 + 10.0).min(r);
+        art.center().y + (r * r - half * half).sqrt() - 8.0
+    } else {
+        art.bottom() - 8.0
+    };
+    let at = pos2(art.center().x - g.size().x / 2.0, foot - g.size().y);
+    // Plain white washes out over a pale cover; the shadow under it keeps it legible.
+    ui.painter().galley_with_override_text_color(at + vec2(0.0, 1.0), g.clone(), Color32::from_black_alpha(140));
+    ui.painter().galley(at, g, ink);
+}
+
+/// The stats as one line: `Opus · 48 kHz · 133 kbps · Stereo`.
+fn stats_line(s: &crate::stream::Stats) -> String {
+    let mut parts = vec![s.codec.clone()];
+    if let Some(bits) = s.bit_depth {
+        parts.push(format!("{bits}-bit"));
+    }
+    parts.push(rate_text(s.sample_rate));
+    if let Some(kbps) = s.bitrate_kbps {
+        parts.push(format!("{} kbps", thousands(kbps)));
+    }
+    parts.push(channels_text(s.channels));
+    parts.join(" · ")
+}
+
+fn channels_text(n: u16) -> String {
+    match n {
+        1 => "Mono".to_owned(),
+        2 => "Stereo".to_owned(),
+        _ => format!("{n} channels"),
+    }
 }
 
 fn info_row(ui: &mut Ui, label: &str, value: &str) {

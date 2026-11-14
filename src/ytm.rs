@@ -53,6 +53,8 @@ pub enum Filter {
     /// Playlists made by YouTube Music (not the community ones).
     Playlists,
     Videos,
+    /// Podcast episodes, which play like songs.
+    Episodes,
 }
 
 impl Filter {
@@ -63,6 +65,7 @@ impl Filter {
             Filter::Artists => "EgWKAQIgAWoQEAMQBBAJEAoQBRAREBAQFQ%3D%3D",
             Filter::Playlists => "EgeKAQQoADgBahIQAxAEEAkQDhAKEAUQERAQEBU%3D",
             Filter::Videos => "EgWKAQIQAWoQEAMQBBAJEAoQBRAREBAQFQ%3D%3D",
+            Filter::Episodes => "EgWKAQJIAWoQEAMQBBAJEAoQBRAREBAQFQ%3D%3D",
         }
     }
 }
@@ -75,13 +78,18 @@ async fn search_as(api: &Api, query: &str, filter: Filter, auth: bool) -> anyhow
 
 /// `auth`: as the signed-in account, which adds the query to its search history.
 pub async fn search_songs(api: &Api, query: &str, auth: bool) -> anyhow::Result<Vec<Track>> {
-    Ok(search_as(api, query, Filter::Songs, auth).await?.iter().filter_map(|i| list_item(&i["musicResponsiveListItemRenderer"])).collect())
+    search_tracks(api, query, Filter::Songs, auth).await
+}
+
+/// Song, video or episode rows under any filter.
+pub async fn search_tracks(api: &Api, query: &str, filter: Filter, auth: bool) -> anyhow::Result<Vec<Track>> {
+    Ok(search_as(api, query, filter, auth).await?.iter().filter_map(|i| list_item(&i["musicResponsiveListItemRenderer"])).collect())
 }
 
 /// Song or video rows, searched as the signed-in account: signed-out searches miss
 /// some major-label releases entirely (the Spotify transfer needs those).
 pub async fn search_tracks_signed_in(api: &Api, query: &str, filter: Filter) -> anyhow::Result<Vec<Track>> {
-    Ok(search_as(api, query, filter, true).await?.iter().filter_map(|i| list_item(&i["musicResponsiveListItemRenderer"])).collect())
+    search_tracks(api, query, filter, true).await
 }
 
 pub async fn search_cards(api: &Api, query: &str, filter: Filter, auth: bool) -> anyhow::Result<Vec<Card>> {

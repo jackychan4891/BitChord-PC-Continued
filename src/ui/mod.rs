@@ -12,6 +12,7 @@ mod glyphs;
 mod integrations;
 mod jam;
 mod karaoke;
+mod keys;
 mod lists;
 mod lyric_prefs;
 mod mini;
@@ -49,9 +50,9 @@ use dev::{dev_pace, dev_screenshot, dev_var};
 use dialogs::text_field;
 pub use queue::Repeat;
 
-/// Animated sleeves are off until the decoder is fixed: the surfacing call sites stay
-/// in place, so turning this back on is all it takes to try again.
-const MOTION_COVERS: bool = false;
+/// How many motion sleeves are decoded at once. A view's frames and texture are
+/// sized by the drawn tile, so this caps what the feature can hold.
+const MOTION_VIEWS: usize = 4;
 
 #[derive(Clone, PartialEq, Hash, Debug)]
 pub enum Page {
@@ -66,8 +67,6 @@ pub enum Page {
     Settings,
     /// Transfer from Spotify.
     Transfer,
-    /// Listen together.
-    Jam,
 }
 
 #[derive(Clone, Copy, PartialEq, Hash, Debug)]
@@ -99,6 +98,8 @@ pub enum Action {
     Go(Page),
     QueueJump(usize),
     QueueRemove(usize),
+    /// A queue row one place up (`dir` negative) or down.
+    QueueMove(usize, isize),
     /// Open up next (the player's) or the queue drawer (the bar's).
     ViewQueue,
     Seek(f32),
@@ -228,11 +229,13 @@ pub struct MotionView {
     seen: u64,
     /// The width this decoder was started at: a larger view replaces it once.
     width: u32,
+    /// When a view last asked for a frame; idle ones are dropped, decoder and all.
+    last_used: std::time::Instant,
 }
 
 impl MotionView {
     fn new(motion: std::sync::Arc<crate::motion::Motion>, width: u32) -> Self {
-        Self { motion, tex: None, seen: 0, width }
+        Self { motion, tex: None, seen: 0, width, last_used: std::time::Instant::now() }
     }
 
     /// The newest frame as a texture, once one has been decoded.
@@ -267,6 +270,8 @@ pub struct App {
     discord_enabled: bool,
     /// Last state sent to Discord, to send only real changes.
     discord_sent: Option<crate::discord::Presence>,
+    /// How the Discord card is worded and what it carries.
+    discord_prefs: crate::discord::Prefs,
     /// The Last.fm account scrobbles go to; a sign-in in progress and its outcome.
     lastfm_user: Option<String>,
     lastfm_busy: Arc<AtomicBool>,
@@ -404,11 +409,22 @@ pub struct App {
     hires_draft: String,
     /// Focus the draft row as soon as it opens.
     hires_focus: bool,
+    /// What each link was found to serve (or why it can't be used), keyed by the link.
+    hires_checks: std::collections::HashMap<String, Result<String, String>>,
+    /// Links whose test is still running.
+    hires_checking: std::collections::HashSet<String>,
     /// Ask the addons for Dolby Atmos renditions.
     prefer_atmos: bool,
     /// What the playing stream is (codec, rate, depth, size), when a hi-res source
     /// supplied it, with the generation it belongs to.
     audio_info: Option<(u64, crate::hires::Info)>,
+    show_nerd_stats: bool,
+    stream_stats: Option<(u64, crate::stream::Stats)>,
+    upgrading_quality: bool,
+    /// The player's "Upgrade quality" was pressed and no hi-res stream has answered yet:
+    /// the difference between a search that ran and found nothing and one never started.
+    upgrade_asked: bool,
+    disable_direct_stream: bool,
     accent: Color32,
     /// Selected theme preset (see `preset.rs`).
     theme_id: String,
@@ -418,6 +434,9 @@ pub struct App {
     appearance: theme::Appearance,
     anim_bg: bool,
     reactive_bg: bool,
+    /// Apple's moving album art. Off unless asked for: a sleeve needs a decoder, a
+    /// frame and a texture each, and they add up while the music plays.
+    animated_artwork: bool,
     /// Skip the parts of music videos SponsorBlock marks as not music.
     sponsorblock: bool,
     /// Crossfade between songs, and over how many seconds.
@@ -529,6 +548,20 @@ pub struct App {
     hidden_playlists: HashSet<String>,
     /// The collection page whose inline search is open, and what's typed in it.
     coll_search: Option<(String, String)>,
+    /// What's typed in the box above Settings; the page keeps only what it matches.
+    settings_search: String,
+    /// The keyboard shortcuts, with what the user changed over the defaults.
+    keys: keys::Map,
+    /// The shortcut row waiting for a key, if one is being recorded.
+    keys_edit: Option<keys::Cmd>,
+    /// Listen together: the relay to use; empty for the app's own.
+    jam_server: String,
+    /// This device's ids on the relay. They are derived from the data directory the first
+    /// time and kept, so a reconnect joins as the same member rather than a stranger.
+    jam_user: String,
+    jam_device: String,
+    /// Settings shows the Listen together section rather than its list of sections.
+    jam_open: bool,
     actions: Vec<Action>,
     dialog: Option<Dialog>,
     share_pending: Option<String>,
@@ -579,10 +612,13 @@ impl App {
         backend.set_high_quality(get("high_quality").is_none_or(|v| v == "1"));
         // Before any request: a song started at launch must see the hi-res source too.
         let hires_source = get("hires_source").unwrap_or_default();
-        let hires_sources: Vec<String> = hires_source.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+        let hires_sources: Vec<String> = dedupe_hires(hires_source.lines().map(str::trim).filter(|l| !l.is_empty()));
         backend.set_hires_source(&hires_sources.join("\n"));
         let prefer_atmos = get("prefer_atmos").is_some_and(|v| v == "1");
         backend.set_prefer_atmos(prefer_atmos);
+        let show_nerd_stats = get("show_nerd_stats").is_some_and(|v| v == "1");
+        let disable_direct_stream = get("disable_direct_stream").is_some_and(|v| v == "1");
+        backend.set_disable_direct_stream(disable_direct_stream);
         backend.request(Req::Home(None));
         if logged_in {
             backend.request(Req::Library);
@@ -593,14 +629,20 @@ impl App {
             let b = backend.clone();
             crate::transfer::Transfer::new(backend.data_dir(), Arc::new(move || b.wake()))
         };
+        let discord_prefs = crate::discord::Prefs::load(&get);
+        let discord = discord_enabled.then(crate::discord::Discord::spawn).flatten();
+        if let Some(d) = &discord {
+            d.set_prefs(discord_prefs.clone());
+        }
         let mut app = Self {
             backend,
             audio,
             ch,
             media,
-            discord: discord_enabled.then(crate::discord::Discord::spawn).flatten(),
+            discord,
             discord_enabled,
             discord_sent: None,
+            discord_prefs,
             lastfm_user: crate::lastfm::user(),
             lastfm_busy: Default::default(),
             lastfm_result: Default::default(),
@@ -678,6 +720,13 @@ impl App {
             playlist_order: get("playlist_order").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
             hidden_playlists: get("hidden_playlists").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
             coll_search: None,
+            settings_search: String::new(),
+            keys: keys::Map::default(),
+            keys_edit: None,
+            jam_server: String::new(),
+            jam_user: String::new(),
+            jam_device: String::new(),
+            jam_open: false,
             update_checked: None,
             update_announced: false,
             notes_dialog: None,
@@ -716,8 +765,15 @@ impl App {
             hires_adding: false,
             hires_draft: String::new(),
             hires_focus: false,
+            hires_checks: Default::default(),
+            hires_checking: Default::default(),
             prefer_atmos,
             audio_info: None,
+            show_nerd_stats,
+            stream_stats: None,
+            upgrading_quality: false,
+            upgrade_asked: false,
+            disable_direct_stream,
             art_changed: -10.0,
             accent: theme::RED,
             theme_id: crate::preset::DEFAULT_ID.to_owned(),
@@ -726,6 +782,7 @@ impl App {
             appearance: theme::Appearance::from_key(&dev_var("YTM_APPEARANCE").map(str::to_owned).or_else(|| get("appearance")).unwrap_or_default()),
             anim_bg: get("anim_bg").is_none_or(|v| v == "1"),
             reactive_bg: get("reactive_bg").is_none_or(|v| v == "1"),
+            animated_artwork: get("animated_artwork").is_some_and(|v| v == "1"),
             sponsorblock: get("sponsorblock").is_some_and(|v| v == "1"),
             crossfade: get("crossfade").is_some_and(|v| v == "1"),
             automix: get("automix").is_some_and(|v| v == "1"),
@@ -796,7 +853,7 @@ impl App {
             Ok("history") => app.go(Page::Library(LibTab::History)),
             Ok("settings") => app.go(Page::Settings),
             Ok("transfer") => app.go(Page::Transfer),
-            Ok("jam") => app.go(Page::Jam),
+            Ok("jam") => app.go(Page::Settings),
             Ok(p) if p.starts_with("album:") => app.go(Page::Album(p[6..].to_owned())),
             Ok(p) if p.starts_with("artist:") => app.go(Page::Artist(p[7..].to_owned())),
             Ok(p) if p.starts_with("playlist:") => app.go(Page::Playlist(p[9..].to_owned())),
@@ -815,6 +872,10 @@ impl App {
             app.np_open = true;
         }
         app.jam.name = get("jam_name").unwrap_or_default();
+        app.jam_server = get("jam_server").unwrap_or_default();
+        app.jam_user = get("jam_user").unwrap_or_default();
+        app.jam_device = get("jam_device").unwrap_or_default();
+        app.keys = keys::Map::load(get("shortcuts"));
         // Last launch's name, picture and playlists, so they show at once; the account
         // menu and the library replace them when they arrive.
         if app.logged_in
@@ -882,6 +943,8 @@ impl App {
     /// showing the cached copy meanwhile.
     fn page_loaded(&mut self) {
         self.page_changed = -1.0; // stamped with the frame time on the next pass
+        // Any section opened inside Settings is left behind with the page.
+        self.jam_open = false;
         // The search box holds the query of the search page you're on, and is empty elsewhere.
         self.search_synced = match &self.page {
             Page::Search(q) => q.clone(),
@@ -952,12 +1015,13 @@ impl App {
         }
     }
 
-    /// Ask Apple, once, for the release's motion sleeve.
+    /// Ask Apple, once, for the motion sleeve of a release: `title` names the song whose
+    /// sleeve is wanted, `None` asks for the release `album` itself.
     fn apple_cover(&mut self, album: &str, artist: &str, title: Option<&str>) {
-        if !MOTION_COVERS || album.is_empty() || artist.is_empty() {
+        if !self.animated_artwork || album.is_empty() || artist.is_empty() {
             return;
         }
-        let key = format!("{album}\u{1}{artist}");
+        let key = apple_key(album, artist, title);
         if self.apple_covers.contains_key(&key) {
             return;
         }
@@ -975,15 +1039,22 @@ impl App {
         });
     }
 
-    /// The newest frame of the release's motion sleeve, started the first time it's seen.
+    /// The newest frame of that sleeve, started the first time it's seen.
     /// `None` until Apple has answered (or if it has no clip for the release).
-    fn apple_sprite(&mut self, ctx: &egui::Context, album: &str, artist: &str, max_width: u32) -> Option<widgets::MotionSprite> {
-        if !MOTION_COVERS {
+    fn apple_sprite(&mut self, ctx: &egui::Context, album: &str, artist: &str, title: Option<&str>, max_width: u32) -> Option<widgets::MotionSprite> {
+        if !self.animated_artwork {
             return None;
         }
-        let key = format!("{album}\u{1}{artist}");
+        let key = apple_key(album, artist, title);
         let url = self.apple_covers.get(&key)?.clone()?;
-        self.motion_sprite(ctx, key, &url, max_width)
+        self.motion_sprite(ctx, &url, max_width)
+    }
+
+    /// Put the motion sleeves down: decoders stopped, their frames and textures released.
+    /// What a song costs while it plays is worth handing back once it has ended, or as
+    /// soon as the setting says the art shouldn't move.
+    fn deload_motion(&mut self) {
+        self.apple_motion.clear();
     }
 
     /// The artist's handwritten signature, from the service in Settings: asked for once
@@ -1030,20 +1101,46 @@ impl App {
         self.signature_waiting.clear();
     }
 
+    /// What a pasted hi-res link actually serves, asked once and then remembered. `None`
+    /// while the test runs. The link is the key, so a retyped link is tested afresh.
+    pub(super) fn hires_check(&mut self, link: &str) -> Option<&Result<String, String>> {
+        if let Some(verdict) = self.hires_checks.get(link) {
+            return Some(verdict);
+        }
+        if !self.hires_checking.contains(link) {
+            self.hires_checking.insert(link.to_owned());
+            self.backend.request(Req::CheckHiResSource { key: link.to_owned(), link: link.to_owned() });
+        }
+        None
+    }
+
     /// The newest frame of a motion clip, started the first time it's seen. The decoders
     /// on screen are capped so old pages don't leave threads behind.
-    fn motion_sprite(&mut self, ctx: &egui::Context, key: String, url: &str, max_width: u32) -> Option<widgets::MotionSprite> {
-        // One decoder per release. The strip and the player ask for different sizes, and
-        // replacing it per caller would restart the clip every frame and never show a
-        // frame: a bigger view takes over only when it needs a wider decode.
+    fn motion_sprite(&mut self, ctx: &egui::Context, url: &str, max_width: u32) -> Option<widgets::MotionSprite> {
+        // Never decode wider than the player's sleeve needs; frames and textures are
+        // sized by this, so it bounds the whole feature's memory.
+        let max_width = max_width.clamp(64, 640);
+        // A tile that scrolled away stops being asked for; its decoder goes soon after.
+        self.apple_motion.retain(|_, v| v.last_used.elapsed() < Duration::from_secs(6));
+        // One decoder per clip, keyed by its address: the songs of an album share its
+        // sleeve, and a view that restarted for each of them would never show a frame.
+        // The strip and the player ask for different sizes, and replacing it per caller
+        // would restart the clip every frame: a bigger view takes over only when it
+        // needs a wider decode.
+        let key = url.to_owned();
         let stale = self.apple_motion.get(&key).map_or(true, |v| v.width < max_width);
         if stale {
-            if self.apple_motion.len() >= 8 {
-                self.apple_motion.clear();
+            // At the cap, the least recently used view makes way for the new one.
+            if self.apple_motion.len() >= MOTION_VIEWS
+                && let Some(oldest) = self.apple_motion.iter().min_by_key(|(_, v)| v.last_used).map(|(k, _)| k.clone())
+            {
+                self.apple_motion.remove(&oldest);
             }
             self.apple_motion.insert(key.clone(), MotionView::new(crate::motion::play(ctx, url, max_width), max_width));
         }
-        let tex = self.apple_motion.get_mut(&key)?.texture(ctx)?;
+        let view = self.apple_motion.get_mut(&key)?;
+        view.last_used = std::time::Instant::now();
+        let tex = view.texture(ctx)?;
         Some(widgets::MotionSprite { id: tex.id(), size: tex.size_vec2() })
     }
 
@@ -1117,14 +1214,14 @@ impl eframe::App for App {
         if crate::deeplink::take_show() {
             self.show_window(ctx);
         }
-        for code in crate::deeplink::take() {
+        for link in crate::deeplink::take() {
             self.show_window(ctx);
-            jam::open_link(self, code);
+            jam::open_link(self, link.code, link.server);
         }
         for a in std::mem::take(&mut self.actions) {
             self.apply(a);
         }
-        jam::tick(self);
+        jam::tick(self, ctx);
         jam::dev_script(self, ctx, now);
         if self.page_changed < 0.0 {
             self.page_changed = now;
@@ -1194,6 +1291,9 @@ impl eframe::App for App {
                 ctx.request_repaint_after(Duration::from_millis(250));
             }
         } else if self.np_open && playing && !self.mini.busy() {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        } else if playing && self.mini.showing() && self.mini.lyrics {
+            // The band's line lights word by word; four frames a second reads as a lag.
             ctx.request_repaint_after(Duration::from_millis(33));
         } else if playing && widgets::equalizer_shown(ctx) {
             // The playing row's bars need a steady, full rate to read as smooth.
@@ -1393,6 +1493,10 @@ impl eframe::App for App {
         storage.set_string("autoplay", b(self.autoplay));
         storage.set_string("recent_searches", serde_json::to_string(&self.recent_searches).unwrap_or_default());
         storage.set_string("jam_name", self.jam.name.clone());
+        storage.set_string("jam_server", self.jam_server.clone());
+        storage.set_string("jam_user", self.jam_user.clone());
+        storage.set_string("jam_device", self.jam_device.clone());
+        storage.set_string("shortcuts", self.keys.json());
         let cache = self.logged_in.then(|| AccountCache {
             name: self.account_name.clone(),
             avatar: self.account_avatar.clone(),
@@ -1443,6 +1547,7 @@ impl eframe::App for App {
             storage.set_string("last_version", crate::update::current_version());
         }
         storage.set_string("discord_enabled", b(self.discord_enabled));
+        self.discord_prefs.save(storage);
         if dev_var("YTM_APPEARANCE").is_none() {
             storage.set_string("appearance", self.appearance.key().to_owned());
         }
@@ -1454,9 +1559,12 @@ impl eframe::App for App {
         }
         storage.set_string("anim_bg", b(self.anim_bg));
         storage.set_string("reactive_bg", b(self.reactive_bg));
+        storage.set_string("animated_artwork", b(self.animated_artwork));
         storage.set_string("signature_api", self.signature_api.clone());
         storage.set_string("hires_source", self.hires_sources.join("\n"));
         storage.set_string("prefer_atmos", b(self.prefer_atmos));
+        storage.set_string("show_nerd_stats", b(self.show_nerd_stats));
+        storage.set_string("disable_direct_stream", b(self.disable_direct_stream));
         storage.set_string("sponsorblock", b(self.sponsorblock));
         storage.set_string("crossfade", b(self.crossfade));
         storage.set_string("automix", b(self.automix));
@@ -1495,7 +1603,32 @@ impl eframe::App for App {
 
 const SESSION_KEY: &str = "session";
 
+/// The cache slot of a release's motion sleeve: a song's sleeve is kept apart from its
+/// album's, since Apple answers one and not the other.
+fn apple_key(album: &str, artist: &str, title: Option<&str>) -> String {
+    match title {
+        Some(t) => format!("{album}\u{1}{artist}\u{1}{t}"),
+        None => format!("{album}\u{1}{artist}"),
+    }
+}
+
 /// Start this exe again once this process has saved and exited.
+/// One entry per distinct link. Only an exact repeat is dropped: a second link on the
+/// same addon host (a refreshed token, or another addon served from there) is a source
+/// the user asked for and stays. The backend still talks to each exact link once, so a
+/// link pasted twice can't fire duplicate searches and streams at one server.
+fn dedupe_hires<'a>(links: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for link in links {
+        let link = link.trim();
+        if !link.is_empty() && seen.insert(link.to_owned()) {
+            out.push(link.to_owned());
+        }
+    }
+    out
+}
+
 fn relaunch() {
     let Ok(exe) = std::env::current_exe() else { return };
     log::info!("restarting");
@@ -1668,5 +1801,16 @@ mod session_tests {
         let video = Track { music_video: true, ..s.queue[0].clone() };
         let back: Track = serde_json::from_str(&serde_json::to_string(&video).unwrap()).unwrap();
         assert!(back.music_video);
+    }
+
+    #[test]
+    fn the_settings_box_wants_every_word_it_was_given() {
+        let words = |q: &str| q.split_whitespace().map(str::to_lowercase).collect::<Vec<_>>();
+        let row = "Crossfade length Blend the end of one song into the start of the next";
+        assert!(pages::settings_hit(row, &words("crossfade")));
+        assert!(pages::settings_hit(row, &words("length crossfade")));
+        assert!(pages::settings_hit(row, &words("CROSSFADE")));
+        assert!(!pages::settings_hit(row, &words("crossfade atmos")));
+        assert!(pages::settings_hit(row, &words("")));
     }
 }

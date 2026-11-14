@@ -474,7 +474,7 @@ fn cover_xfade(ui: &Ui, site: egui::Id, rect: Rect, radius: f32, url: &str, uv: 
 }
 
 /// Album/playlist/artist/song card with hover zoom, scrim and a play button.
-pub fn card(ui: &mut Ui, c: &Card, width: f32, liked: bool, acts: &mut Vec<Action>) {
+pub fn card(ui: &mut Ui, c: &Card, width: f32, liked: bool, acts: &mut Vec<Action>, sprite: Option<&MotionSprite>) {
     let height = width + 58.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -487,6 +487,10 @@ pub fn card(ui: &mut Ui, c: &Card, width: f32, liked: bool, acts: &mut Vec<Actio
     let img = Rect::from_min_size(rect.min, Vec2::splat(width));
     let radius = if c.round { width / 2.0 } else { theme::card_radius().min(width / 2.0) };
     paint_cover(ui, img, &c.thumbs, radius, 1.0 + 0.06 * h * theme::hover_k());
+    // The motion sleeve plays over the still, under the hover shade and play button.
+    if let Some(s) = sprite {
+        paint_motion(ui, img, radius, s);
+    }
     if h > 0.0 && !c.round {
         ui.painter().rect_filled(img, radius, theme::shade(0.28 * h));
     }
@@ -530,9 +534,9 @@ pub fn card(ui: &mut Ui, c: &Card, width: f32, liked: bool, acts: &mut Vec<Actio
     }
 }
 
-fn card_menu_contents(ui: &mut Ui, c: &Card, liked: bool, acts: &mut Vec<Action>) {
+pub(crate) fn card_menu_contents(ui: &mut Ui, c: &Card, liked: bool, acts: &mut Vec<Action>) {
     match &c.target {
-        Target::Song(t) => song_menu(ui, t, liked, None, acts),
+        Target::Song(t) => song_menu(ui, t, liked, None, None, acts),
         t => {
             ui.set_width(226.0);
             ui.add_space(3.0);
@@ -596,10 +600,10 @@ fn menu_action_star(ui: &mut Ui, liked: bool, label: &str) -> bool {
 }
 
 /// `remove`: the song's row in the open playlist, when it's yours and the song can come out.
-pub fn song_menu(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, acts: &mut Vec<Action>) {
+pub fn song_menu(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, queue_move: Option<(usize, bool, bool)>, acts: &mut Vec<Action>) {
     ui.set_width(226.0);
     ui.add_space(3.0);
-    song_actions(ui, t, liked, remove, acts);
+    song_actions(ui, t, liked, remove, true, acts);
     ui.separator();
     if menu_action(ui, Some(icon::LIST_PLUS), "Play next") {
         acts.push(Action::PlayNext(t.clone()));
@@ -610,6 +614,14 @@ pub fn song_menu(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, act
     if menu_action(ui, Some(icon::LIST_MUSIC), "View queue") {
         acts.push(Action::ViewQueue);
     }
+    if let Some((i, up, down)) = queue_move {
+        if up && menu_action(ui, Some(icon::CHEVRON_UP), "Move up") {
+            acts.push(Action::QueueMove(i, -1));
+        }
+        if down && menu_action(ui, Some(icon::CHEVRON_DOWN), "Move down") {
+            acts.push(Action::QueueMove(i, 1));
+        }
+    }
     if menu_action(ui, Some(icon::RADIO), "Start radio") {
         acts.push(Action::Radio(t.clone()));
     }
@@ -617,14 +629,18 @@ pub fn song_menu(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, act
 }
 
 /// The song menu's items, for menus that add their own (now playing's options).
-pub fn song_actions(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, acts: &mut Vec<Action>) {
-    if menu_action_star(ui, liked, if liked { "Remove like" } else { "Like song" }) {
-        acts.push(Action::Like(t.clone(), !liked));
+/// `like`: whether this menu may change the song's like. The app's row menus do; the
+/// player's own ⋯ leaves it to them, so the two menus aren't the same list twice.
+pub fn song_actions(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, like: bool, acts: &mut Vec<Action>) {
+    if like {
+        if menu_action_star(ui, liked, if liked { "Remove like" } else { "Like song" }) {
+            acts.push(Action::Like(t.clone(), !liked));
+        }
+        if menu_action(ui, Some(icon::THUMBS_DOWN), "Dislike") {
+            acts.push(Action::Dislike(t.clone()));
+        }
+        ui.separator();
     }
-    if menu_action(ui, Some(icon::THUMBS_DOWN), "Dislike") {
-        acts.push(Action::Dislike(t.clone()));
-    }
-    ui.separator();
     if menu_action(ui, Some(icon::LIST_PLUS), "Add to playlist") {
         acts.push(Action::AddToPlaylist(vec![t.clone()]));
     }
@@ -768,6 +784,10 @@ pub struct RowOpts {
     pub selected: Option<bool>,
     /// The row's index in your own open playlist, so its menu can take it out.
     pub remove: Option<usize>,
+    /// A queue row: its index, so hovering swaps the duration for a remove button.
+    pub queue_remove: Option<usize>,
+    /// A queue row that may be reordered: its index and whether it can move up and down.
+    pub queue_move: Option<(usize, bool, bool)>,
 }
 
 const ROW_H: f32 = 56.0;
@@ -900,14 +920,26 @@ pub fn track_row(ui: &mut Ui, t: &Track, o: &RowOpts, acts: &mut Vec<Action>) ->
             }
         }
     }
-    if let Some(d) = t.duration {
-        ui.painter().text(pos2(right, cy), Align2::RIGHT_CENTER, super::fmt_time(d), theme::regular(13.0), theme::text_dim());
-    }
     let more_rect = Rect::from_center_size(pos2(rect.right() - 20.0, cy), Vec2::splat(30.0));
     let more = more_button(ui, more_rect, base.id.with("more"), "Song options");
-    egui::Popup::menu(&more).show(|ui| song_menu(ui, t, o.liked, o.remove, acts));
+    // A queue row gives the duration's slot to a remove button while the pointer is
+    // anywhere left of the ⋯, so the two controls never land on each other.
+    let queue = o.queue_remove.filter(|_| ui.rect_contains_pointer(Rect::from_min_max(rect.min, pos2(more_rect.left(), rect.bottom()))));
+    if let Some(d) = t.duration.filter(|_| queue.is_none()) {
+        ui.painter().text(pos2(right, cy), Align2::RIGHT_CENTER, super::fmt_time(d), theme::regular(13.0), theme::text_dim());
+    }
+    if let Some(i) = queue {
+        let slot = Rect::from_center_size(pos2(right - dur_w / 2.0, cy), Vec2::splat(28.0));
+        let xr = named(ui.interact(slot, base.id.with("rm"), Sense::click()), "Remove from queue").on_hover_cursor(egui::CursorIcon::PointingHand);
+        ui.painter().circle_filled(slot.center(), 14.0, theme::panel(0.6));
+        icon_at(ui, slot.center(), icon::X, 14.0, theme::text());
+        if xr.clicked() {
+            acts.push(Action::QueueRemove(i));
+        }
+    }
+    egui::Popup::menu(&more).show(|ui| song_menu(ui, t, o.liked, o.remove, o.queue_move, acts));
     // Right-click anywhere on the row opens the same menu.
-    egui::Popup::context_menu(&resp).show(|ui| song_menu(ui, t, o.liked, o.remove, acts));
+    egui::Popup::context_menu(&resp).show(|ui| song_menu(ui, t, o.liked, o.remove, o.queue_move, acts));
     resp
 }
 

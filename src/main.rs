@@ -70,14 +70,14 @@ fn main() -> eframe::Result {
             return Ok(());
         }
     }
-    // A jam link (`ytm-rs://jam/CODE` or the https share link): hand it to the running
+    // A party link (`bitchord://party/CODE` or the https invite page): hand it to the running
     // instance if there is one, else join once this one is up. Before `init_logging`,
     // which would truncate the running instance's log file.
-    if let Some(code) = deeplink::from_args() {
-        if deeplink::forward_to_running(&code) {
+    if let Some(link) = deeplink::from_args() {
+        if deeplink::forward_to_running(&link.url()) {
             return Ok(());
         }
-        deeplink::push(code);
+        deeplink::push(link);
     } else if deeplink::forward_show() {
         return Ok(());
     }
@@ -138,9 +138,9 @@ fn main() -> eframe::Result {
                 }
             };
 
-            // Jam links from later launches arrive over a pipe (first instance only).
+            // Party links from later launches arrive over a pipe (first instance only).
             deeplink::listen(wake);
-            // Keep `ytm-rs:` links pointing at this copy; dev builds leave it alone
+            // Keep `bitchord:` links pointing at this copy; dev builds leave it alone
             // (even with YTM_UPDATE_FORCE).
             if update::installed() && !cfg!(debug_assertions) {
                 deeplink::register_protocol();

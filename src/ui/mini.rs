@@ -1,6 +1,8 @@
 //! The mini player: the same window, shrunk to a strip with the song, the transport and a
 //! seek line, kept above other windows unless unpinned. Ctrl+M or the player bar's
-//! button switches; the strip's expand button (or a double-click on it) switches back.
+//! button switches; the strip's expand button, its × (which closes the strip, not the app)
+//! or a double-click switch back. With lyrics on, the window grows upward by a band the
+//! strip's own height and shows the line being sung in it.
 //!
 //! Each mode keeps its own place: the full window goes back to exactly where it was
 //! (maximized again if it was), and the strip reopens where it was last moved. Places
@@ -26,22 +28,25 @@ use crate::theme::{self, icon};
 /// The strip when first opened. It's as tall as its contents; the width goes from
 /// `MIN_W` to `MAX_W` by its sides.
 pub const SIZE: Vec2 = vec2(400.0, 112.0);
+/// The line being sung, when lyrics are on: a band above the strip the strip's own size,
+/// so the window doubles in height and the line gets the strip's whole width.
+pub const LYR_H: f32 = SIZE.y;
 const MIN_W: f32 = 330.0;
 const MAX_W: f32 = 720.0;
 /// Kept above other windows until unpinned.
 const PINNED_BY_DEFAULT: bool = true;
-/// What the strip's × does.
-const CLOSE: CloseButton = CloseButton::LikeFullWindow;
 /// From the work area's corner, the first time.
 const MARGIN: f32 = 16.0;
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq)]
-enum CloseButton {
-    /// What the full window's × does: quit, or hide to the tray with "Close to tray".
-    LikeFullWindow,
-    /// Back to the full window (the expand button's job too).
-    Expand,
+/// The window's height: the strip, with the lyric band over it when lyrics are on.
+fn height(lyrics: bool) -> f32 {
+    if lyrics { SIZE.y + LYR_H } else { SIZE.y }
+}
+
+/// A strip button's glyph: from the icon font, or one of Apple's own drawn ones.
+enum Btn {
+    Font(char),
+    Raster(&'static [u8]),
 }
 
 /// Where a window was: its outer corner in physical pixels, its inner size in points,
@@ -116,6 +121,15 @@ fn centered(area: Rect, size: Vec2, frame: Vec2, scale: f32, zoom: f32) -> Place
     Place { x: p.x.round(), y: p.y.round(), w: size.x, h: size.y, scale, zoom }
 }
 
+/// The frame around the window's inside (points): what the platform drew outside the
+/// content. Nothing on Windows, where the app draws its own buttons.
+fn frame_size(ctx: &egui::Context) -> Vec2 {
+    ctx.input(|i| {
+        let vp = i.viewport();
+        vp.outer_rect.zip(vp.inner_rect).map_or(Vec2::ZERO, |(o, n)| o.size() - n.size())
+    })
+}
+
 /// What the app can ask about the monitors (the system's; made up in tests).
 #[derive(Clone, Copy)]
 struct Screens {
@@ -127,9 +141,10 @@ struct Screens {
 
 const SYSTEM: Screens = Screens { on_a_monitor: crate::fullscreen::on_a_monitor, work_area: crate::fullscreen::work_area };
 
-/// A remembered strip size, within the limits (they may have changed since).
-fn clamp_size(p: Place) -> Place {
-    Place { w: p.w.clamp(MIN_W, MAX_W), h: SIZE.y, ..p }
+/// A remembered strip size, within the limits (they may have changed since). The strip
+/// has one height; with lyrics it has the lyric band's too.
+fn clamp_size(p: Place, lyrics: bool) -> Place {
+    Place { w: p.w.clamp(MIN_W, MAX_W), h: height(lyrics), ..p }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -163,6 +178,42 @@ pub enum Layout {
     Blank,
 }
 
+/// The band's page of the lyric: the line it shows, the one it came from, and how far
+/// through it the singing is.
+#[derive(Default)]
+struct Band {
+    /// The song these belong to. A new one takes the band without a hand-over.
+    id: String,
+    /// Where in the lyric the shown line is.
+    index: usize,
+    cur: Option<Shot>,
+    /// The line before `cur`, when it started to leave, and how far the singing had got it.
+    out: Option<(Shot, f64, f32)>,
+    /// When `cur` came in.
+    at: f64,
+    /// Where the singing is, in milliseconds with the line's offset applied.
+    t: f64,
+}
+
+/// One lyric line as the band draws it.
+struct Shot {
+    text: String,
+    /// `(first char, chars, start ms, dur ms)` for each timed word. A source that only
+    /// times lines gets one entry over the whole line, which then lights whole.
+    words: Vec<(usize, usize, f64, f64)>,
+}
+
+/// The line being sung, with its place in the lyric and the time it is sung at.
+struct Cue {
+    id: String,
+    index: usize,
+    shot: Shot,
+    t: f64,
+}
+
+/// How long a line takes to rise away and its successor to rise in.
+const RISE: f64 = 0.36;
+
 pub struct Mini {
     /// The strip is showing.
     on: bool,
@@ -186,6 +237,14 @@ pub struct Mini {
     screens: Screens,
     /// The full window's normal place after coming back maximized, until it's restored down.
     restored_max: Option<Place>,
+    /// The strip has the lyric band above it. Session only; it moves the strip, it
+    /// doesn't switch to the full window.
+    pub lyrics: bool,
+    /// What the band button was last asked for. The band itself only shows when the song
+    /// has lyrics to fill it, so an ask for a song without any waits for the next one.
+    pub lyrics_want: bool,
+    /// The band's line, the one it came from, and where in the line the singer is.
+    band: Band,
 }
 
 impl Mini {
@@ -193,7 +252,7 @@ impl Mini {
         Mini {
             on: false,
             pinned: get("mini_pinned").map_or(PINNED_BY_DEFAULT, |v| v == "1"),
-            place: get("mini_window").and_then(|v| serde_json::from_str(&v).ok()).map(clamp_size),
+            place: get("mini_window").and_then(|v| serde_json::from_str(&v).ok()).map(|p| clamp_size(p, false)),
             full: None,
             was_maximized: false,
             switch: None,
@@ -204,6 +263,9 @@ impl Mini {
             level_at: f64::NEG_INFINITY,
             screens: SYSTEM,
             restored_max: None,
+            lyrics: false,
+            lyrics_want: false,
+            band: Band::default(),
         }
     }
 
@@ -318,7 +380,12 @@ impl Mini {
         }
         self.level = Some(want);
         self.level_at = now;
-        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(want));
+        // Windows stamps the style itself: winit posts its change to the window's thread
+        // (`SWP_ASYNCWINDOWPOS`) and can lose it, which is what made the pin look dead.
+        // Elsewhere that is the only way.
+        if !crate::fullscreen::set_topmost(want == WindowLevel::AlwaysOnTop) {
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(want));
+        }
     }
 
     /// Once a frame: drive a switch, note the strip's place, keep the size limits right.
@@ -344,7 +411,7 @@ impl Mini {
             && !maximized
             && let Some(p) = Place::current(ctx).filter(|p| p.w >= MIN_W - 1.0)
         {
-            self.place = Some(clamp_size(p));
+            self.place = Some(clamp_size(p, self.lyrics));
         }
         let Some(sw) = &mut self.switch else { return };
         ctx.request_repaint_after(Duration::from_millis(16));
@@ -411,7 +478,7 @@ impl Mini {
                 // Test runs stay off-screen, where they are; YTM_MINI_W tries other widths.
                 (_, Some(here)) if std::env::var_os("YTM_BACKGROUND").is_some() => {
                     let w = std::env::var("YTM_MINI_W").ok().and_then(|w| w.parse().ok()).unwrap_or(SIZE.x);
-                    clamp_size(Place { w, ..here })
+                    clamp_size(Place { w, ..here }, self.lyrics)
                 }
                 (Some(p), _) if self.visible(p, frame) => p,
                 (_, here) => {
@@ -424,9 +491,10 @@ impl Mini {
                 }
             };
             self.apply_level(ctx);
-            self.go(ctx, target, false, true)        } else {
+            self.go(ctx, target, false, true)
+        } else {
             if let Some(p) = now_place {
-                self.place = Some(clamp_size(p));
+                self.place = Some(clamp_size(p, self.lyrics));
             }
             self.apply_level(ctx);
             // Kept until the window has settled: a save meanwhile still writes it.
@@ -476,26 +544,84 @@ impl Mini {
     }
 
     /// The window's size limits for a mode. Shrinking sets them first, so the full
-    /// window's minimum doesn't hold the strip up.
+    /// window's minimum doesn't hold the strip up. With lyrics the strip carries its band,
+    /// so the height is fixed at both and only the width runs.
     fn limits(&mut self, ctx: &egui::Context, mini: bool) {
         if mini {
-            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(vec2(MIN_W, SIZE.y)));
-            ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(vec2(MAX_W, SIZE.y)));
+            let h = height(self.lyrics);
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(vec2(MIN_W, h)));
+            ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(vec2(MAX_W, h)));
         } else {
             ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(Vec2::INFINITY));
             ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(Vec2::from(crate::MIN_SIZE)));
         }
         self.limits_scale = Some(ctx.pixels_per_point());
     }
+
+    /// Open or close the lyric band. The window grows upward by the band and shrinks back
+    /// the same way, so the strip itself never moves: the strip's and the full window's
+    /// places are both kept, so this isn't a switch between modes.
+    pub fn set_lyrics(&mut self, ctx: &egui::Context, on: bool) {
+        if self.lyrics == on || self.switch.is_some() {
+            return;
+        }
+        self.lyrics = on;
+        let frame = frame_size(ctx);
+        let here = Place::current(ctx).or(self.place).unwrap_or_else(|| {
+            let area = (self.screens.work_area)().unwrap_or(Rect::from_min_size(Pos2::ZERO, SIZE * ctx.pixels_per_point()));
+            corner_place(area, frame, ctx.pixels_per_point(), ctx.zoom_factor())
+        });
+        // Physical pixels: the band is a fixed height in points.
+        let band = LYR_H * here.scale * here.zoom;
+        let mut target = clamp_size(Place { y: here.y + if on { -band } else { band }, ..here }, on);
+        if let Some(area) = (self.screens.work_area)() {
+            // Taller or shorter than before: keep its grip on the monitor.
+            let outer = (target.size() + frame) * target.scale * target.zoom;
+            let keep = |p: f32, size: f32, a: f32, b: f32| p.clamp(a.max(b - size), b.max(a));
+            target.x = keep(target.x, outer.x, area.min.x, area.max.x);
+            target.y = keep(target.y, outer.y, area.min.y, area.max.y);
+        }
+        self.place = Some(target);
+        self.limits(ctx, true);
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(target.x, target.y) / ctx.pixels_per_point()));
+        ctx.send_viewport_cmd(ViewportCommand::InnerSize(target.size_at(ctx.zoom_factor())));
+        ctx.request_repaint();
+    }
+
+    /// The band's button: asks for the band, or takes the ask back. Whether the window
+    /// actually grows is [`Mini::sync_lyrics`]'s call — a song with nothing timed has no
+    /// band to show, and the ask carries over to the next one that does.
+    pub fn toggle_lyrics(&mut self) {
+        self.lyrics_want = !self.lyrics_want;
+    }
+
+    /// Keep the window's shape in step with what the song can fill the band with: a song
+    /// without lyrics drops back to the plain strip, and the band returns by itself for
+    /// the next song that has them.
+    pub fn sync_lyrics(&mut self, ctx: &egui::Context, available: bool) {
+        let on = self.lyrics_want && available;
+        if on != self.lyrics {
+            self.set_lyrics(ctx, on);
+        }
+    }
 }
 
 /// The strip: cover, title and artists, like / previous / play / next / volume, a seek
-/// line along the bottom, and pin / full window / close at the top right.
+/// line along the bottom, full window / lyrics / close at the top right, and the pin alone
+/// at the top left.
 pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     let ctx = ui.ctx().clone();
     let r = ctx.content_rect();
+    // The corners the buttons live in: a press there is the button's, never the window's.
+    // A strip that slid away under the pointer turns the click into a drag and loses it,
+    // which is how the pin came to look like a button that moves the player.
+    let count = if titlebar::custom() { 3.0 } else { 2.0 };
+    let corners = [
+        Rect::from_min_max(r.min + vec2(2.0, 2.0), r.min + vec2(38.0, 38.0)),
+        Rect::from_min_max(pos2(r.right() - 8.0 - 30.0 * count, r.top()), pos2(r.right(), r.top() + 40.0)),
+    ];
     // Its background moves the window; a double-click goes back to the full window.
-    if titlebar::drag_strip(ui, r, "mini").double_clicked() {
+    if titlebar::drag_strip(ui, r, "mini", &corners).double_clicked() {
         app.actions.push(Action::Mini(false));
     }
     ui.painter().rect_filled(r, theme::thumb_radius() + 1.0, theme::panel(0.62));
@@ -504,7 +630,16 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     let hold = app.mix_hold().is_some();
     let track = if hold { app.shown().cloned() } else { app.current().cloned() };
     let pad = 12.0;
-    let art = Rect::from_min_size(r.min + Vec2::splat(pad), Vec2::splat(r.height() - 2.0 * pad - 4.0));
+    // With lyrics on, the window's top band belongs to the line being sung and everything
+    // under it is the strip as it draws on its own. A song with nothing timed has no band
+    // to show, so the ask waits for the next one that does.
+    let timed = !app.no_lyrics();
+    app.mini.sync_lyrics(&ctx, timed);
+    let side = app.mini.lyrics;
+    let want = app.mini.lyrics_want;
+    let band = if side { Rect::from_min_max(r.min, pos2(r.right(), r.top() + LYR_H)) } else { r };
+    let col = if side { Rect::from_min_max(pos2(r.left(), band.bottom()), r.max) } else { r };
+    let art = Rect::from_min_size(col.min + Vec2::splat(pad), Vec2::splat(col.height() - 2.0 * pad - 4.0));
     match &track {
         Some(t) => paint_cover(ui, art, &t.thumbs, theme::thumb_radius() + 1.0, 1.0),
         None => {
@@ -519,45 +654,46 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
         let artist = t.artists.first().map(|a| a.name.clone()).unwrap_or_else(|| t.artist_line());
         let px = (art.width() * ctx.pixels_per_point()).round().max(256.0) as u32;
         app.apple_cover(&album, &artist, Some(&t.title));
-        if let Some(s) = app.apple_sprite(&ctx, &album, &artist, px) {
+        if let Some(s) = app.apple_sprite(&ctx, &album, &artist, Some(&t.title), px) {
             widgets::paint_motion(ui, art, theme::thumb_radius() + 1.0, &s);
         }
     }
 
     // Title and artists.
     let x0 = art.right() + 12.0;
-    let x1 = r.right() - 10.0;
+    let x1 = col.right() - 10.0;
     let text_w = (x1 - x0).max(20.0);
+    let ty = art.top() + 1.0;
     let (title, artists) = match &track {
         Some(t) => (t.title.clone(), t.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ")),
         None => ("Nothing playing".to_owned(), String::new()),
     };
-    let tr = text_at(ui, pos2(x0, art.top() + 1.0), &title, theme::semibold(14.5), theme::text(), text_w);
+    let tr = text_at(ui, pos2(x0, ty), &title, theme::semibold(14.5), theme::text(), text_w);
     if let Some(t) = &track {
         named(ui.interact(tr, ui.scope_id().with("mini-title"), Sense::hover()), &t.title).on_hover_text(&t.title);
     }
-    let ar = text_at(ui, pos2(x0, art.top() + 22.0), &artists, theme::regular(12.5), theme::text_dim(), text_w);
+    let ar = text_at(ui, pos2(x0, ty + 21.0), &artists, theme::regular(12.5), theme::text_dim(), text_w);
     // The quality glyph follows the artists, centred on their line, when there's room.
     let bw = super::nowplaying::audio_badge_icon_width(app, true);
     if bw > 0.0 && ar.right() + 8.0 + bw <= x1 {
         super::nowplaying::audio_badge_icon(app, ui, pos2(ar.right() + 8.0 + bw / 2.0, ar.center().y), true);
     }
 
-    // Top right: pin, full window, close. They show while the pointer is on the strip (or
-    // one of them has the keyboard), over a backdrop, so the title has the whole width.
+    // Top right: full window, lyrics and close. They show while the pointer is on the strip
+    // (or one of them has the keyboard), over a backdrop, so the title has the whole width.
+    // The pin has its own corner — see below.
     let scope = ui.scope_id();
     // By a key, not the label: the pin's changes, and its focus has to stay.
     let btn_id = move |key: &str| scope.with(("mini-btn", key));
-    let focused = ctx.memory(|m| m.focused()).is_some_and(|f| ["close", "full", "pin"].iter().any(|k| btn_id(k) == f));
+    let focused = ctx.memory(|m| m.focused()).is_some_and(|f| ["close", "full", "pin", "lyrics"].iter().any(|k| btn_id(k) == f));
     let over = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
     let reveal = theme::anim_bool(&ctx, "mini-btns", over || focused, 0.15);
-    let count = if titlebar::custom() { 3.0 } else { 2.0 };
     let backdrop = Rect::from_min_max(pos2(r.right() - 6.0 - 30.0 * count - 2.0, r.top() + 2.0), pos2(r.right() - 2.0, r.top() + 38.0));
     // Opaque, so the title under it fades out instead of showing through.
     let pill = theme::lerp_color(super::shell::base_color(app), if theme::light() { Color32::WHITE } else { Color32::BLACK }, 0.55);
     ui.painter().rect_filled(backdrop, 9.0, pill.gamma_multiply(reveal));
     let mut bx = r.right() - 6.0;
-    let mut top_btn = |ui: &mut Ui, glyph: char, key: &str, name: &str, close: bool, on: bool| -> bool {
+    let mut top_btn = |ui: &mut Ui, glyph: Btn, key: &str, name: &str, close: bool, on: bool| -> bool {
         let b = Rect::from_min_size(pos2(bx - 28.0, r.top() + 6.0), Vec2::splat(28.0));
         bx -= 30.0;
         let resp = ui.interact(b, btn_id(key), Sense::click());
@@ -568,28 +704,63 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
             let fill = if close { Color32::from_rgb(0xC4, 0x2B, 0x1C).gamma_multiply(h) } else { theme::glass(if down { 0.16 } else { 0.10 } * h) };
             ui.painter().rect_filled(b, 6.0, fill.gamma_multiply(reveal));
         }
+        // Everything fades with the pointer, whether or not the button is engaged: an
+        // engaged one says so by its colour while the pointer is on it.
+        let show = reveal;
         let idle = if on { theme::text() } else { theme::text_dim() };
         let fg = theme::lerp_color(idle, if close { Color32::WHITE } else { theme::text() }, h);
-        icon_at(ui, b.center(), glyph, if down { 13.0 } else { 14.0 }, fg.gamma_multiply(reveal));
+        let size = if down { 13.0 } else { 14.0 };
+        match glyph {
+            Btn::Font(c) => {
+                icon_at(ui, b.center(), c, size, fg.gamma_multiply(show));
+            }
+            Btn::Raster(p) => glyphs::draw(ui, b.center(), 1.2 * size, p, fg.gamma_multiply(show)),
+        }
         if resp.has_focus() {
             ui.painter().rect_stroke(b.shrink(1.0), 6.0, egui::Stroke::new(1.5, theme::text()), egui::StrokeKind::Inside);
         }
         // A click that landed on the button counts even before the reveal finishes;
         // only a press the drag area already claimed stays a window move.
-        resp.clicked() && (reveal > 0.5 || resp.has_focus() || resp.hovered())
+        resp.clicked() && (show > 0.5 || resp.has_focus() || resp.hovered())
     };
-    // The system's frame has its own close button.
-    if titlebar::custom() && top_btn(ui, icon::X, "close", "Close", true, false) {
-        match CLOSE {
-            CloseButton::LikeFullWindow => ctx.send_viewport_cmd(ViewportCommand::Close),
-            CloseButton::Expand => app.actions.push(Action::Mini(false)),
-        }
-    }
-    if top_btn(ui, icon::MAXIMIZE_2, "full", "Full window (Ctrl+M)", false, false) {
+    // The system's frame has its own close button. The strip's × closes the strip: back to
+    // the full window, never the app.
+    if titlebar::custom() && top_btn(ui, Btn::Font(icon::X), "close", "Close mini player", true, false) {
         app.actions.push(Action::Mini(false));
     }
+    if top_btn(ui, Btn::Font(icon::MAXIMIZE_2), "full", "Full window (Ctrl+M)", false, false) {
+        app.actions.push(Action::Mini(false));
+    }
+    if top_btn(ui, Btn::Raster(glyphs::LYRICS), "lyrics", if want { "Hide lyrics" } else { "Lyrics" }, false, want) {
+        app.mini.toggle_lyrics();
+    }
+
+    // The pin, alone in the strip's top-left corner and on a layer above it: the whole strip
+    // is a drag area that moves the window, and a press it takes never reaches the button.
+    // A layer of its own takes the press first, so clicking the pin only pins.
     let pinned = app.mini.pinned;
-    if top_btn(ui, if pinned { icon::PIN } else { icon::PIN_OFF }, "pin", if pinned { "Stop keeping on top" } else { "Keep on top" }, false, pinned) {
+    let at = r.min + vec2(6.0, 6.0);
+    let mut pin_clicked = false;
+    egui::Area::new(scope.with("mini-pin")).order(egui::Order::Middle).fixed_pos(at).show(&ctx, |ui| {
+        let back = Rect::from_min_max(at - Vec2::splat(4.0), at + vec2(32.0, 32.0));
+        ui.painter().rect_filled(back, 9.0, pill.gamma_multiply(reveal));
+        let b = Rect::from_min_size(at, Vec2::splat(28.0));
+        let resp = ui.interact(b, btn_id("pin"), Sense::click());
+        let name = if pinned { "Stop keeping on top" } else { "Keep on top" };
+        let resp = named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.12);
+        if h > 0.0 {
+            ui.painter().rect_filled(b, 6.0, theme::glass(0.10 * h).gamma_multiply(reveal));
+        }
+        let fg = theme::lerp_color(theme::text_dim(), theme::text(), if pinned { 1.0 } else { h });
+        // The glyph is what the click does: pinned, it offers to come off the top.
+        icon_at(ui, b.center(), if pinned { icon::PIN_OFF } else { icon::PIN }, 14.0, fg.gamma_multiply(reveal));
+        if resp.has_focus() {
+            ui.painter().rect_stroke(b.shrink(1.0), 6.0, egui::Stroke::new(1.5, theme::text()), egui::StrokeKind::Inside);
+        }
+        pin_clicked = resp.clicked() && (reveal > 0.5 || resp.has_focus() || resp.hovered());
+    });
+    if pin_clicked {
         app.mini.set_pinned(&ctx, !pinned);
     }
 
@@ -607,8 +778,8 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     // Pointer position, not `rect_contains_pointer`: layers above the mini player's own
     // (window chrome, the drag regions) would otherwise hide the pointer from it.
     let hover = |r: Rect| ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
-    let band = Rect::from_min_max(pos2(slider.left() - 4.0, cy - 14.0), pos2(vhit.right(), cy + 14.0));
-    let open = hover(vhit) || ui.rect_contains_pointer(vhit) || (was_open && (hover(band) || ui.input(|i| i.pointer.any_down())));
+    let vol_band = Rect::from_min_max(pos2(slider.left() - 4.0, cy - 14.0), pos2(vhit.right(), cy + 14.0));
+    let open = hover(vhit) || ui.rect_contains_pointer(vhit) || (was_open && (hover(vol_band) || ui.input(|i| i.pointer.any_down())));
     ui.data_mut(|d| d.insert_temp(open_id, open));
     if open != was_open {
         ctx.request_repaint();
@@ -711,17 +882,212 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
         }
     }
     if vresp.clicked() {
-        let stash = super::shell::unmute_id();
-        if vol > 0.0 {
-            ui.data_mut(|d| d.insert_temp(stash, vol));
-            app.audio.set_volume(0.0);
-        } else {
-            app.audio.set_volume(ui.data(|d| d.get_temp::<f32>(stash)).unwrap_or(0.6));
-        }
+        super::shell::toggle_mute(app, &ctx);
     }
 
-    seek_line(app, ui, r, track.as_ref());
+    // The line being sung, over the strip: a hairline between them and the line centred
+    // in its own band.
+    if side {
+        ui.painter().line_segment([pos2(col.left() + pad, band.bottom()), pos2(col.right() - pad, band.bottom())], egui::Stroke::new(1.0, theme::glass(0.16)));
+        lyric_band(app, ui, band, now);
+    }
+
+    seek_line(app, ui, col, track.as_ref());
 }
+
+/// The line the singer is on: the last one that has started, and where in it they are. The
+/// same audible position the full player's lyrics follow — what the device plays lags the
+/// player by its buffer, and a handoff is still the outgoing song's tail.
+fn cue(app: &mut App, now: f64) -> Option<Cue> {
+    let (id, set) = app.lyrics.take()?;
+    let cue = timed(app, &id, &set, now);
+    app.lyrics = Some((id.clone(), set));
+    cue.map(|(index, shot, t)| Cue { id, index, shot, t })
+}
+
+fn timed(app: &mut App, id: &str, set: &crate::lyrics::LyricsSet, now: f64) -> Option<(usize, Shot, f64)> {
+    use crate::lyrics::Sync;
+    let p = app.lyric_prefs.choose(id, set)?;
+    let lyrics = set.get(p)?;
+    if lyrics.sync == Sync::None {
+        return None;
+    }
+    let rich = lyrics.sync == Sync::Word;
+    let playing = if app.mix_hold().is_some() { app.audio.status.outgoing_playing() } else { app.playing() };
+    let pos = match app.mix_hold() {
+        Some(h) => app.mix_hold_pos(h) as f64 - app.audio.status.latency().as_secs_f64(),
+        None => app.audio.status.position_smooth().as_secs_f64() - app.audio.status.latency().as_secs_f64(),
+    };
+    let pos = app.lyric_clock.tick(pos, playing, now);
+    let t = 1000.0 * (pos - app.lyric_prefs.offset(id, p, rich));
+    // A gap keeps the line before it on screen rather than blanking the band.
+    let (index, l) = lyrics.lines.iter().enumerate().filter(|(_, l)| !l.instrumental && !l.text.trim().is_empty() && l.start as f64 <= t).next_back()?;
+    Some((index, shot(l, rich), t))
+}
+
+/// The line's words with their times, counted in characters from its start — which is what
+/// a swept highlight needs. Parts that don't add up to the text can't place one, and a
+/// source that only times lines gets the whole line at once.
+fn shot(l: &crate::lyrics::Line, words: bool) -> Shot {
+    let chars = l.text.chars().count();
+    let mut out = Vec::new();
+    if words {
+        let mut at = 0usize;
+        for p in &l.parts {
+            let n = p.text.chars().count();
+            if !p.text.trim().is_empty() {
+                out.push((at, n, p.start as f64, p.dur as f64));
+            }
+            at += n;
+        }
+        if at != chars {
+            out.clear();
+        }
+    }
+    if out.is_empty() {
+        out.push((0, chars, l.start as f64, 0.0));
+    }
+    Shot { text: l.text.clone(), words: out }
+}
+
+/// The band's line, centred and in the lyrics font the player's settings choose: dim, with
+/// the words already sung lit up to the singer, rising in as the line before it rises out.
+fn lyric_band(app: &mut App, ui: &mut Ui, band: Rect, now: f64) {
+    let style = &app.look().lyrics;
+    match cue(app, now) {
+        Some(c) => {
+            let b = &mut app.mini.band;
+            if b.id != c.id || b.cur.is_none() {
+                // A song of its own, or the band's first line: it arrives, nothing leaves.
+                b.id = c.id;
+                b.index = c.index;
+                b.cur = Some(c.shot);
+                b.out = None;
+                b.at = now;
+            } else if c.index != b.index {
+                // The line on its way out keeps the highlight the singing had reached: it
+                // would otherwise dim the moment its successor starts rising in.
+                let lit_to = b.cur.as_ref().map(|s| sung_chars(s, b.t)).unwrap_or_default();
+                b.out = b.cur.take().map(|s| (s, now, lit_to));
+                b.index = c.index;
+                b.cur = Some(c.shot);
+                b.at = now;
+            }
+            b.t = c.t;
+        }
+        None => {
+            let b = &mut app.mini.band;
+            b.id.clear();
+            b.cur = None;
+            b.out = None;
+        }
+    }
+    let b = &app.mini.band;
+    let lit = crate::preset::paint(&style.sung_color, app.accent_color());
+    let size = (30.0 * style.size.clamp(0.6, 1.6)).min(band.width() / 13.0).max(15.0);
+    let Some(cur) = &b.cur else {
+        // Nothing to time: say the lyric is still coming only when it actually is.
+        if app.lyrics.is_some() {
+            return;
+        }
+        let font = theme::lyric_font_for(&style.font, style.weight, 17.0, "Loading lyrics…");
+        let color = theme::text_faint();
+        let g = widgets::galley_wrapped(ui, "Loading lyrics…", font, color, band.width() - 32.0, 1);
+        ui.painter().galley(band.center() - g.size() / 2.0, g, color);
+        return;
+    };
+    let rise = (size * 0.8).min(band.height() * 0.35);
+    let mut moving = false;
+    if let Some((out, since, lit_to)) = &b.out {
+        let q = ((now - since) / RISE).clamp(0.0, 1.0) as f32;
+        moving |= q < 1.0;
+        draw_shot(ui, band, out, style, size, lit, Some(*lit_to), -ease(q) * rise, 1.0 - q);
+    }
+    let e = ((now - b.at) / RISE).clamp(0.0, 1.0) as f32;
+    moving |= e < 1.0;
+    draw_shot(ui, band, cur, style, size, lit, Some(sung_chars(cur, b.t)), (1.0 - ease(e)) * rise, e);
+    if moving {
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
+    }
+}
+
+/// One line of the band at `dy` below its place, faded to `a`: the whole line dim and, up to
+/// character `lit_to`, the same line lit. A row's worth of clip each, so a wrapped line
+/// lights the rows the singing has left behind whole.
+fn draw_shot(ui: &Ui, band: Rect, sh: &Shot, style: &crate::preset::LyricStyle, size: f32, lit: Color32, lit_to: Option<f32>, dy: f32, a: f32) {
+    if a <= 0.01 {
+        return;
+    }
+    let width = band.width() - 32.0;
+    let font = theme::lyric_font_for(&style.font, style.weight, size, &sh.text);
+    let dim = theme::with_alpha(lit, 0.34 * a);
+    let g = widgets::galley_wrapped(ui, &sh.text, font.clone(), dim, width, 2);
+    let at = band.center() - g.size() / 2.0 + vec2(0.0, dy);
+    // A line on its way in or out is partly outside the band; the strip under it isn't
+    // the line's to write on.
+    let p = ui.painter().with_clip_rect(band);
+    p.galley(at, g.clone(), dim);
+    let Some(chars) = lit_to else {
+        return;
+    };
+    let color = theme::with_alpha(lit, a);
+    let said = widgets::galley_wrapped(ui, &sh.text, font, color, width, 2);
+    let (row, edge) = lit_edge(&g, chars);
+    for (ri, r) in said.rows.iter().enumerate().take(row + 1) {
+        let right = if ri == row { at.x + edge } else { band.right() };
+        let top = at.y + r.pos.y;
+        let clip = Rect::from_min_max(pos2(band.left(), top - 1.0), pos2(right + 1.0, top + r.row.size.y + 1.0));
+        p.with_clip_rect(clip.intersect(band)).galley(at, said.clone(), color);
+    }
+}
+
+/// How far into the line the singing is, in characters: through the words it has left
+/// behind and partway into the one it is on.
+fn sung_chars(sh: &Shot, t: f64) -> f32 {
+    let mut done = 0.0f32;
+    for &(i, n, start, dur) in &sh.words {
+        let e = if dur <= 0.0 {
+            if t >= start { 1.0 } else { 0.0 }
+        } else {
+            ((t - start) / dur).clamp(0.0, 1.0) as f32
+        };
+        if e < 1.0 {
+            return i as f32 + e * n as f32;
+        }
+        done = (i + n) as f32;
+    }
+    done
+}
+
+/// The galley's row that character `ci` falls on, and the x within the galley where it is.
+fn lit_edge(g: &egui::Galley, ci: f32) -> (usize, f32) {
+    let mut before = 0usize;
+    for (ri, r) in g.rows.iter().enumerate() {
+        let n = r.glyphs.len();
+        let k = (ci - before as f32).clamp(0.0, n as f32);
+        if k < n as f32 || ri + 1 == g.rows.len() {
+            let i = k as usize;
+            let x = match (n == 0, r.glyphs.get(i)) {
+                (true, _) => r.pos.x,
+                (_, Some(gl)) => {
+                    let x0 = r.pos.x + gl.pos.x;
+                    let x1 = r.glyphs.get(i + 1).map_or(x0 + gl.advance_width, |next| r.pos.x + next.pos.x);
+                    x0 + (x1 - x0) * (k - i as f32)
+                }
+                (_, None) => r.pos.x + r.size.x,
+            };
+            return (ri, x);
+        }
+        before += n;
+    }
+    (0, 0.0)
+}
+
+/// Ease-out: the quick part first, settling into place.
+fn ease(x: f32) -> f32 {
+    1.0 - (1.0 - x).powi(3)
+}
+
 
 /// A line along the bottom; thicker on hover, with the time under the pointer.
 fn seek_line(app: &mut App, ui: &mut Ui, r: Rect, track: Option<&crate::model::Track>) {
@@ -813,8 +1179,11 @@ mod tests {
     #[test]
     fn remembered_sizes_stay_in_limits() {
         let p = Place { x: 5.0, y: 6.0, w: 2000.0, h: 300.0, scale: 1.25, zoom: 1.0 };
-        assert_eq!(clamp_size(p), Place { w: MAX_W, h: SIZE.y, ..p });
-        assert_eq!(clamp_size(Place { w: 10.0, ..p }).w, MIN_W);
+        assert_eq!(clamp_size(p, false), Place { w: MAX_W, h: SIZE.y, ..p });
+        assert_eq!(clamp_size(Place { w: 10.0, ..p }, false).w, MIN_W);
+        // With lyrics the window is the strip plus the band over it, and no wider.
+        assert_eq!(clamp_size(Place { w: 10.0, ..p }, true), Place { w: MIN_W, h: SIZE.y + LYR_H, ..p });
+        assert_eq!(clamp_size(p, true).w, MAX_W);
     }
 
     #[test]
@@ -843,5 +1212,30 @@ mod tests {
         assert_eq!(m.pinned, PINNED_BY_DEFAULT);
         let m = Mini::load(|k| (k == "mini_pinned").then(|| "0".to_owned()));
         assert!(!m.pinned && m.place.is_none() && !m.active());
+    }
+
+    #[test]
+    fn the_band_lights_where_the_singing_is() {
+        let line = |start: i32, text: &str, parts: &[(i32, i32, &str)]| crate::lyrics::Line {
+            start,
+            dur: 4000,
+            text: text.to_owned(),
+            parts: parts.iter().map(|(s, d, t)| crate::lyrics::Part { start: *s, dur: *d, text: t.to_string(), bg: false }).collect(),
+            ..Default::default()
+        };
+        // Word times counted in characters from the line's start; spaces count, and light
+        // nothing of their own.
+        let sh = shot(&line(1000, "ah bu", &[(1000, 500, "ah"), (1500, 100, " "), (2000, 1000, "bu")]), true);
+        assert_eq!(sh.words, vec![(0, 2, 1000.0, 500.0), (3, 2, 2000.0, 1000.0)]);
+        assert_eq!(sung_chars(&sh, 1250.0), 1.0);
+        assert_eq!(sung_chars(&sh, 2500.0), 4.0);
+        assert_eq!(sung_chars(&sh, 9000.0), 5.0);
+        // Parts that don't add up to the text, and a source that only times lines, light
+        // the line whole when it starts.
+        for (words, l) in [(true, line(1000, "ah bu", &[(1000, 500, "ah")])), (false, line(1000, "ah bu", &[]))] {
+            let sh = shot(&l, words);
+            assert_eq!(sh.words, vec![(0, 5, 1000.0, 0.0)]);
+            assert_eq!((sung_chars(&sh, 999.0), sung_chars(&sh, 1000.0)), (0.0, 5.0));
+        }
     }
 }

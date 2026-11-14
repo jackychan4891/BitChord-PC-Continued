@@ -603,6 +603,54 @@ pub fn decoder(shared: Arc<Shared>, seekable: bool) -> anyhow::Result<TrackDecod
     }
 }
 
+/// What the decoder is being fed, for stats for nerds: the codec, the rate and channels
+/// it decodes to, and the bitrate. The bit depth is the one a hi-res source states, as
+/// rodio's decoders don't report theirs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stats {
+    pub codec: String,
+    pub bit_depth: Option<u32>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub bitrate_kbps: Option<u32>,
+}
+
+impl Stats {
+    /// `shared` as `decoder` reads it.
+    pub fn of(shared: &Shared, decoder: &TrackDecoder) -> Self {
+        let rate = rodio::Source::sample_rate(decoder).get();
+        let channels = rodio::Source::channels(decoder).get();
+        Self::from_parts(&shared.format, shared.info.as_ref(), shared.total, shared.duration_ms, rate, channels)
+    }
+
+    fn from_parts(format: &Format, info: Option<&crate::hires::Info>, size: u64, duration_ms: u64, sample_rate: u32, channels: u16) -> Self {
+        let codec = match info.map(|i| i.codec.trim()).filter(|c| !c.is_empty()) {
+            Some(c) => codec_label(c),
+            None => match format {
+                Format::Aac => "AAC".to_owned(),
+                Format::Opus => "Opus".to_owned(),
+                Format::File { hint, .. } => codec_label(hint),
+                Format::Pcm { .. } => "PCM".to_owned(),
+            },
+        };
+        let bit_depth = info.and_then(|i| i.bit_depth);
+        let measured = (duration_ms > 0 && size != crate::hires::UNKNOWN_SIZE).then(|| (size * 8 / duration_ms) as u32);
+        let bitrate_kbps = match bit_depth {
+            Some(bits) if info.is_some_and(|i| i.lossless()) => Some(sample_rate * bits * channels as u32 / 1000),
+            _ => info.and_then(|i| i.bitrate_kbps).or(measured),
+        };
+        Self { codec, bit_depth, sample_rate, channels, bitrate_kbps: bitrate_kbps.filter(|k| *k > 0) }
+    }
+}
+
+fn codec_label(codec: &str) -> String {
+    match codec.to_ascii_lowercase().as_str() {
+        "opus" => "Opus".to_owned(),
+        "vorbis" => "Vorbis".to_owned(),
+        _ => codec.to_ascii_uppercase(),
+    }
+}
+
 /// A song's decoder: Opus (our own), in-process PCM (decoded Atmos), or a file
 /// rodio decodes (AAC/MP4 included).
 pub enum TrackDecoder {
@@ -689,7 +737,17 @@ impl Iterator for PcmSource {
 }
 
 impl rodio::Source for PcmSource {
-    fn current_span_len(&self) -> Option<usize> { None }
+    /// The samples left in the file, frame-aligned and `Some(0)` once it's read to the
+    /// end. Never `None`: rodio's `UniformSourceIterator` bootstraps its
+    /// `SampleRateConverter` with `Take { n: span }` and only re-reads the source's rate
+    /// and channel count when that `Take` runs out, so an unknown span freezes the
+    /// `from` rate for the whole player — the 44.1 kHz song after this one is then
+    /// resampled as if it were 48 kHz and plays about 9 % fast.
+    fn current_span_len(&self) -> Option<usize> {
+        let left = self.reader.shared.total.saturating_sub(self.reader.pos) as usize / 2;
+        let ch = self.channels.max(1) as usize;
+        Some(left / ch * ch)
+    }
     fn channels(&self) -> rodio::ChannelCount { std::num::NonZeroU16::new(self.channels).unwrap_or(std::num::NonZeroU16::MIN) }
     fn sample_rate(&self) -> rodio::SampleRate { std::num::NonZeroU32::new(self.rate).unwrap_or(std::num::NonZeroU32::MIN) }
     fn total_duration(&self) -> Option<Duration> { self.duration }
@@ -698,5 +756,29 @@ impl rodio::Source for PcmSource {
         let byte = frame * self.channels as u64 * 2;
         self.reader.seek(SeekFrom::Start(byte)).map_err(|e| rodio::source::SeekError::Other(std::sync::Arc::new(e)))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The song queued after a PCM one is resampled at its own rate. `cargo test pcm_then_44k_rate`
+    #[test]
+    fn pcm_then_44k_rate() {
+        let nz16 = |n| std::num::NonZeroU16::new(n).unwrap();
+        let nz32 = |n| std::num::NonZeroU32::new(n).unwrap();
+        // A second of 48 kHz PCM stereo, ±8000 so it can't be mistaken for the ones below.
+        let mut pcm = Vec::with_capacity(48_000 * 2 * 2);
+        for _ in 0..48_000 {
+            pcm.extend_from_slice(&8_000i16.to_le_bytes());
+            pcm.extend_from_slice(&(-8_000i16).to_le_bytes());
+        }
+        let shared = super::Shared::from_bytes_with_format(pcm, 1_000, None, super::Format::Pcm { rate: 48_000, channels: 2 }, None);
+        let (tx, rx) = rodio::queue::queue(false);
+        tx.append(super::decoder(shared, true).unwrap());
+        // One second of 44.1 kHz, all ones.
+        tx.append(rodio::buffer::SamplesBuffer::new(nz16(2), nz32(44_100), vec![1.0f32; 44_100 * 2]));
+        let out: Vec<f32> = rodio::source::UniformSourceIterator::new(rx, nz16(2), nz32(48_000)).collect();
+        let second = out.iter().skip(48_000 * 2).filter(|&&x| (x - 1.0).abs() < 1e-3).count() / 2;
+        assert!((second as i64 - 48_000).abs() < 200, "the 44.1 kHz song came out as {second} frames, not 48000");
     }
 }

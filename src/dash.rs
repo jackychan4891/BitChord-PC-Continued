@@ -34,7 +34,7 @@ pub struct Audio {
 
 /// Fetch the manifest's Dolby (E-)AC-3 or FLAC rendition and decode it to stereo PCM.
 pub async fn fetch(http: &reqwest::Client, mpd_url: &str) -> anyhow::Result<Audio> {
-    let text = http.get(mpd_url).timeout(FETCH_TIMEOUT).header("User-Agent", crate::hires::USER_AGENT).send().await.map_err(wire)?.error_for_status().map_err(wire)?.text().await.map_err(wire)?;
+    let text = http.get(mpd_url).timeout(FETCH_TIMEOUT).header("User-Agent", crate::hires::agent()).send().await.map_err(wire)?.error_for_status().map_err(wire)?.text().await.map_err(wire)?;
     let plan = Plan::parse(&text, mpd_url)?;
     let mut bytes = Vec::new();
     let init = get(http, &plan.init).await?;
@@ -53,19 +53,16 @@ pub async fn fetch(http: &reqwest::Client, mpd_url: &str) -> anyhow::Result<Audi
     let bit_depth = plan.bit_depth;
     let bandwidth = plan.bandwidth;
     let (pcm, sample_rate) = tokio::task::spawn_blocking(move || match kind {
-        Kind::Dolby => decode(&bytes),
-        Kind::Flac => decode_flac(&bytes),
+        Kind::Dolby => decode(bytes),
+        Kind::Flac => decode_flac(bytes),
     }).await??;
     anyhow::ensure!(!pcm.is_empty(), "the rendition decoded to nothing");
     let sample_rate = if sample_rate > 0 { sample_rate } else { stated_rate };
     anyhow::ensure!(sample_rate > 0, "the rendition states no sample rate");
-    let duration_ms = pcm.len() as u64 / 2 * 1000 / sample_rate as u64;
-    let mut pcm_bytes = Vec::with_capacity(pcm.len() * 2);
-    for s in pcm {
-        pcm_bytes.extend_from_slice(&s.to_le_bytes());
-    }
+    // Interleaved stereo i16: four bytes a frame.
+    let duration_ms = pcm.len() as u64 / 4 * 1000 / sample_rate as u64;
     Ok(Audio {
-        pcm: pcm_bytes,
+        pcm,
         sample_rate,
         duration_ms,
         bitrate_kbps: bandwidth / 1000,
@@ -79,7 +76,7 @@ pub async fn fetch(http: &reqwest::Client, mpd_url: &str) -> anyhow::Result<Audi
 }
 
 async fn get(http: &reqwest::Client, url: &str) -> anyhow::Result<Vec<u8>> {
-    let r = http.get(url).timeout(FETCH_TIMEOUT).header("User-Agent", crate::hires::USER_AGENT).send().await.map_err(wire)?.error_for_status().map_err(wire)?;
+    let r = http.get(url).timeout(FETCH_TIMEOUT).header("User-Agent", crate::hires::agent()).send().await.map_err(wire)?.error_for_status().map_err(wire)?;
     Ok(r.bytes().await.map_err(wire)?.to_vec())
 }
 
@@ -240,13 +237,13 @@ fn duration_attr(v: Option<&str>) -> Option<u64> {
 }
 
 /// The E-AC-3 syncframes inside the fMP4's mdat boxes, decoded and downmixed to
-/// interleaved stereo i16. Dependent substreams (the JOC objects beyond the 5.1
-/// bed) carry no program of their own and are skipped.
-fn decode(bytes: &[u8]) -> anyhow::Result<(Vec<i16>, u32)> {
+/// little-endian interleaved stereo i16. Dependent substreams (the JOC objects beyond
+/// the 5.1 bed) carry no program of their own and are skipped.
+fn decode(bytes: Vec<u8>) -> anyhow::Result<(Vec<u8>, u32)> {
     let mut decoder = Decoder::new();
-    let mut pcm: Vec<i16> = Vec::new();
+    let mut pcm: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut rate = 0u32;
-    for payload in mdat_payloads(bytes) {
+    for payload in mdat_payloads(&bytes) {
         let mut i = 0usize;
         while i + 7 <= payload.len() {
             if payload[i] != 0x0B || payload[i + 1] != 0x77 {
@@ -278,12 +275,17 @@ fn decode(bytes: &[u8]) -> anyhow::Result<(Vec<i16>, u32)> {
         }
     }
     anyhow::ensure!(rate > 0, "no Dolby syncframes in the rendition");
+    // The rendition is gone by now, so the exact-size copy costs nothing extra and the
+    // song doesn't keep a grown buffer's spare half for as long as it plays.
+    pcm.shrink_to_fit();
     Ok((pcm, rate))
 }
 
-/// The FLAC track inside the (fragmented) MP4, decoded to interleaved stereo i16.
-fn decode_flac(bytes: &[u8]) -> anyhow::Result<(Vec<i16>, u32)> {
-    let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes.to_vec())), Default::default());
+/// The FLAC track inside the (fragmented) MP4, decoded to little-endian interleaved
+/// stereo i16.
+fn decode_flac(bytes: Vec<u8>) -> anyhow::Result<(Vec<u8>, u32)> {
+    let compressed = bytes.len();
+    let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
     let mut hint = Hint::new();
     hint.mime_type("audio/mp4");
     let probed = symphonia::default::get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())?;
@@ -296,7 +298,10 @@ fn decode_flac(bytes: &[u8]) -> anyhow::Result<(Vec<i16>, u32)> {
     // The decoded frames' spec is authoritative, so read the rate from them.
     let mut rate = 0u32;
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
-    let mut pcm: Vec<i16> = Vec::new();
+    // Four bytes a frame. The init segment's frame count sizes the buffer exactly when it
+    // states one; otherwise the compressed length is a close enough starting guess.
+    let want = (track.codec_params.n_frames.unwrap_or(0) as usize).saturating_mul(4);
+    let mut pcm: Vec<u8> = Vec::with_capacity(want.clamp(compressed, compressed * 4));
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
@@ -323,17 +328,19 @@ fn decode_flac(bytes: &[u8]) -> anyhow::Result<(Vec<i16>, u32)> {
         let samples = buf.samples();
         if channels < 2 {
             for &s in samples {
-                let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-                pcm.extend_from_slice(&[v, v]);
+                let v = ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes();
+                pcm.extend_from_slice(&v);
+                pcm.extend_from_slice(&v);
             }
         } else {
             for frame in samples.chunks_exact(channels) {
-                pcm.push((frame[0].clamp(-1.0, 1.0) * 32767.0) as i16);
-                pcm.push((frame[1].clamp(-1.0, 1.0) * 32767.0) as i16);
+                pcm.extend_from_slice(&((frame[0].clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+                pcm.extend_from_slice(&((frame[1].clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
             }
         }
     }
     anyhow::ensure!(rate > 0, "the FLAC rendition states no sample rate");
+    pcm.shrink_to_fit();
     Ok((pcm, rate))
 }
 
@@ -362,11 +369,11 @@ fn mdat_payloads(bytes: &[u8]) -> Vec<&[u8]> {
 
 /// The 5.1 bed (WAV order L R C LFE Ls Rs) folded to stereo, centre and surrounds
 /// at -3 dB, LFE left out; smaller layouts keep their front pair.
-fn downmix(channels: &[Vec<f32>], pcm: &mut Vec<i16>) {
+fn downmix(channels: &[Vec<f32>], pcm: &mut Vec<u8>) {
     let n = channels.first().map_or(0, Vec::len);
     let mut push = |l: f32, r: f32| {
-        pcm.push((l.clamp(-1.0, 1.0) * 32767.0) as i16);
-        pcm.push((r.clamp(-1.0, 1.0) * 32767.0) as i16);
+        pcm.extend_from_slice(&((l.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+        pcm.extend_from_slice(&((r.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
     };
     const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
     match channels.len() {
@@ -384,9 +391,9 @@ fn downmix(channels: &[Vec<f32>], pcm: &mut Vec<i16>) {
     }
 }
 
-fn wav(pcm: &[i16], sample_rate: u32) -> Vec<u8> {
-    let data = (pcm.len() * 2) as u32;
-    let mut out = Vec::with_capacity(44 + pcm.len() * 2);
+fn wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
+    let data = pcm.len() as u32;
+    let mut out = Vec::with_capacity(44 + pcm.len());
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&(36 + data).to_le_bytes());
     out.extend_from_slice(b"WAVEfmt ");
@@ -399,9 +406,7 @@ fn wav(pcm: &[i16], sample_rate: u32) -> Vec<u8> {
     out.extend_from_slice(&16u16.to_le_bytes());
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data.to_le_bytes());
-    for s in pcm {
-        out.extend_from_slice(&s.to_le_bytes());
-    }
+    out.extend_from_slice(pcm);
     out
 }
 
@@ -448,7 +453,7 @@ mod tests {
 
     #[test]
     fn the_decoded_wav_plays_through_the_players_decoder() {
-        let pcm: Vec<i16> = (0..480).flat_map(|i| [i as i16 * 10, -(i as i16) * 10]).collect();
+        let pcm: Vec<u8> = (0..480).flat_map(|i| [i as i16 * 10, -(i as i16) * 10]).flat_map(|s| s.to_le_bytes()).collect();
         let data = wav(&pcm, 48_000);
         assert_eq!(&data[0..4], b"RIFF");
         assert_eq!(&data[8..12], b"WAVE");

@@ -1,6 +1,7 @@
 //! What the backend answers, applied to the app.
 
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use souvlaki::MediaControlEvent;
@@ -29,17 +30,20 @@ impl App {
         }
         while let Ok(ev) = self.ch.audio_rx.try_recv() {
             match ev {
-                AudioEvent::Finished { generation } if generation == self.generation && self.jam.guest() => {}
+                AudioEvent::Finished { generation } if generation == self.generation && self.jam.follows() => {}
                 AudioEvent::Finished { generation } if generation == self.generation => {
                     if self.queue.repeat == Repeat::One {
                         self.play_current();
                     } else {
+                        // The sleeve was this song's: put it down rather than keep its
+                        // decoder, frame and texture for the rest of the session.
+                        self.deload_motion();
                         self.next();
                     }
                 }
                 AudioEvent::Finished { .. } => {}
                 // Crossfade into the next song; repeat-one and the end of the queue wait for the end.
-                AudioEvent::Ending { generation } if generation == self.generation && !self.jam.guest() && self.queue.repeat != Repeat::One => {
+                AudioEvent::Ending { generation } if generation == self.generation && !self.jam.follows() && self.queue.repeat != Repeat::One => {
                     // Automix: the next song eases in under this one, which keeps the
                     // player until the blend has given the next song the louder half
                     // (see `MixFrom`).
@@ -84,18 +88,22 @@ impl App {
             self.mix_from = None;
         }
         while let Ok(ev) = self.ch.media_rx.try_recv() {
+            log::debug!("media: {ev:?}");
+            // Take the button for what it asks for, not as a flip of wherever we happen to
+            // be: a room already holding still doesn't start because Windows said "pause",
+            // and every answer here goes through `toggle`, so the party hears about it.
             match ev {
-                MediaControlEvent::Play | MediaControlEvent::Pause if self.jam.guest() => self.toggle(),
-                MediaControlEvent::Play if self.resume_at.is_some() => self.toggle(),
-                MediaControlEvent::Play => self.audio.send(AudioCmd::Resume),
-                MediaControlEvent::Pause | MediaControlEvent::Stop => self.audio.send(AudioCmd::Pause),
+                MediaControlEvent::Play if !self.playing() => self.toggle(),
+                MediaControlEvent::Pause | MediaControlEvent::Stop if self.playing() => self.toggle(),
                 MediaControlEvent::Toggle => self.toggle(),
                 MediaControlEvent::Next => self.next(),
                 MediaControlEvent::Previous => self.prev(),
                 _ => {}
             }
         }
-        if self.buffering && self.playing() {
+        // `playing` can still be the last song's for a frame after a stop: only this
+        // generation having started ends the wait.
+        if self.buffering && self.playing() && self.audio.status.playing_gen.load(Ordering::Relaxed) == self.generation {
             self.buffering = false;
             self.skip_streak = 0;
             self.prefetch_next();
@@ -349,6 +357,10 @@ impl App {
                     }
                 }
             }
+            Resp::HiResSourceChecked { key, result } => {
+                self.hires_checking.remove(&key);
+                self.hires_checks.insert(key, result);
+            }
             Resp::AppleCover { key, motion } => {
                 self.apple_waiting.remove(&key);
                 match motion.and_then(|m| m.square) {
@@ -456,10 +468,6 @@ impl App {
                         self.show_in_media(&shown);
                         self.refresh_lyrics(shown);
                     }
-                    // A jam began while it was being looked up: everyone plays the host's upload.
-                    if self.jam.active() {
-                        self.play_listed_upload();
-                    }
                 }
             }
             Resp::PlayError { generation, msg } => self.on_play_error(generation, msg),
@@ -467,6 +475,23 @@ impl App {
                 // The stream that answered may already have been skipped past.
                 if generation == self.generation {
                     self.audio_info = Some((generation, info));
+                    self.upgrading_quality = false;
+                    self.upgrade_asked = false;
+                }
+            }
+            Resp::StreamStats { generation, stats } => {
+                if generation == self.generation {
+                    self.stream_stats = Some((generation, stats));
+                }
+            }
+            Resp::UpgradingQuality { generation, active } => {
+                if generation == self.generation {
+                    self.upgrading_quality = active;
+                    // The player's "Upgrade quality" ends here one way or the other: a
+                    // stream would have announced itself first, so this one had nothing.
+                    if !active && std::mem::take(&mut self.upgrade_asked) && self.audio_info.is_none() {
+                        self.toast("None of your hi-res sources has a copy of this song.");
+                    }
                 }
             }
             Resp::ServerQueue(q) => self.adopt_server_queue(q),

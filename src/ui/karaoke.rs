@@ -14,6 +14,8 @@
 //!   as it is lit, and the word group gives a small sideways pop.
 //! - Glow: `drop-shadow(0 0 0.8rem glow-color)` on the lit copy, decaying to nothing over
 //!   max(1.2×, 1.2 s) with `ease`: a Gaussian blur of the lit glyph pixels only (never a box).
+//!   Held words (over 1.5 s) instead swell to 1.7× and stay there while they are sung, the
+//!   way Apple Music lights a long note — beyond 2× the line washes out.
 //! - Lines: scale 0.95 → 1 over 166 ms when they start, back when they end; lit words
 //!   fade back to dim over 0.5 s once the next line starts.
 //! - Scrolling: the view jumps to the new position and every line eases from where it was,
@@ -112,6 +114,12 @@ const SWIPE_START: (f32, f32) = (-0.2, 1.4);
 const SWIPE_END: (f32, f32) = (-0.1, 1.5);
 const GLOW_RATIO: f64 = 1.2;
 const GLOW_MIN: f64 = 1.2;
+/// A held word's glow, Apple Music's way: it grows over the first `HOLD_RISE` seconds to
+/// `GLOW_SWELL` times its base (a cap, so a long note doesn't wash out the line), stays
+/// there while the word is sung, and gives it back over `GLOW_RELEASE` once it ends.
+const GLOW_SWELL: f64 = 1.7;
+const HOLD_RISE: f64 = 1.1;
+const GLOW_RELEASE: f64 = 0.9;
 const FADE_IN: f64 = 0.33;
 const FADE_OUT: f64 = 0.5;
 const SCALE_DURATION: f64 = 0.166;
@@ -1545,15 +1553,27 @@ fn word_look(w: &Word, lit: &LitState, cfg: &Cfg) -> WordLook {
             let d = w.dur.max(0.0);
             let sd = d * SWIPE_DURATION;
             let p = if sd <= 0.0 { 1.0 } else { ((e + d * SWIPE_LEAD) / sd).clamp(0.0, 1.0) as f32 };
-            WordLook {
-                opacity: 1.0,
-                start: lerp(SWIPE_START.0, SWIPE_START.1, p),
-                end: lerp(SWIPE_END.0, SWIPE_END.1, p),
-                glow: glow_radius(e, (d * GLOW_RATIO).max(GLOW_MIN), glow_rem),
-                glow_alpha,
-            }
+            // A word held past the beat glows more and more as it goes; the rest decay
+            // as the extension's do.
+            let glow = if w.long { held_glow(e, d, glow_rem) } else { glow_radius(e, (d * GLOW_RATIO).max(GLOW_MIN), glow_rem) };
+            WordLook { opacity: 1.0, start: lerp(SWIPE_START.0, SWIPE_START.1, p), end: lerp(SWIPE_END.0, SWIPE_END.1, p), glow, glow_alpha }
         }
     }
+}
+
+/// The swell, hold and release of a held word's glow, in points.
+fn held_glow(e: f64, dur: f64, from: f32) -> f32 {
+    if e < 0.0 || from <= 0.0 {
+        return 0.0;
+    }
+    let from = from as f64;
+    let top = from * GLOW_SWELL;
+    if e <= dur {
+        let rise = dur.min(HOLD_RISE);
+        return (from + (top - from) * EASE.at((e / rise) as f32) as f64) as f32;
+    }
+    let x = ((e - dur) / GLOW_RELEASE).min(1.0) as f32;
+    (top * (1.0 - EASE.at(x) as f64)) as f32
 }
 
 /// `drop-shadow` radius: 0.8rem → 0 with `ease`, then gone.
@@ -2605,6 +2625,24 @@ mod tests {
         assert!(f(55.0) > 0.0 && f(55.0) < 1.0);
         assert_eq!(f(70.0), 0.0);
         assert_eq!(cuts.len(), 2);
+    }
+
+    #[test]
+    fn a_held_word_swells_its_glow_then_gives_it_back() {
+        let from = 8.0f32;
+        let top = from * GLOW_SWELL as f32;
+        assert_eq!(held_glow(0.0, 3.0, from), from);
+        // Growing from the first frame of the word, and never past the cap.
+        let (early, mid) = (held_glow(0.2, 3.0, from), held_glow(0.9, 3.0, from));
+        assert!(early > from && mid > early, "swells: {from} → {early} → {mid}");
+        assert!(mid <= top + 0.01, "stays under the cap {top}, got {mid}");
+        // Plateau: a note held long past the rise stays lit at the cap, not brighter.
+        assert!((held_glow(2.9, 3.0, from) - top).abs() < 0.05, "holds at {top}");
+        // Released after the word ends, and gone once the release is through.
+        assert!(held_glow(3.4, 3.0, from) < top);
+        assert_eq!(held_glow(3.0 + GLOW_RELEASE as f64 + 0.1, 3.0, from), 0.0);
+        // No glow colour to give: nothing to swell.
+        assert_eq!(held_glow(1.0, 3.0, 0.0), 0.0);
     }
 
     #[test]

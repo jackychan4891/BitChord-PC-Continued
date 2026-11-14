@@ -164,11 +164,10 @@ pub fn sidebar_collapse(app: &App, ctx: &egui::Context) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// The small chevron pair that walks the page history, on the logo's line at the rail's
-/// top right.
-fn history_button(ui: &mut Ui, glyph: char, name: &str) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
-    let resp = named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
+/// The small chevron that walks the page history, centred on `at`.
+fn history_button(ui: &mut Ui, at: Pos2, glyph: char, name: &str) -> bool {
+    let rect = Rect::from_center_size(at, Vec2::splat(22.0));
+    let resp = named(ui.interact(rect, ui.id().with(name), Sense::click()), name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
     let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.15);
     if h > 0.0 {
         ui.painter().circle_filled(rect.center(), 11.0, theme::glass(0.10 * h));
@@ -188,27 +187,32 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     // Content width when expanded: text keeps its truncation while the panel narrows.
     let full_w = ui.available_width() + (SIDEBAR_W - RAIL_W) * t;
 
-    // Logo, with the page history right-aligned on the same line.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.add_space(8.0);
-        let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-        mark(ui, Rect::from_center_size(r.center(), vec2(30.0, 20.0)), theme::with_alpha(theme::text(), a));
-        let resp = named(resp, "Home");
+    // The logo keeps the icon column at the very top in both states. The history pair
+    // rides its line at the right while expanded, and slides onto its own line under
+    // the logo as the rail narrows — the rail is too tight to carry all three across.
+    {
+        let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0 + 30.0 * t), Sense::hover());
+        let logo = Rect::from_min_size(hr.min + vec2(8.0, 0.0), vec2(32.0, 32.0));
+        // Full strength in both states: `a` is the label fade, and the rail has no labels to
+        // fade — tinting the mark by it left the collapsed sidebar with no logo at all.
+        mark(ui, Rect::from_center_size(logo.center(), vec2(30.0, 20.0)), theme::text());
+        let resp = named(ui.interact(logo, ui.id().with("sidebar-home"), Sense::click()), "Home");
         let resp = if collapsed { resp } else { resp.on_hover_cursor(egui::CursorIcon::PointingHand) };
         if resp.clicked() && !collapsed {
             app.actions.push(Action::Go(Page::Home));
         }
-        // Drifts to the rail's edge as it collapses.
-        ui.add_space(((ui.available_width() - 48.0) * (1.0 - t)).max(0.0));
-        ui.spacing_mut().item_spacing.x = 4.0;
-        if history_button(ui, icon::CHEVRON_LEFT, "Back") {
+        // Expanded the pair sits flush right on the logo's line; on the rail it slides
+        // to the icon column and down onto its own line below the logo.
+        let (x0, x1) = (hr.right() - 48.0, hr.left());
+        let x = x0 + (x1 - x0) * t;
+        let yc = hr.top() + 16.0 + 31.0 * t;
+        if history_button(ui, pos2(x + 11.0, yc), icon::CHEVRON_LEFT, "Back") {
             app.nav_back();
         }
-        if history_button(ui, icon::CHEVRON_RIGHT, "Forward") {
+        if history_button(ui, pos2(x + 37.0, yc), icon::CHEVRON_RIGHT, "Forward") {
             app.nav_forward();
         }
-    });
+    }
     ui.add_space(14.0);
 
     let mut go_to: Option<Page> = None;
@@ -434,29 +438,33 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
     let panel = ui.max_rect();
     let row = Rect::from_min_size(panel.min, vec2(panel.width(), 44.0));
     let right = panel.right() - super::titlebar::right_gap(ui.ctx(), row, 20.0);
-    let r = Rect::from_min_max(pos2(right - 36.0, panel.top()), pos2(right, panel.top() + 36.0));
-    let resp = ui.interact(r, ui.scope_id().with("account"), Sense::click());
-    let resp = named(resp, "Account").on_hover_cursor(egui::CursorIcon::PointingHand);
-    let initial = app.account_name.as_deref().and_then(|n| n.chars().next()).unwrap_or('?');
-    if app.logged_in {
-        ui.painter().circle_filled(r.center(), 18.0, theme::lerp_color(app.accent_color(), Color32::BLACK, 0.35));
-        if let Some(avatar) = &app.account_avatar {
-            widgets::paint_remote(ui, avatar, r, 18.0, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    let at = pos2(right - 36.0, panel.top());
+    // Its own layer, above the pages: a page's header art scrolls up into this corner
+    // and would otherwise cover the picture and take its clicks.
+    egui::Area::new(ui.scope_id().with("account")).order(egui::Order::Middle).fixed_pos(at).show(ui.ctx(), |ui| {
+        let (r, resp) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::click());
+        let resp = named(resp, "Account").on_hover_cursor(egui::CursorIcon::PointingHand);
+        let initial = app.account_name.as_deref().and_then(|n| n.chars().next()).unwrap_or('?');
+        if app.logged_in {
+            ui.painter().circle_filled(r.center(), 18.0, theme::lerp_color(app.accent_color(), Color32::BLACK, 0.35));
+            if let Some(avatar) = &app.account_avatar {
+                widgets::paint_remote(ui, avatar, r, 18.0, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            } else {
+                ui.painter().text(r.center(), Align2::CENTER_CENTER, initial, theme::bold(16.0), Color32::WHITE);
+            }
         } else {
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, initial, theme::bold(16.0), Color32::WHITE);
+            ui.painter().circle_filled(r.center(), 18.0, theme::glass(0.12));
+            icon_at(ui, r.center(), icon::USER, 18.0, theme::text_dim());
         }
-    } else {
-        ui.painter().circle_filled(r.center(), 18.0, theme::glass(0.12));
-        icon_at(ui, r.center(), icon::USER, 18.0, theme::text_dim());
-    }
-    if resp.clicked() {
-        app.actions.push(Action::Go(Page::Settings));
-    }
-    if app.loading {
-        let spin = Rect::from_min_size(pos2(r.left() - 34.0, r.top() + 8.0), Vec2::splat(20.0));
-        let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(spin));
-        cui.spinner();
-    }
+        if resp.clicked() {
+            app.actions.push(Action::Go(Page::Settings));
+        }
+        if app.loading {
+            let spin = Rect::from_min_size(r.min + vec2(-34.0, 8.0), Vec2::splat(20.0));
+            let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(spin));
+            cui.spinner();
+        }
+    });
 }
 
 /// The search pill: typeahead, suggestions and Enter to search. The Search page draws
@@ -530,7 +538,9 @@ pub fn search_field(app: &mut App, ui: &mut Ui, width: f32) {
             edit.request_focus();
         }
     }
-    if field.clicked() || ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+    // The search shortcut from Settings › Keyboard shortcuts; the box keeps its own focus.
+    let find = super::keys::hit(ui.ctx(), &app.keys, super::keys::Cmd::Search);
+    if field.clicked() || find {
         edit.request_focus();
     }
     if edit.changed() || edit.gained_focus() || cleared {
@@ -957,7 +967,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
         {
             app.actions.push(Action::Like(t, !liked));
         }
-        let lyrics_on = app.np_open && app.np_tab == NpTab::Lyrics && !app.no_lyrics();
+        let lyrics_on = super::nowplaying::lyrics_shown(app, &ctx);
         let r = rbtn(ui, 1, "lyrics", "Lyrics");
         let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.15);
         glyphs::draw(ui, r.rect.center(), 18.0, if lyrics_on { glyphs::LYRICS } else { glyphs::LYRICS_OFF }, if lyrics_on { accent } else { ink(h) });
@@ -965,8 +975,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
             if lyrics_on {
                 app.np_open = false;
             } else {
-                app.np_tab = NpTab::Lyrics;
-                app.actions.push(Action::OpenNowPlaying(true));
+                super::nowplaying::ask_lyrics(app, &ctx);
             }
         }
         let queue_open = if app.np_open { app.np_tab == NpTab::UpNext } else { app.queue_open };
@@ -995,13 +1004,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
         }
     }
     if r.clicked() {
-        let stash = unmute_id();
-        if vol > 0.0 {
-            ui.data_mut(|d| d.insert_temp(stash, vol));
-            app.audio.set_volume(0.0);
-        } else {
-            app.audio.set_volume(ui.data(|d| d.get_temp::<f32>(stash)).unwrap_or(0.6));
-        }
+        toggle_mute(app, ui.ctx());
     }
 
     if total > 0.0
@@ -1046,7 +1049,19 @@ fn mark(ui: &Ui, r: Rect, tint: Color32) {
 
 /// Where Mute keeps the volume to go back to (the player bar's and the mini player's).
 pub fn unmute_id() -> egui::Id {
-    egui::Id::unique("unmute")
+    egui::Id::new("unmute")
+}
+
+/// Mute and back, from the player bar, the mini strip or the keyboard. What the volume
+/// was before the mute is remembered, so unmuting returns to it rather than to a guess.
+pub fn toggle_mute(app: &mut App, ctx: &egui::Context) {
+    let vol = app.audio.volume();
+    if vol > 0.0 {
+        ctx.data_mut(|d| d.insert_temp(unmute_id(), vol));
+        app.audio.set_volume(0.0);
+    } else {
+        app.audio.set_volume(ctx.data(|d| d.get_temp::<f32>(unmute_id())).unwrap_or(0.6));
+    }
 }
 
 /// The volume track: click or drag to set, scroll over it to nudge.
@@ -1101,27 +1116,22 @@ pub fn queue_list(app: &mut App, ui: &mut Ui, salt: &str) {
         let start = app.queue.index.unwrap_or(0);
         ui.checkbox(&mut app.autoplay, egui::RichText::new("Autoplay similar songs").color(theme::text_dim())).on_hover_cursor(egui::CursorIcon::PointingHand);
         ui.add_space(6.0);
-        let (queue, liked, acts, has_current, by) = (&app.queue.tracks, &app.liked, &mut app.actions, app.queue.index.is_some(), &app.jam.by);
+        let (queue, liked, acts, has_current) = (&app.queue.tracks, &app.liked, &mut app.actions, app.queue.index.is_some());
         widgets::visible_rows(ui, queue.len() - start, |ui, k| {
             let i = start + k;
             let t = &queue[i];
             // The first row is the current song.
             let current = k == 0 && has_current;
-            let o = widgets::RowOpts { current, added_by: by.get(&t.id).cloned(), ..rows.opts(liked, t, None, false) };
+            let o = widgets::RowOpts {
+                current,
+                queue_remove: (!current).then_some(i),
+                queue_move: (!current && queue.len() > 1).then(|| (i, k > 1, i + 1 < queue.len())),
+                ..rows.opts(liked, t, None, false)
+            };
             let resp = widgets::track_row(ui, t, &o, acts);
             if resp.clicked() {
                 // The playing row pauses/resumes instead of doing nothing.
                 acts.push(if current { Action::TogglePlay } else { Action::QueueJump(i) });
-            }
-            if !current && ui.rect_contains_pointer(Rect::from_min_max(resp.rect.min, pos2(resp.rect.right() + 42.0, resp.rect.bottom()))) {
-                // Remove button over the duration column.
-                let x = Rect::from_center_size(resp.rect.right_center() - vec2(26.0, 0.0), Vec2::splat(28.0));
-                let xr = named(ui.interact(x, resp.id.with("rm"), Sense::click()), "Remove from queue").on_hover_cursor(egui::CursorIcon::PointingHand);
-                ui.painter().circle_filled(x.center(), 14.0, theme::panel(0.6));
-                icon_at(ui, x.center(), icon::X, 14.0, theme::text());
-                if xr.clicked() {
-                    acts.push(Action::QueueRemove(i));
-                }
             }
         });
     });

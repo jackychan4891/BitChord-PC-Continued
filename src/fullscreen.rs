@@ -56,6 +56,16 @@ pub fn set_rounded(radius: Option<f32>) {
     imp::rounded(radius);
 }
 
+/// Keep the window above the rest, or give that back. False where this platform (or a
+/// window handle not yet taken) leaves it to winit, so the caller sends the command instead.
+#[cfg_attr(not(windows), allow(unused_variables))]
+pub fn set_topmost(on: bool) -> bool {
+    #[cfg(windows)]
+    return imp::topmost(on);
+    #[cfg(not(windows))]
+    false
+}
+
 #[cfg(windows)]
 mod imp {
     use std::sync::{Mutex, OnceLock};
@@ -66,7 +76,7 @@ mod imp {
         RDW_FRAME, RDW_INVALIDATE, RedrawWindow, SetWindowRgn,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GCLP_HBRBACKGROUND, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetWindowLongW, GetWindowPlacement, IsZoomed, SW_RESTORE, ShowWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS,
+        GCLP_HBRBACKGROUND, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, GetClientRect, GetWindowLongW, GetWindowPlacement, IsZoomed, SW_RESTORE, ShowWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS,
         SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetClassLongPtrW, SetWindowLongW, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT, WM_SETREDRAW, WS_CAPTION, WS_EX_CLIENTEDGE,
         WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_THICKFRAME,
     };
@@ -111,6 +121,15 @@ mod imp {
         let r = RECT { left: rect.left() as i32, top: rect.top() as i32, right: rect.right() as i32, bottom: rect.bottom() as i32 };
         // SAFETY: plain query.
         !unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONULL) }.is_invalid()
+    }
+
+    /// The strip's pin, straight to the window manager. winit posts its own change to the
+    /// window's thread (`SWP_ASYNCWINDOWPOS`) and can leave it unapplied while another app
+    /// is being raised; this one has landed before it returns.
+    pub fn topmost(on: bool) -> bool {
+        let Some(&h) = WINDOW.get() else { return false };
+        // SAFETY: the app's own window; the place and size don't change and it isn't raised.
+        unsafe { SetWindowPos(HWND(h as *mut _), Some(if on { HWND_TOPMOST } else { HWND_NOTOPMOST }), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) }.is_ok()
     }
 
     /// The last region applied: inner size and radius, in pixels.
