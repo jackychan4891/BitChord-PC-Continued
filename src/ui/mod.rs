@@ -75,6 +75,7 @@ pub enum LibTab {
     Playlists,
     Songs,
     Albums,
+    Podcasts,
     History,
     Uploads,
 }
@@ -798,6 +799,7 @@ impl App {
             Ok("new") | Ok("explore") => app.go(Page::New),
             Ok("library") => app.go(Page::Library(LibTab::Playlists)),
             Ok("uploads") => app.go(Page::Library(LibTab::Uploads)),
+            Ok("podcasts") => app.go(Page::Library(LibTab::Podcasts)),
             Ok("liked") => app.go(Page::Library(LibTab::Songs)),
             Ok("history") => app.go(Page::Library(LibTab::History)),
             Ok("settings") => app.go(Page::Settings),
