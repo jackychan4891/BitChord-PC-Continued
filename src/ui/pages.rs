@@ -519,11 +519,11 @@ fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
         ui.vertical(|ui| {
             ui.label(RichText::new("Songs").font(theme::bold(24.0)));
             ui.add_space(8.0);
-            for (i, t) in r.tracks.iter().take(4).enumerate() {
+            for t in r.tracks.iter().take(4) {
                 // The album beside the artist, as every other song row shows it.
                 let o = RowOpts { pick, ..rows.opts(liked, t, None, true) };
                 if track_row(ui, t, &o, acts).clicked() {
-                    acts.push(if pick { Action::TransferPick(t.clone()) } else { Action::Play(r.tracks.clone(), i) });
+                    acts.push(if pick { Action::TransferPick(t.clone()) } else { Action::Radio(t.clone()) });
                 }
             }
         });
@@ -534,10 +534,10 @@ fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
         ui.add_space(26.0);
         ui.label(RichText::new("More songs").font(theme::bold(24.0)));
         ui.add_space(10.0);
-        for (i, t) in r.tracks.iter().enumerate().skip(4) {
+        for t in r.tracks.iter().skip(4) {
             let o = RowOpts { pick, ..rows.opts(liked, t, None, true) };
             if track_row(ui, t, &o, acts).clicked() {
-                acts.push(if pick { Action::TransferPick(t.clone()) } else { Action::Play(r.tracks.clone(), i) });
+                acts.push(if pick { Action::TransferPick(t.clone()) } else { Action::Radio(t.clone()) });
             }
         }
     }
