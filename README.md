@@ -13,7 +13,7 @@
   <p>
     <a href="https://github.com/jackychan4891/BitChord-PC-Continued/releases/latest">Download</a> ·
     <a href="#features">Features</a> ·
-    <a href="#installation">Installation</a> ·
+    <a href="#installation">Installation</a>
   </p>
 </div>
 
