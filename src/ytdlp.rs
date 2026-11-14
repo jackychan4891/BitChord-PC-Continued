@@ -13,6 +13,9 @@ use std::time::{Duration, SystemTime};
 use serde_json::Value;
 
 #[cfg(windows)]
+mod windows_path;
+
+#[cfg(windows)]
 const BIN: &str = "yt-dlp.exe";
 #[cfg(not(windows))]
 const BIN: &str = "yt-dlp";
@@ -103,6 +106,9 @@ fn run(bin: &Path, data_dir: &Path, video_id: &str, cookie: &str) -> anyhow::Res
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
+        if let Some(path) = std::env::var_os("PATH") {
+            cmd.env("PATH", windows_path::resolve(&path)?);
+        }
     }
     // Its own process group, so the whole tree (the onefile binary unpacks into a child,
     // plus Node) can be ended together.
