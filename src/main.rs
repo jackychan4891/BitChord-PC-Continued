@@ -8,6 +8,7 @@ mod proxy;
 mod renderer;
 mod art;
 mod audio;
+mod bitperfect;
 mod backend;
 mod bidi;
 mod deeplink;

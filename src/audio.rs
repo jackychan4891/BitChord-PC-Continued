@@ -39,6 +39,8 @@ pub enum AudioCmd {
     /// Play through this device (cpal's id) whenever it's connected; None follows the
     /// system default.
     SetDevice(Option<String>),
+    /// Send lossless tracks straight to the DAC in WASAPI exclusive mode.
+    SetBitPerfect(bool),
 }
 
 pub enum AudioEvent {
@@ -66,6 +68,14 @@ pub struct AudioStatus {
     pub playing: AtomicBool,
     /// Generation the UI most recently asked for; the engine ignores older decoders.
     pub wanted_gen: AtomicU64,
+    /// The current stream is going straight to a DAC in WASAPI exclusive mode.
+    pub bit_perfect: AtomicBool,
+    /// The current track was started through bit-perfect output (even if it has
+    /// since finished or the device stopped it).
+    pub bit_perfect_current: AtomicBool,
+    /// What that exclusive stream is carrying (0 while idle/off).
+    pub bit_perfect_rate: AtomicU32,
+    pub bit_perfect_bits: AtomicU32,
     /// f32 bits
     volume: AtomicU32,
     /// Turn loud tracks down to YouTube's loudness target.
@@ -153,7 +163,7 @@ impl AudioStatus {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
 
-    fn set_position(&self, ms: u64) {
+    pub(crate) fn set_position(&self, ms: u64) {
         self.position_ms.store(ms, Ordering::Relaxed);
         self.sampled_at.store(now_ms(), Ordering::Relaxed);
     }
@@ -783,6 +793,23 @@ impl Output {
         let want = target(self.preferred.as_deref()).and_then(|d| d.id().ok()).map(|i| i.to_string());
         want.is_some() && want != self.device
     }
+
+    /// The device picked in settings, if any.
+    fn picked(&self) -> Option<&str> {
+        self.preferred.as_deref()
+    }
+
+    /// Let go of the device so an exclusive stream can have it.
+    fn close(&mut self) {
+        self.sink = None;
+        self.device = None;
+        // The shared stream hands the mixer back as its thread exits; that also
+        // releases the endpoint just before the exclusive client opens it.
+        let waited = Instant::now();
+        while self.slot.lock().unwrap().is_none() && waited.elapsed() < Duration::from_millis(500) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
 
 /// The picked device if it's connected, else the system default.
@@ -901,6 +928,9 @@ fn run(
     }
     let mut player = Player::connect_new(&output.mixer);
     player.set_volume(slider_gain(&status, volume));
+    // Lossless tracks can go straight to the DAC instead of through this mixer.
+    let mut bit_perfect_mode = false;
+    let mut bit_perfect: Option<crate::bitperfect::BitPerfect> = None;
     // The playing source's fade-out control (see `Meter`).
     let mut fade_out = Arc::new(AtomicU32::new(0));
     // Songs fading out under the current one (more than one only for a moment).
@@ -930,12 +960,60 @@ fn run(
         // Poll while playing so the position stays fresh and the end is noticed; idle otherwise.
         let timeout = if (current != 0 || !fading.is_empty()) && !player.is_paused() { Duration::from_millis(100) } else { Duration::from_secs(3600) };
         match rx.recv_timeout(timeout) {
-            Ok(AudioCmd::Start { generation, decoder, shared: s, at }) => {
+            Ok(AudioCmd::Start { generation, mut decoder, shared: s, at }) => {
                 if generation != status.wanted_gen.load(Ordering::Relaxed) {
                     log::debug!("audio: dropping stale generation {generation}");
                     continue;
                 }
                 log::debug!("audio: start generation {generation}");
+                if bit_perfect_mode && crate::bitperfect::accepts(&s, &decoder) {
+                    if let Some(mut old) = bit_perfect.take() {
+                        old.stop();
+                    }
+                    log::info!("audio: bit-perfect {generation} at {at:?}");
+                    output.close();
+                    match crate::bitperfect::open(output.picked(), decoder, s.clone(), status.clone(), events.clone(), generation, at) {
+                        Ok(started) => {
+                            log::info!("audio: bit-perfect {} Hz, {}-bit", started.rate, started.bits);
+                            player.clear();
+                            fading.clear();
+                            if s.duration_ms > 0 {
+                                status.duration_ms.store(s.duration_ms, Ordering::Relaxed);
+                            }
+                            if let Some(old) = shared.replace(s.clone())
+                                && !Arc::ptr_eq(&old, &s)
+                            {
+                                old.cancel();
+                            }
+                            length = status.duration();
+                            current = generation;
+                            offset = at;
+                            seekable = true;
+                            ending_sent = false;
+                            bit_perfect = Some(started.output);
+                            status.bit_perfect_current.store(true, Ordering::Relaxed);
+                            continue;
+                        }
+                        Err((back, e)) => {
+                            log::warn!("audio: bit-perfect unavailable: {e:#}");
+                            let _ = events.send(AudioEvent::Error(format!("Bit-perfect unavailable: {e}. Playing through Windows' mixer.")));
+                            output.open(tx.clone(), &status);
+                            match back {
+                                Some(d) => decoder = d,
+                                None => {
+                                    status.playing.store(false, Ordering::Relaxed);
+                                    current = 0;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(mut old) = bit_perfect.take() {
+                    old.stop();
+                }
+                status.bit_perfect.store(false, Ordering::Relaxed);
+                status.bit_perfect_current.store(false, Ordering::Relaxed);
                 if output.sink.is_none() || output.default_changed() {
                     output.open(tx.clone(), &status);
                 }
@@ -978,6 +1056,9 @@ fn run(
                 status.playing.store(true, Ordering::Relaxed);
             }
             Ok(AudioCmd::Replace { generation, seek, decoder, at, seekable: s }) => {
+                if bit_perfect.is_some() {
+                    continue;
+                }
                 if generation != current || seek != seek_seq {
                     continue;
                 }
@@ -994,6 +1075,13 @@ fn run(
                 offset = at;
             }
             Ok(AudioCmd::Pause) => {
+                if let Some(bp) = &bit_perfect {
+                    log::debug!("audio: pause bit-perfect at {current}");
+                    bp.pause();
+                    status.playing.store(false, Ordering::Relaxed);
+                    wake();
+                    continue;
+                }
                 log::debug!("audio: pause at {:?}", offset + player.get_pos());
                 player.pause();
                 fading.iter().for_each(|f| f.player.pause());
@@ -1003,6 +1091,12 @@ fn run(
             }
             Ok(AudioCmd::Resume) => {
                 log::debug!("audio: resume (generation {current})");
+                if let Some(bp) = &bit_perfect {
+                    bp.resume();
+                    status.playing.store(true, Ordering::Relaxed);
+                    wake();
+                    continue;
+                }
                 if current != 0 {
                     // Headphones may have come back (or gone) while paused.
                     if output.sink.is_none() || output.default_changed() {
@@ -1033,6 +1127,19 @@ fn run(
                 status.set_position(0);
             }
             Ok(cmd @ (AudioCmd::Stop | AudioCmd::Handoff)) => {
+                if let Some(mut bp) = bit_perfect.take() {
+                    bp.stop();
+                    log::debug!("audio: bit-perfect stopped");
+                    current = 0;
+                    shared = None;
+                    offset = Duration::ZERO;
+                    status.bit_perfect.store(false, Ordering::Relaxed);
+                    status.bit_perfect_current.store(false, Ordering::Relaxed);
+                    status.playing.store(false, Ordering::Relaxed);
+                    status.set_position(0);
+                    wake();
+                    continue;
+                }
                 if matches!(cmd, AudioCmd::Handoff) {
                     // Skipping again mid-crossfade: everything playing goes, quickly enough
                     // to sound like a cut but without a click, and the next song comes in
@@ -1069,6 +1176,12 @@ fn run(
                     AudioCmd::Seek(pos) => (pos, None),
                     _ => unreachable!(),
                 };
+                if let Some(bp) = &bit_perfect {
+                    if current != 0 {
+                        bp.seek(pos);
+                    }
+                    continue;
+                }
                 seek_seq += 1;
                 if current == 0 {
                     continue;
@@ -1113,6 +1226,16 @@ fn run(
                 }
             }
             Ok(AudioCmd::DeviceLost) => {
+                if let Some(mut bp) = bit_perfect.take() {
+                    bp.stop();
+                    current = 0;
+                    shared = None;
+                    status.bit_perfect.store(false, Ordering::Relaxed);
+                    status.playing.store(false, Ordering::Relaxed);
+                    let _ = events.send(AudioEvent::Error("Bit-perfect output device was lost".into()));
+                    wake();
+                    continue;
+                }
                 let was = output.device.clone();
                 output.open(tx.clone(), &status);
                 // The device itself went away, not a hiccup on the same one: pause, as
@@ -1127,10 +1250,36 @@ fn run(
             }
             Ok(AudioCmd::SetDevice(id)) => {
                 log::info!("audio: output device set to {id:?}");
+                if let Some(mut bp) = bit_perfect.take() {
+                    bp.stop();
+                    current = 0;
+                    shared = None;
+                    status.bit_perfect.store(false, Ordering::Relaxed);
+                    status.playing.store(false, Ordering::Relaxed);
+                }
                 output.preferred = id;
-                if output.default_changed() || output.sink.is_none() {
+                if output.sink.is_none() || output.default_changed() {
                     output.open(tx.clone(), &status);
                 }
+            }
+            Ok(AudioCmd::SetBitPerfect(on)) => {
+                log::info!("audio: bit-perfect mode {on}");
+                bit_perfect_mode = on;
+                if !on {
+                    if let Some(mut bp) = bit_perfect.take() {
+                        bp.stop();
+                        current = 0;
+                        shared = None;
+                        status.playing.store(false, Ordering::Relaxed);
+                        status.set_position(0);
+                    }
+                    status.bit_perfect.store(false, Ordering::Relaxed);
+                    status.bit_perfect_current.store(false, Ordering::Relaxed);
+                    if output.sink.is_none() {
+                        output.open(tx.clone(), &status);
+                    }
+                }
+                wake();
             }
             Ok(AudioCmd::Volume(v)) => {
                 let v = slider_gain(&status, v);
@@ -1143,7 +1292,7 @@ fn run(
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
         }
 
-        if current != 0 && dev_lost.is_some_and(|at| offset + player.get_pos() >= at) {
+        if bit_perfect.is_none() && current != 0 && dev_lost.is_some_and(|at| offset + player.get_pos() >= at) {
             dev_lost = None;
             log::info!("audio: dev hook: output device lost");
             output.sink = None;
@@ -1153,7 +1302,8 @@ fn run(
         }
         // Follow the default device while playing (headphones connecting take over).
         // A failed device is `DeviceLost`'s to handle (it decides whether to pause).
-        if (current != 0 || !fading.is_empty())
+        if bit_perfect.is_none()
+            && (current != 0 || !fading.is_empty())
             && !player.is_paused()
             && output.checked.elapsed() >= DEVICE_CHECK
             && !output.lost.load(Ordering::Relaxed)
@@ -1177,7 +1327,7 @@ fn run(
                 log::debug!("audio: crossfade done");
             }
         }
-        if current != 0 {
+        if bit_perfect.is_none() && current != 0 {
             let pos = offset + player.get_pos();
             status.set_position(pos.as_millis() as u64);
             // Start the next song early, to crossfade into it. Not for songs barely

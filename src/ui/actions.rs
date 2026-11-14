@@ -45,6 +45,7 @@ impl App {
             }
             Action::TogglePlay => self.toggle(),
             Action::TransferPick(t) => transfer::use_pick(self, t),
+            Action::BitPerfect(on) => self.set_bit_perfect(on),
             // Kept already: at once. A playlist that isn't starts with its first page.
             Action::PlayCollection(Target::Album(id) | Target::Playlist(id), shuffle) if self.opened(&id).is_some() => self.play_opened(id, shuffle),
             Action::PlayCollection(target, shuffle) => {

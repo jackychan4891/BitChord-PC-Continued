@@ -123,6 +123,8 @@ pub enum Action {
     Mini(bool),
     /// Play/pause what's already loaded (a card's button on the playing item).
     TogglePlay,
+    /// Send lossless tracks straight to the DAC in WASAPI exclusive mode.
+    BitPerfect(bool),
     /// Drop the hi-res stream and replay the current song from YouTube at the same spot.
     RevertQuality,
     /// Clear a quality revert and replay, asking hi-res sources again.
@@ -361,6 +363,8 @@ pub struct App {
     normalize: bool,
     log_volume: bool,
     high_quality: bool,
+    /// Send lossless tracks straight to the selected DAC in WASAPI exclusive mode.
+    bit_perfect: bool,
     /// Play an official music video as its song version when one is found.
     play_songs: bool,
     /// The song version playing in place of the current music video.
@@ -666,6 +670,7 @@ impl App {
             normalize: get("normalize").is_none_or(|v| v == "1"),
             log_volume: get("log_volume").is_none_or(|v| v == "1"),
             high_quality: get("high_quality").is_none_or(|v| v == "1"),
+            bit_perfect: get("bit_perfect").is_some_and(|v| v == "1"),
             play_songs: get("play_songs").is_none_or(|v| v == "1"),
             playing_as: None,
             output_device: get("output_device").filter(|d| !d.is_empty()).map(|id| (id, get("output_device_name").unwrap_or_default())),
@@ -776,6 +781,11 @@ impl App {
             smoke: None,
         };
         app.request_liked(false);
+        app.audio.send(crate::audio::AudioCmd::SetBitPerfect(app.bit_perfect));
+        if app.bit_perfect {
+            // Bit-perfect output carries stereo PCM; ask the sources for the stereo copy.
+            app.backend.set_prefer_atmos(false);
+        }
         // Dev hooks: YTM_SMOKE="query" searches and plays the first song ("id:<videoId>[,<videoId>…]"
         // plays that video); YTM_SEARCH
         // only searches; YTM_PAGE opens a page; YTM_NOWPLAYING opens the overlay.
@@ -1400,6 +1410,7 @@ impl eframe::App for App {
         storage.set_string("normalize", b(self.normalize));
         storage.set_string("log_volume", b(self.log_volume));
         storage.set_string("high_quality", b(self.high_quality));
+        storage.set_string("bit_perfect", b(self.bit_perfect));
         storage.set_string("play_songs", b(self.play_songs));
         let folder = crate::downloads::folder();
         storage.set_string("download_dir", if folder == crate::downloads::default_folder() { String::new() } else { folder.display().to_string() });
