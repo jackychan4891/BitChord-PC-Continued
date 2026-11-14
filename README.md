@@ -11,17 +11,19 @@
   </p>
 
   <p>
-    <a href="https://discord.gg/cWQSGjpXM">Discord</a> ·
     <a href="https://github.com/jackychan4891/BitChord-PC-Continued/releases/latest">Download</a> ·
     <a href="#features">Features</a> ·
-    <a href="#installation">Installation</a> ·
-    <a href="#building-from-source">Build from source</a>
+    <a href="#installation">Installation</a>
   </p>
 </div>
 
+> [!IMPORTANT]
+> BitChord is not affiliated with, endorsed by, or connected to YouTube, Google or Apple.
+> Use it at your own discretion.
 
-> BitChord is an independent, unofficial client. It is not affiliated with, endorsed by, or connected to YouTube, Google, or Apple.
-
+> [!TIP]
+> Need help, want to hear about new releases first, or say what should come next?
+> [Join the Discord server](https://discord.gg/cWQSGjpXM).
 ## Screenshots
 
 <table>
@@ -105,4 +107,6 @@ BitChord is licensed under [GPL-3.0](LICENSE).
 
 - [egui](https://github.com/emilk/egui) for the interface.
 - [rodio](https://github.com/RustAudio/rodio) and Symphonia for audio playback and decoding.
+- [ytm-rs](https://github.com/grapedjuice/ytm-rs) for the basic rust backend.
 - Lyrics, metadata, playback, and integrations depend on the upstream libraries and third-party services used by this project.
+
