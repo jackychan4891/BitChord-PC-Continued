@@ -19,7 +19,9 @@
   </p>
 </div>
 
-> BitChord is an independent, unofficial client. It is not affiliated with, endorsed by, or connected to YouTube, Google, or Apple.
+> [!IMPORTANT]
+> BitChord is not affiliated with, endorsed by, or connected to YouTube, Google or Apple.
+> Use it at your own discretion.
 
 ## Screenshots
 
