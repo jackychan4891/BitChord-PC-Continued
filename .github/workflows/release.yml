@@ -98,130 +98,29 @@ jobs:
             installer/Output/bitchord-portable-${{ env.VERSION }}-arm64.zip
           if-no-files-found: error
 
-  linux:
-    # The oldest supported Ubuntu, so the binary runs on older glibc too.
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev libasound2-dev libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev libdbus-1-dev
-
-      - name: Build
-        run: |
-          cargo build --release --locked
-          echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
-
-      # The installer tarball: the binary, install.sh with the launcher and icon it
-      # installs, README and LICENSE. The portable one: the binary, the marker that makes
-      # it portable, README and LICENSE. The updater on Linux reads them too.
-      - name: Build tarballs
-        run: |
-          dir="bitchord-$VERSION-linux-x86_64"
-          mkdir -p "out/$dir"
-          cp target/release/bitchord linux/install.sh linux/bitchord.desktop README.md LICENSE "out/$dir/"
-          cp assets/icon/icon.png "out/$dir/bitchord.png"
-          chmod 755 "out/$dir/bitchord" "out/$dir/install.sh"
-          tar -czf "out/$dir.tar.gz" -C out "$dir"
-          dir="bitchord-portable-$VERSION-linux-x86_64"
-          mkdir -p "out/$dir"
-          cp target/release/bitchord linux/portable.txt README.md LICENSE "out/$dir/"
-          chmod 755 "out/$dir/bitchord"
-          tar -czf "out/$dir.tar.gz" -C out "$dir"
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: linux
-          path: |
-            out/bitchord-${{ env.VERSION }}-linux-x86_64.tar.gz
-            out/bitchord-portable-${{ env.VERSION }}-linux-x86_64.tar.gz
-          if-no-files-found: error
-
-  macos:
-    runs-on: macos-latest
-    env:
-      MACOSX_DEPLOYMENT_TARGET: "11.0"
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
-
-      # The tests run on the Apple silicon runner itself; a release isn't published
-      # without them passing.
-      - name: Test
-        run: cargo test --locked --target aarch64-apple-darwin
-
-      # The Intel build is cross-compiled on the Apple silicon runner.
-      - name: Build
-        run: |
-          cargo build --release --locked --target aarch64-apple-darwin
-          cargo build --release --locked --target x86_64-apple-darwin
-          echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
-
-      # Per architecture, the installer: a disk image with the app and an Applications
-      # link to drag it to. And the portable zip: the app with the portable marker,
-      # README and LICENSE. The updater on macOS reads them too.
-      - name: Build installers and portable zips
-        run: |
-          for arch in aarch64 x86_64; do
-            bin="target/$arch-apple-darwin/release/bitchord"
-            stage="out/dmg-$arch"
-            dmg="out/bitchord-setup-$VERSION-macos-$arch.dmg"
-            mkdir -p "$stage"
-            sh macos/bundle.sh "$bin" "$VERSION" "$stage"
-            ln -s /Applications "$stage/Applications"
-            # hdiutil on the hosted runners sometimes fails with "Resource busy"; retry.
-            for try in 1 2 3; do
-              hdiutil create -volname "BitChord" -srcfolder "$stage" -ov -format UDZO "$dmg" && break
-              sleep 10
-            done
-            [ -f "$dmg" ]
-            dir="bitchord-portable-$VERSION-macos-$arch"
-            mkdir -p "out/$dir"
-            sh macos/bundle.sh "$bin" "$VERSION" "out/$dir" portable
-            cp README.md LICENSE "out/$dir/"
-            ditto -c -k --norsrc --keepParent "out/$dir" "out/$dir.zip"
-          done
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: macos
-          path: |
-            out/bitchord-setup-${{ env.VERSION }}-macos-aarch64.dmg
-            out/bitchord-portable-${{ env.VERSION }}-macos-aarch64.zip
-            out/bitchord-setup-${{ env.VERSION }}-macos-x86_64.dmg
-            out/bitchord-portable-${{ env.VERSION }}-macos-x86_64.zip
-          if-no-files-found: error
-
   attach:
-    if: github.ref_type == 'tag'
-    needs: [windows, linux, macos]
+    needs: [windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v5
         with:
+          name: windows
           path: files
-          merge-multiple: true
 
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          ls -l files
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" files/* --clobber
-            gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          TAG="v${VERSION}"
+          echo "Releasing $TAG"
+          ls -la files
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" files/* --clobber
+            gh release edit "$TAG" --draft=false --latest
           else
-            gh release create "$GITHUB_REF_NAME" files/* --draft --title "bitchord ${GITHUB_REF_NAME#v}" --notes ""
+            gh release create "$TAG" files/* --title "BitChord $TAG" --notes "BitChord $TAG Windows Release"
           fi
