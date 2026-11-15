@@ -9,6 +9,7 @@ name: Release
 # to be given notes and published by hand.
 on:
   push:
+    branches: ["custom-features"]
     tags: ["v*"]
   workflow_dispatch:
 
