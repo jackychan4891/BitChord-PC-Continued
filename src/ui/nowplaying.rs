@@ -144,6 +144,11 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     }
     hui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.add_space(super::titlebar::right_gap(ui.ctx(), ui.max_rect(), 0.0));
+        let fs_icon = if app.fullscreen { icon::SHRINK } else { icon::EXPAND };
+        let fs_text = if app.fullscreen { "Exit full screen (F)" } else { "Full screen (F)" };
+        if icon_button(ui, fs_icon, 20.0, fs_text, false).clicked() {
+            app.set_fullscreen(ui.ctx(), !app.fullscreen);
+        }
         // Its actions (like, download, share…) are for what's heard: a song version
         // standing in for the music video. It lives beside the star under the cover;
         // only when the cover column is hidden (a narrow window showing lyrics) does
@@ -810,6 +815,11 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
         }
         if widgets::menu_action(ui, Some(icon::RADIO), "Start radio") {
             app.actions.push(Action::Radio(track.clone()));
+        }
+        let fs_icon = if app.fullscreen { icon::SHRINK } else { icon::EXPAND };
+        let fs_text = if app.fullscreen { "Exit full screen" } else { "Full screen" };
+        if widgets::menu_action(ui, Some(fs_icon), fs_text) {
+            app.set_fullscreen(ui.ctx(), !app.fullscreen);
         }
         // Quality toggle at the bottom: revert when hi-res is playing, upgrade when not.
         let hires_playing = app.audio_info.as_ref().is_some_and(|(_, i)| i.lossless() || i.atmos);

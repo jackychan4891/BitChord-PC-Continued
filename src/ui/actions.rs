@@ -259,6 +259,15 @@ impl App {
         // The mini player has no pages or now playing to go to, nor does a window on
         // its way back until it's there.
         let strip = self.mini.busy();
+        // F11 toggles full screen anywhere in the app (when not typing/editing shortcuts).
+        if !strip && self.keys_edit.is_none() && ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            if self.np_open {
+                self.set_fullscreen(ctx, !self.fullscreen);
+            } else {
+                let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+            }
+        }
         for cmd in hits.into_iter().chain(mb.then_some(keys::Cmd::Back)).chain(mf.then_some(keys::Cmd::Forward)) {
             match cmd {
                 keys::Cmd::PlayPause => self.toggle(),
@@ -282,12 +291,21 @@ impl App {
                     self.np_open = true;
                     self.np_tab = NpTab::UpNext;
                 }
-                keys::Cmd::Fullscreen if !strip && self.np_open => self.set_fullscreen(ctx, !self.fullscreen),
+                keys::Cmd::Fullscreen if !strip => {
+                    if self.np_open {
+                        self.set_fullscreen(ctx, !self.fullscreen);
+                    } else {
+                        let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+                    }
+                }
                 keys::Cmd::Back if !strip => self.nav_back(),
                 keys::Cmd::Forward if !strip => self.nav_forward(),
                 keys::Cmd::Close if !strip => {
                     if self.fullscreen {
                         self.set_fullscreen(ctx, false);
+                    } else if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                     } else {
                         self.np_open = false;
                     }

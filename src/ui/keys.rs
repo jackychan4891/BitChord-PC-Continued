@@ -130,7 +130,7 @@ pub const INFOS: &[Info] = &[
     Info { cmd: Cmd::Search, label: "Search", default: combo(Key::F, true, false, false), guard: Guard::Anywhere, repeat: false },
     Info { cmd: Cmd::Lyrics, label: "Lyrics", default: combo(Key::L, false, false, false), guard: Guard::NotTyping, repeat: false },
     Info { cmd: Cmd::Queue, label: "Up next", default: combo(Key::Q, false, false, false), guard: Guard::NotTyping, repeat: false },
-    Info { cmd: Cmd::Fullscreen, label: "Full-screen lyrics (in now playing)", default: combo(Key::F, false, false, false), guard: Guard::NotTyping, repeat: false },
+    Info { cmd: Cmd::Fullscreen, label: "Full screen (F / F11)", default: combo(Key::F, false, false, false), guard: Guard::NotTyping, repeat: false },
     Info { cmd: Cmd::Back, label: "Back", default: combo(Key::ArrowLeft, false, true, false), guard: Guard::Anywhere, repeat: false },
     Info { cmd: Cmd::Forward, label: "Forward", default: combo(Key::ArrowRight, false, true, false), guard: Guard::Anywhere, repeat: false },
     Info { cmd: Cmd::Close, label: "Close now playing", default: combo(Key::Escape, false, false, false), guard: Guard::Anywhere, repeat: false },
