@@ -127,45 +127,59 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     let cs = &look.cover;
     let area = ui.max_rect();
     let no_lyrics = app.no_lyrics();
-    let shown_tab = view(app, ui.ctx());
+    let is_fullscreen = app.fullscreen;
+    let shown_tab = if is_fullscreen { NpTab::Lyrics } else { view(app, ui.ctx()) };
     // The content is this area less its margins: a cover column beside the panel needs
     // 860 points, and below that the cover gives way to the panel.
     let narrow = area.width() - 64.0 < 860.0;
     // Header: on the window buttons' line, when the app draws them.
     let lift = 20.0 - f32::from(super::titlebar::top_margin(20, 44.0));
-    let header = Rect::from_min_size(area.min - vec2(0.0, if app.fullscreen { 0.0 } else { lift }), vec2(area.width(), 44.0));
-    let mut hui = ui.new_child(egui::UiBuilder::new().max_rect(header).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    // The player's own close, top left; the window buttons keep the top right.
-    if icon_button(&mut hui, icon::CHEVRON_DOWN, 22.0, "Close now playing", false).clicked() {
-        app.np_open = false;
-        if app.fullscreen {
-            app.set_fullscreen(ui.ctx(), false);
+    let header = Rect::from_min_size(area.min - vec2(0.0, if is_fullscreen { 0.0 } else { lift }), vec2(area.width(), 44.0));
+    if !is_fullscreen {
+        let mut hui = ui.new_child(egui::UiBuilder::new().max_rect(header).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        // The player's own close, top left; the window buttons keep the top right.
+        if icon_button(&mut hui, icon::CHEVRON_DOWN, 22.0, "Close now playing", false).clicked() {
+            app.np_open = false;
+        }
+        hui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(super::titlebar::right_gap(ui.ctx(), ui.max_rect(), 0.0));
+            if icon_button(ui, icon::EXPAND, 20.0, "Full screen (F)", false).clicked() {
+                app.set_fullscreen(ui.ctx(), true);
+            }
+            // Its actions (like, download, share…) are for what's heard: a song version
+            // standing in for the music video. It lives beside the star under the cover;
+            // only when the cover column is hidden (a narrow window showing lyrics) does
+            // it stay up here.
+            let cover_hidden = (narrow || cs.layout == Layout::LyricsOnly) && shown_tab != NpTab::Art;
+            if cover_hidden {
+                let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
+                options_menu(app, ui, r, &heard, shown_tab == NpTab::Lyrics && !no_lyrics);
+            }
+        });
+    } else {
+        // In full screen, keep everything hidden; reveal exit full screen button on hover near top right
+        let hover_top_right = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.y < area.top() + 48.0 && p.x > area.right() - 56.0);
+        if hover_top_right {
+            let r = Rect::from_center_size(pos2(area.right() - 28.0, area.top() + 22.0), Vec2::splat(32.0));
+            let mut hui = ui.new_child(egui::UiBuilder::new().max_rect(r));
+            if icon_button(&mut hui, icon::SHRINK, 20.0, "Exit full screen (F / Esc)", false).clicked() {
+                app.set_fullscreen(ui.ctx(), false);
+            }
         }
     }
-    hui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.add_space(super::titlebar::right_gap(ui.ctx(), ui.max_rect(), 0.0));
-        let fs_icon = if app.fullscreen { icon::SHRINK } else { icon::EXPAND };
-        let fs_text = if app.fullscreen { "Exit full screen (F)" } else { "Full screen (F)" };
-        if icon_button(ui, fs_icon, 20.0, fs_text, false).clicked() {
-            app.set_fullscreen(ui.ctx(), !app.fullscreen);
-        }
-        // Its actions (like, download, share…) are for what's heard: a song version
-        // standing in for the music video. It lives beside the star under the cover;
-        // only when the cover column is hidden (a narrow window showing lyrics) does
-        // it stay up here.
-        let cover_hidden = (narrow || cs.layout == Layout::LyricsOnly) && shown_tab != NpTab::Art;
-        if cover_hidden {
-            let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
-            options_menu(app, ui, r, &heard, shown_tab == NpTab::Lyrics && !no_lyrics);
-        }
-    });
 
-    let content = Rect::from_min_max(pos2(area.left(), header.bottom() + 12.0), area.max);
+    let content = if is_fullscreen {
+        area
+    } else {
+        Rect::from_min_max(pos2(area.left(), header.bottom() + 12.0), area.max)
+    };
     // The side panel (lyrics / up next) slides in and out when its chip is toggled. A
     // song with no lyrics has no lyrics panel to show: it's the artwork instead, unless
     // the panel was asked for and its "no lyrics" note is what's wanted.
     let last_id = egui::Id::unique("np-last-panel");
-    let panel_tab = if shown_tab == NpTab::Art {
+    let panel_tab = if is_fullscreen {
+        NpTab::Lyrics
+    } else if shown_tab == NpTab::Art {
         ui.ctx().data(|d| d.get_temp(last_id)).unwrap_or(NpTab::Lyrics)
     } else {
         ui.ctx().data_mut(|d| d.insert_temp(last_id, shown_tab));
@@ -181,7 +195,9 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     let p = shown;
     // Whichever is leaving slides and fades out over the first 45%, then the other
     // comes in over the last 70%, both easing out, in either direction.
-    let (panel_vis, art_vis) = if shown_tab != NpTab::Art {
+    let (panel_vis, art_vis) = if is_fullscreen {
+        (1.0, 1.0)
+    } else if shown_tab != NpTab::Art {
         (theme::ease_out((p - 0.3) / 0.7), 1.0 - theme::ease_out(p / 0.45))
     } else {
         let q = 1.0 - p;
@@ -189,7 +205,7 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     };
     // The cover gliding between its two places (wide layouts): a gentle S-curve.
     let glide = p * p * (3.0 - 2.0 * p);
-    let lyrics_only = narrow || cs.layout == Layout::LyricsOnly;
+    let lyrics_only = !is_fullscreen && (narrow || cs.layout == Layout::LyricsOnly);
     // reCover: the backdrop cover sits on the left, so the lyrics take the right side.
     let beside_cover = !narrow && cs.layout == Layout::LyricsOnly && look.background.mode == crate::preset::BgMode::CoverFullbleed;
     let centered = lyrics_only && !beside_cover;
@@ -263,33 +279,35 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
 
     // Corner toggles, both bottom-right: up next in the corner, lyrics beside it. Each
     // lights up while its panel is the one showing; clicking the lit one returns to the
-    // artwork alone.
-    let accent = app.accent_color();
-    let ink = |h: f32| theme::lerp_color(theme::text_dim(), theme::text(), h);
-    let corner = |ui: &mut Ui, center: egui::Pos2, key: &str, name: &str| -> egui::Response {
-        let r = Rect::from_center_size(center, Vec2::splat(34.0));
-        let resp = ui.interact(r, ui.scope_id().with(("np-corner", key)), Sense::click());
-        named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand)
-    };
-    let r = corner(ui, pos2(area.right() - 64.0, area.bottom() - 20.0), "lyrics", "Lyrics");
-    let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
-    let on = shown_tab == NpTab::Lyrics;
-    ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
-    glyphs::draw(ui, r.rect.center(), 18.0, if on { glyphs::LYRICS } else { glyphs::LYRICS_OFF }, if on { accent } else { ink(h) });
-    if r.clicked() {
-        if on {
-            app.np_tab = NpTab::Art;
-        } else {
-            ask_lyrics(app, ui.ctx());
+    // artwork alone. Hidden in full screen mode.
+    if !is_fullscreen {
+        let accent = app.accent_color();
+        let ink = |h: f32| theme::lerp_color(theme::text_dim(), theme::text(), h);
+        let corner = |ui: &mut Ui, center: egui::Pos2, key: &str, name: &str| -> egui::Response {
+            let r = Rect::from_center_size(center, Vec2::splat(34.0));
+            let resp = ui.interact(r, ui.scope_id().with(("np-corner", key)), Sense::click());
+            named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand)
+        };
+        let r = corner(ui, pos2(area.right() - 64.0, area.bottom() - 20.0), "lyrics", "Lyrics");
+        let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
+        let on = shown_tab == NpTab::Lyrics;
+        ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
+        glyphs::draw(ui, r.rect.center(), 18.0, if on { glyphs::LYRICS } else { glyphs::LYRICS_OFF }, if on { accent } else { ink(h) });
+        if r.clicked() {
+            if on {
+                app.np_tab = NpTab::Art;
+            } else {
+                ask_lyrics(app, ui.ctx());
+            }
         }
-    }
-    let r = corner(ui, pos2(area.right() - 20.0, area.bottom() - 20.0), "queue", "Up next");
-    let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
-    let on = app.np_tab == NpTab::UpNext;
-    ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
-    glyphs::draw(ui, r.rect.center(), 18.0, glyphs::QUEUE, if on { accent } else { ink(h) });
-    if r.clicked() {
-        app.np_tab = if on { NpTab::Art } else { NpTab::UpNext };
+        let r = corner(ui, pos2(area.right() - 20.0, area.bottom() - 20.0), "queue", "Up next");
+        let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
+        let on = app.np_tab == NpTab::UpNext;
+        ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
+        glyphs::draw(ui, r.rect.center(), 18.0, glyphs::QUEUE, if on { accent } else { ink(h) });
+        if r.clicked() {
+            app.np_tab = if on { NpTab::Art } else { NpTab::UpNext };
+        }
     }
 }
 
@@ -310,8 +328,16 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     let heard = if hold.is_some() { track.clone() } else { app.playing_track().cloned().unwrap_or_else(|| track.clone()) };
     let look = app.look();
     let cs = &look.cover;
-    let side = art_side(cs, col);
-    let art = Rect::from_center_size(pos2(col.center().x, col.top() + side / 2.0 + (col.height() - side - 190.0).max(0.0) * 0.42), Vec2::splat(side));
+    let side = if app.fullscreen {
+        (col.width() * 0.85).min(col.height() * 0.85).max(180.0)
+    } else {
+        art_side(cs, col)
+    };
+    let art = if app.fullscreen {
+        Rect::from_center_size(col.center(), Vec2::splat(side))
+    } else {
+        Rect::from_center_size(pos2(col.center().x, col.top() + side / 2.0 + (col.height() - side - 190.0).max(0.0) * 0.42), Vec2::splat(side))
+    };
     let round = cs.shape != Shape::Rounded;
     let radius = if round { side / 2.0 } else { cs.radius.clamp(0.0, side / 2.0) };
     let cr = egui::CornerRadius::same(radius.min(255.0) as u8);
@@ -352,6 +378,15 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
         if cs.brightness < 0.99 {
             ui.painter().rect_filled(art, cr, theme::shade(1.0 - cs.brightness));
         }
+    }
+    // In full screen mode, only the cover and lyrics are visible. Tapping the cover stops the music.
+    if app.fullscreen {
+        let art_resp = ui.interact(art, ui.scope_id().with("np-fullscreen-art"), Sense::click());
+        let art_resp = named(art_resp, if app.playing() { "Stop music" } else { "Play music" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if art_resp.clicked() {
+            app.toggle();
+        }
+        return;
     }
     // A handoff still shows the outgoing song; the stats are the incoming one's.
     if hold.is_none() {
