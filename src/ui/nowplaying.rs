@@ -156,16 +156,6 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
                 options_menu(app, ui, r, &heard, shown_tab == NpTab::Lyrics && !no_lyrics);
             }
         });
-    } else {
-        // In full screen, keep everything hidden; reveal exit full screen button on hover near top right
-        let hover_top_right = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.y < area.top() + 48.0 && p.x > area.right() - 56.0);
-        if hover_top_right {
-            let r = Rect::from_center_size(pos2(area.right() - 28.0, area.top() + 22.0), Vec2::splat(32.0));
-            let mut hui = ui.new_child(egui::UiBuilder::new().max_rect(r));
-            if icon_button(&mut hui, icon::SHRINK, 20.0, "Exit full screen (F / Esc)", false).clicked() {
-                app.set_fullscreen(ui.ctx(), false);
-            }
-        }
     }
 
     let content = if is_fullscreen {
@@ -277,37 +267,20 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
         }
     }
 
-    // Corner toggles, both bottom-right: up next in the corner, lyrics beside it. Each
-    // lights up while its panel is the one showing; clicking the lit one returns to the
-    // artwork alone. Hidden in full screen mode.
-    if !is_fullscreen {
-        let accent = app.accent_color();
-        let ink = |h: f32| theme::lerp_color(theme::text_dim(), theme::text(), h);
-        let corner = |ui: &mut Ui, center: egui::Pos2, key: &str, name: &str| -> egui::Response {
-            let r = Rect::from_center_size(center, Vec2::splat(34.0));
-            let resp = ui.interact(r, ui.scope_id().with(("np-corner", key)), Sense::click());
-            named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand)
-        };
-        let r = corner(ui, pos2(area.right() - 64.0, area.bottom() - 20.0), "lyrics", "Lyrics");
-        let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
-        let on = shown_tab == NpTab::Lyrics;
-        ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
-        glyphs::draw(ui, r.rect.center(), 18.0, if on { glyphs::LYRICS } else { glyphs::LYRICS_OFF }, if on { accent } else { ink(h) });
-        if r.clicked() {
-            if on {
-                app.np_tab = NpTab::Art;
-            } else {
-                ask_lyrics(app, ui.ctx());
-            }
+    // In full screen mode, floating controls at top right: exit full screen button and options menu
+    if is_fullscreen {
+        let r_exit = Rect::from_center_size(pos2(area.right() - 36.0, area.top() + 36.0), Vec2::splat(44.0));
+        let resp = ui.interact(r_exit, ui.scope_id().with("np-fs-exit-topright"), Sense::click());
+        let resp = named(resp, "Exit full screen (F / Esc)").on_hover_cursor(egui::CursorIcon::PointingHand);
+        let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.15);
+        ui.painter().circle_filled(r_exit.center(), 22.0, theme::glass(0.22 + 0.15 * h));
+        super::widgets::icon_at(ui, r_exit.center(), icon::SHRINK, 22.0, theme::lerp_color(theme::text_dim(), Color32::WHITE, h));
+        if resp.clicked() {
+            app.set_fullscreen(ui.ctx(), false);
         }
-        let r = corner(ui, pos2(area.right() - 20.0, area.bottom() - 20.0), "queue", "Up next");
-        let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
-        let on = app.np_tab == NpTab::UpNext;
-        ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
-        glyphs::draw(ui, r.rect.center(), 18.0, glyphs::QUEUE, if on { accent } else { ink(h) });
-        if r.clicked() {
-            app.np_tab = if on { NpTab::Art } else { NpTab::UpNext };
-        }
+
+        let r_opt = Rect::from_center_size(pos2(area.right() - 86.0, area.top() + 36.0), Vec2::splat(38.0));
+        options_menu(app, ui, r_opt, &heard, shown_tab == NpTab::Lyrics && !no_lyrics);
     }
 }
 
@@ -329,12 +302,14 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     let look = app.look();
     let cs = &look.cover;
     let side = if app.fullscreen {
-        (col.width() * 0.85).min(col.height() * 0.85).max(180.0)
+        let max_h = if app.fullscreen_show_info { col.height() * 0.72 } else { col.height() * 0.85 };
+        (col.width() * 0.85).min(max_h).max(180.0)
     } else {
         art_side(cs, col)
     };
     let art = if app.fullscreen {
-        Rect::from_center_size(col.center(), Vec2::splat(side))
+        let center_y = if app.fullscreen_show_info { col.center().y - 28.0 } else { col.center().y };
+        Rect::from_center_size(pos2(col.center().x, center_y), Vec2::splat(side))
     } else {
         Rect::from_center_size(pos2(col.center().x, col.top() + side / 2.0 + (col.height() - side - 190.0).max(0.0) * 0.42), Vec2::splat(side))
     };
@@ -379,12 +354,19 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
             ui.painter().rect_filled(art, cr, theme::shade(1.0 - cs.brightness));
         }
     }
-    // In full screen mode, only the cover and lyrics are visible. Tapping the cover stops the music.
+    // In full screen mode, only the cover and lyrics are visible (plus song & artist if enabled). Tapping the cover stops the music.
     if app.fullscreen {
         let art_resp = ui.interact(art, ui.scope_id().with("np-fullscreen-art"), Sense::click());
         let art_resp = named(art_resp, if app.playing() { "Stop music" } else { "Play music" }).on_hover_cursor(egui::CursorIcon::PointingHand);
         if art_resp.clicked() {
             app.toggle();
+        }
+        if app.fullscreen_show_info {
+            let info_y = art.bottom() + 20.0;
+            let text_w = side;
+            text_at(ui, pos2(art.left(), info_y), &track.title, theme::semibold(18.0), Color32::WHITE, text_w);
+            let line = track.artist_line();
+            widgets::linked_text(ui, pos2(art.left(), info_y + 24.0), &line, &track.artists, theme::regular(15.0), theme::text_dim(), text_w, &mut app.actions);
         }
         return;
     }
@@ -539,15 +521,15 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
         }
     }
 
-    // Transport: the reference's row — shuffle, previous, play, next, repeat — 52 tall,
-    // no wider than 315, its buttons 36/48/56/48/36 with icons of 30/40/48/40/30.
+    // Transport: lyrics · shuffle | previous · play · next | repeat · queue.
     let ty = info_y + 99.0 + 26.0;
-    let row_w = w.min(315.0);
-    let sizes = [36.0f32, 48.0, 56.0, 48.0, 36.0];
-    let icons = [30.0f32, 40.0, 48.0, 40.0, 30.0];
-    let gap = ((row_w - sizes.iter().sum::<f32>()) / 4.0).max(4.0);
-    let mut xs = [0.0f32; 5];
-    let mut cx = art.center().x - row_w / 2.0;
+    let row_w = w.min(380.0);
+    let sizes = [34.0f32, 36.0, 48.0, 56.0, 48.0, 36.0, 34.0];
+    let icons = [24.0f32, 28.0, 40.0, 48.0, 40.0, 28.0, 24.0];
+    let gap = ((row_w - sizes.iter().sum::<f32>()) / 6.0).max(4.0);
+    let mut xs = [0.0f32; 7];
+    let total_w = sizes.iter().sum::<f32>() + gap * 6.0;
+    let mut cx = art.center().x - total_w / 2.0;
     for (i, s) in sizes.iter().enumerate() {
         xs[i] = cx + s / 2.0;
         cx += s + gap;
@@ -569,19 +551,34 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
         }
         (resp, h, p)
     };
-    let (r, h, p) = btn(ui, 0, "shuffle", "Shuffle up next", true);
-    super::glyphs::draw(ui, r.rect.center(), icons[0] * (1.0 - 0.1 * p), super::glyphs::SHUFFLE, ink(h, 0.55, 1.0));
+
+    let lyrics_on = app.np_tab == NpTab::Lyrics;
+    let (r, h, p) = btn(ui, 0, "lyrics", "Lyrics", true);
+    let glyph = if lyrics_on { super::glyphs::LYRICS } else { super::glyphs::LYRICS_OFF };
+    super::glyphs::draw(ui, r.rect.center(), icons[0] * (1.0 - 0.1 * p), glyph, if lyrics_on { app.accent_color() } else { ink(h, 0.55, 1.0) });
+    if r.clicked() {
+        if lyrics_on {
+            app.np_tab = NpTab::Art;
+        } else {
+            ask_lyrics(app, ui.ctx());
+        }
+    }
+
+    let (r, h, p) = btn(ui, 1, "shuffle", "Shuffle up next", true);
+    super::glyphs::draw(ui, r.rect.center(), icons[1] * (1.0 - 0.1 * p), super::glyphs::SHUFFLE, ink(h, 0.55, 1.0));
     if r.clicked() {
         app.shuffle_upcoming();
     }
-    let (r, h, p) = btn(ui, 1, "prev", "Previous", enabled);
-    super::glyphs::draw(ui, r.rect.center(), icons[1] * (1.0 - 0.1 * p), super::glyphs::PREVIOUS, ink(h, 1.0, dim));
+
+    let (r, h, p) = btn(ui, 2, "prev", "Previous", enabled);
+    super::glyphs::draw(ui, r.rect.center(), icons[2] * (1.0 - 0.1 * p), super::glyphs::PREVIOUS, ink(h, 1.0, dim));
     if r.clicked() && enabled {
         app.prev();
     }
-    let (r, h, p) = btn(ui, 2, "play", if app.playing() || app.buffering { "Pause" } else { "Play" }, enabled);
+
+    let (r, h, p) = btn(ui, 3, "play", if app.playing() || app.buffering { "Pause" } else { "Play" }, enabled);
     let c = r.rect.center();
-    let size = icons[2] * (1.0 - 0.1 * p);
+    let size = icons[3] * (1.0 - 0.1 * p);
     let mark = ink(h, 1.0, dim);
     let morph = theme::anim_bool(ui.ctx(), "np-play-morph", app.playing() || app.buffering, 0.18);
     if app.buffering {
@@ -602,24 +599,33 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     if r.clicked() && enabled {
         app.toggle();
     }
-    let (r, h, p) = btn(ui, 3, "next", "Next", enabled);
-    super::glyphs::draw(ui, r.rect.center(), icons[3] * (1.0 - 0.1 * p), super::glyphs::NEXT, ink(h, 1.0, dim));
+
+    let (r, h, p) = btn(ui, 4, "next", "Next", enabled);
+    super::glyphs::draw(ui, r.rect.center(), icons[4] * (1.0 - 0.1 * p), super::glyphs::NEXT, ink(h, 1.0, dim));
     if r.clicked() && enabled {
         app.next();
     }
+
     let (glyph, on) = match app.queue.repeat {
         Repeat::Off => (super::glyphs::REPEAT, false),
         Repeat::All => (super::glyphs::REPEAT, true),
         Repeat::One => (super::glyphs::REPEAT_ONE, true),
     };
-    let (r, h, p) = btn(ui, 4, "repeat", "Repeat", true);
-    super::glyphs::draw(ui, r.rect.center(), icons[4] * (1.0 - 0.1 * p), glyph, if on { app.accent_color() } else { ink(h, 0.55, 1.0) });
+    let (r, h, p) = btn(ui, 5, "repeat", "Repeat", true);
+    super::glyphs::draw(ui, r.rect.center(), icons[5] * (1.0 - 0.1 * p), glyph, if on { app.accent_color() } else { ink(h, 0.55, 1.0) });
     if r.clicked() {
         app.queue.repeat = match app.queue.repeat {
             Repeat::Off => Repeat::All,
             Repeat::All => Repeat::One,
             Repeat::One => Repeat::Off,
         };
+    }
+
+    let queue_on = app.np_tab == NpTab::UpNext;
+    let (r, h, p) = btn(ui, 6, "queue", "Up next", true);
+    super::glyphs::draw(ui, r.rect.center(), icons[6] * (1.0 - 0.1 * p), super::glyphs::QUEUE, if queue_on { app.accent_color() } else { ink(h, 0.55, 1.0) });
+    if r.clicked() {
+        app.np_tab = if queue_on { NpTab::Art } else { NpTab::UpNext };
     }
 }
 
@@ -831,7 +837,11 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
     for dx in [-6.0, 0.0, 6.0] {
         ui.painter().circle_filled(rect.center() + vec2(dx, 0.0), 1.9, theme::with_alpha(Color32::WHITE, 0.75 + 0.25 * h));
     }
-    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    let mut menu_resp = resp.clone();
+    if rect.top() > 100.0 {
+        menu_resp.rect = menu_resp.rect.translate(vec2(0.0, -70.0));
+    }
+    egui::Popup::menu(&menu_resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_width(270.0);
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         ui.add_space(4.0);
@@ -856,6 +866,7 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
         if widgets::menu_action(ui, Some(fs_icon), fs_text) {
             app.set_fullscreen(ui.ctx(), !app.fullscreen);
         }
+        switch_row(ui, "Show song & artist in full screen", &mut app.fullscreen_show_info);
         // Quality toggle at the bottom: revert when hi-res is playing, upgrade when not.
         let hires_playing = app.audio_info.as_ref().is_some_and(|(_, i)| i.lossless() || i.atmos);
         if hires_playing || !app.hires_sources.is_empty() {

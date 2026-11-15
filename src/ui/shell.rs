@@ -239,8 +239,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     let p = app.page.clone();
     const APPLE: f32 = glyphs::APPLE_GLYPH;
     const LUCIDE: f32 = glyphs::LUCIDE_GLYPH;
-    nav(ui, glyphs::SEARCH, APPLE, "Search", Page::Search(String::new()), matches!(p, Page::Search(_)), &mut go_to);
     nav(ui, glyphs::HOME, APPLE, "Home", Page::Home, p == Page::Home, &mut go_to);
+    nav(ui, glyphs::SEARCH, APPLE, "Search", Page::Search(String::new()), matches!(p, Page::Search(_)), &mut go_to);
     nav(ui, glyphs::EXPLORE, APPLE, "New", Page::New, p == Page::New, &mut go_to);
     nav(ui, glyphs::LIBRARY, APPLE, "Library", Page::Library(LibTab::Playlists), matches!(p, Page::Library(_)), &mut go_to);
     nav(ui, glyphs::DOWNLOAD, APPLE, "Downloads", Page::Downloads, p == Page::Downloads, &mut go_to);
@@ -726,8 +726,8 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
     let cy = cap.center().y;
     let narrow = cap.width() < 550.0;
     let pad = 16.0;
-    let run_w = if narrow { 112.0 } else { 236.0 };
-    let right_w = 68.0;
+    let run_w = if narrow { 112.0 } else { 184.0 };
+    let right_w = 132.0;
     let run_l = cap.left() + pad;
     let right_l = cap.right() - pad - right_w;
     let lcd_l = run_l + run_w + 8.0;
@@ -740,7 +740,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
         if enabled { c } else { c.gamma_multiply(0.45) }
     };
 
-    // Transport: lyrics · shuffle | previous · play · next | repeat · queue. The glyphs alone carry the
+    // Transport: shuffle | previous · play · next | repeat. The glyphs alone carry the
     // state; no button fills.
     let tbtn = |ui: &mut Ui, x: f32, key: &str, name: &str| -> egui::Response {
         let r = Rect::from_center_size(pos2(x, cy), Vec2::splat(28.0));
@@ -749,26 +749,14 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
     };
     let mid = run_l + (run_w - 8.0) / 2.0;
     if !narrow {
-        let lyrics_on = super::nowplaying::lyrics_shown(app, &ctx);
-        let r = tbtn(ui, mid - 96.0, "lyrics", "Lyrics");
+        let r = tbtn(ui, run_l + 14.0, "shuffle", "Shuffle up next");
         let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.12);
-        glyphs::draw(ui, r.rect.center(), 26.0, if lyrics_on { glyphs::LYRICS } else { glyphs::LYRICS_OFF }, if lyrics_on { accent } else { ink(h) });
-        if r.clicked() {
-            if lyrics_on {
-                app.np_open = false;
-            } else {
-                super::nowplaying::ask_lyrics(app, &ctx);
-            }
-        }
-
-        let r = tbtn(ui, mid - 64.0, "shuffle", "Shuffle up next");
-        let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.12);
-        glyphs::draw(ui, r.rect.center(), 26.0, glyphs::SHUFFLE, ink(h));
+        glyphs::draw(ui, r.rect.center(), 28.0, glyphs::SHUFFLE, ink(h));
         if r.clicked() {
             app.shuffle_upcoming();
         }
     }
-    let r = tbtn(ui, mid - 32.0, "prev", "Previous");
+    let r = tbtn(ui, mid - 33.0, "prev", "Previous");
     let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.12);
     glyphs::draw(ui, r.rect.center(), 26.0, glyphs::PREVIOUS, ink(h));
     if r.clicked() && enabled {
@@ -797,7 +785,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
     if r.clicked() && enabled {
         app.toggle();
     }
-    let r = tbtn(ui, mid + 32.0, "next", "Next");
+    let r = tbtn(ui, mid + 33.0, "next", "Next");
     let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.12);
     glyphs::draw(ui, r.rect.center(), 26.0, glyphs::NEXT, ink(h));
     if r.clicked() && enabled {
@@ -809,27 +797,15 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
             Repeat::All => (glyphs::REPEAT, true),
             Repeat::One => (glyphs::REPEAT_ONE, true),
         };
-        let r = tbtn(ui, mid + 64.0, "repeat", "Repeat");
+        let r = tbtn(ui, run_l + run_w - 8.0 - 14.0, "repeat", "Repeat");
         let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.12);
-        glyphs::draw(ui, r.rect.center(), 26.0, glyph, if on { accent } else { ink(h) });
+        glyphs::draw(ui, r.rect.center(), 28.0, glyph, if on { accent } else { ink(h) });
         if r.clicked() {
             app.queue.repeat = match app.queue.repeat {
                 Repeat::Off => Repeat::All,
                 Repeat::All => Repeat::One,
                 Repeat::One => Repeat::Off,
             };
-        }
-
-        let queue_open = if app.np_open { app.np_tab == NpTab::UpNext } else { app.queue_open };
-        let r = tbtn(ui, mid + 96.0, "queue", "Up next");
-        let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.12);
-        glyphs::draw(ui, r.rect.center(), 26.0, glyphs::QUEUE, if queue_open { accent } else { ink(h) });
-        if r.clicked() {
-            if app.np_open {
-                app.np_tab = if queue_open { NpTab::Art } else { NpTab::UpNext };
-            } else {
-                app.queue_open = !app.queue_open;
-            }
         }
     }
 
@@ -951,11 +927,12 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
         ui.painter().galley(pos2(text_r - g.size().x, cy + 2.0), g, col);
     }
 
-    // Right: favourite, volume. Hovering the volume slides a slider over favourite.
+    // Right: favourite, lyrics, up next, volume. Hovering the volume slides a slider
+    // over the other three, as in the reference.
     let vol = app.audio.volume();
-    let rslot = |i: usize| right_l + 16.0 + i as f32 * 34.0;
-    let vol_r = Rect::from_center_size(pos2(rslot(1), cy), Vec2::splat(28.0));
-    let slider = Rect::from_min_size(pos2(cap.right() - pad - 28.0 - 64.0, cy - 10.0), vec2(64.0, 20.0));
+    let rslot = |i: usize| right_l + 21.0 + i as f32 * 33.0;
+    let vol_r = Rect::from_center_size(pos2(rslot(3), cy), Vec2::splat(28.0));
+    let slider = Rect::from_min_size(pos2(cap.right() - pad - 33.0 - 96.0, cy - 10.0), vec2(96.0, 20.0));
     let open_id = ui.scope_id().with("bar-vol");
     let was = ui.data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
     // Pointer position, not `rect_contains_pointer`: the window's own title-bar layers
@@ -990,10 +967,32 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
         {
             app.actions.push(Action::Like(t, !liked));
         }
+        let lyrics_on = super::nowplaying::lyrics_shown(app, &ctx);
+        let r = rbtn(ui, 1, "lyrics", "Lyrics");
+        let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.15);
+        glyphs::draw(ui, r.rect.center(), 18.0, if lyrics_on { glyphs::LYRICS } else { glyphs::LYRICS_OFF }, if lyrics_on { accent } else { ink(h) });
+        if r.clicked() {
+            if lyrics_on {
+                app.np_open = false;
+            } else {
+                super::nowplaying::ask_lyrics(app, &ctx);
+            }
+        }
+        let queue_open = if app.np_open { app.np_tab == NpTab::UpNext } else { app.queue_open };
+        let r = rbtn(ui, 2, "queue", "Up next");
+        let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.15);
+        glyphs::draw(ui, r.rect.center(), 18.0, glyphs::QUEUE, if queue_open { accent } else { ink(h) });
+        if r.clicked() {
+            if app.np_open {
+                app.np_tab = if queue_open { NpTab::Art } else { NpTab::UpNext };
+            } else {
+                app.queue_open = !app.queue_open;
+            }
+        }
     } else {
         volume_slider(app, ui, slider, "bar");
     }
-    let r = rbtn(ui, 1, "vol", "Mute");
+    let r = rbtn(ui, 3, "vol", "Mute");
     let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered(), 0.15);
     // Three arcs, not two: the desktop app lights them a third at a time.
     let step = glyphs::volume_step(vol);

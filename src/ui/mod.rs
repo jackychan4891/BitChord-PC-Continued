@@ -475,6 +475,7 @@ pub struct App {
     np_tab: NpTab,
     queue_open: bool,
     fullscreen: bool,
+    pub fullscreen_show_info: bool,
     /// The mini player: the window shrunk to a strip.
     mini: mini::Mini,
     /// Every source's lyrics for the current song (by video ID).
@@ -805,6 +806,7 @@ impl App {
             np_tab: if get("np_art").is_some_and(|v| v == "1") { NpTab::Art } else { NpTab::Lyrics },
             queue_open: false,
             fullscreen: false,
+            fullscreen_show_info: false,
             mini: mini::Mini::load(get),
             lyrics: None,
             lyrics_extras: None,
