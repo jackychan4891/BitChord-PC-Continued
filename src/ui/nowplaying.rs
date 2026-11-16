@@ -267,20 +267,21 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
         }
     }
 
-    // In full screen mode, floating controls at top right: exit full screen button and options menu
+    // In full screen mode: exit full screen button (hidden until hovered near top right, matching enter full screen size)
     if is_fullscreen {
-        let r_exit = Rect::from_center_size(pos2(area.right() - 36.0, area.top() + 36.0), Vec2::splat(44.0));
-        let resp = ui.interact(r_exit, ui.scope_id().with("np-fs-exit-topright"), Sense::click());
-        let resp = named(resp, "Exit full screen (F / Esc)").on_hover_cursor(egui::CursorIcon::PointingHand);
-        let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.15);
-        ui.painter().circle_filled(r_exit.center(), 22.0, theme::glass(0.22 + 0.15 * h));
-        super::widgets::icon_at(ui, r_exit.center(), icon::SHRINK, 22.0, theme::lerp_color(theme::text_dim(), Color32::WHITE, h));
-        if resp.clicked() {
-            app.set_fullscreen(ui.ctx(), false);
+        let near = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.x > area.right() - 72.0 && p.y < area.top() + 60.0);
+        let vis = theme::anim_bool(ui.ctx(), "np-fs-exit-vis", near, 0.18);
+        if vis > 0.01 {
+            let r_exit = Rect::from_center_size(pos2(area.right() - 28.0, area.top() + 24.0), Vec2::splat(36.0));
+            let resp = ui.interact(r_exit, ui.scope_id().with("np-fs-exit-topright"), Sense::click());
+            let resp = named(resp, "Exit full screen (F / Esc)").on_hover_cursor(egui::CursorIcon::PointingHand);
+            let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.12);
+            ui.painter().circle_filled(r_exit.center(), 18.0, theme::with_alpha(theme::glass(0.18 + 0.12 * h), vis));
+            super::widgets::icon_at(ui, r_exit.center(), icon::SHRINK, 20.0, theme::with_alpha(theme::lerp_color(theme::text_dim(), Color32::WHITE, h), vis));
+            if resp.clicked() {
+                app.set_fullscreen(ui.ctx(), false);
+            }
         }
-
-        let r_opt = Rect::from_center_size(pos2(area.right() - 86.0, area.top() + 36.0), Vec2::splat(38.0));
-        options_menu(app, ui, r_opt, &heard, shown_tab == NpTab::Lyrics && !no_lyrics);
     }
 }
 
@@ -524,8 +525,8 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     // Transport: lyrics · shuffle | previous · play · next | repeat · queue.
     let ty = info_y + 99.0 + 26.0;
     let row_w = w.min(380.0);
-    let sizes = [34.0f32, 36.0, 48.0, 56.0, 48.0, 36.0, 34.0];
-    let icons = [24.0f32, 28.0, 40.0, 48.0, 40.0, 28.0, 24.0];
+    let sizes = [36.0f32, 36.0, 48.0, 56.0, 48.0, 36.0, 36.0];
+    let icons = [18.0f32, 28.0, 40.0, 48.0, 40.0, 28.0, 22.0];
     let gap = ((row_w - sizes.iter().sum::<f32>()) / 6.0).max(4.0);
     let mut xs = [0.0f32; 7];
     let total_w = sizes.iter().sum::<f32>() + gap * 6.0;
@@ -842,7 +843,7 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
         menu_resp.rect = menu_resp.rect.translate(vec2(0.0, -70.0));
     }
     egui::Popup::menu(&menu_resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_width(270.0);
+        ui.set_width(310.0);
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         ui.add_space(4.0);
         // Lyrics first: the source, translation and timing are what the menu is for
@@ -1270,7 +1271,7 @@ fn switch_row(ui: &mut Ui, label: &str, on: &mut bool) {
     }
     ui.painter().text(pos2(rect.left() + 12.0, rect.center().y), egui::Align2::LEFT_CENTER, label, theme::regular(14.0), theme::text());
     let t = theme::anim_bool(ui.ctx(), resp.id.with("t"), *on, 0.16);
-    let track = Rect::from_center_size(pos2(rect.right() - 30.0, rect.center().y), vec2(36.0, 20.0));
+    let track = Rect::from_center_size(pos2(rect.right() - 26.0, rect.center().y), vec2(36.0, 20.0));
     let accent = ui.ctx().data(|d| d.get_temp::<Color32>(egui::Id::unique("accent"))).unwrap_or(theme::RED);
     ui.painter().rect_filled(track, 10.0, theme::lerp_color(theme::glass(0.16 + 0.06 * h), accent, t));
     let knob = pos2(egui::lerp(track.left() + 10.0..=track.right() - 10.0, t), track.center().y);

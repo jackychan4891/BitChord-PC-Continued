@@ -1016,8 +1016,10 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
                 if tab == t {
                     app.refresh();
                 } else {
+                    let changed = app.page_changed;
                     app.page = Page::Library(t);
                     app.page_loaded();
+                    app.page_changed = changed;
                 }
             }
         }

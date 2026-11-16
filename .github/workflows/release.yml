@@ -1,12 +1,6 @@
 name: Release
 
-# Builds an installer and a portable download for every platform from the tagged source:
-# Windows (setup exe and portable zip, x64 and ARM64), Linux (install.sh tarball and
-# portable tarball) and macOS (disk image and portable zip, Apple silicon and Intel), then attaches them all to the GitHub release for that tag.
-# Releases are written as drafts (with notes) and published here only once every
-# file is attached, so the app's updater, which reads the latest published release,
-# never sees one without them. If no release exists yet, one is created as a draft
-# to be given notes and published by hand.
+# Builds a Windows installer from the source and attaches it to GitHub release.
 on:
   push:
     branches: ["custom-features"]
@@ -23,8 +17,6 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
 
@@ -43,29 +35,20 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
-      # Cross-compiled on the x64 runner, whose Visual Studio has the ARM64 tools.
-      - name: Build ARM64
-        run: cargo build --release --locked --target aarch64-pc-windows-msvc
-
       # webview2-com-sys extracts WebView2Loader.dll into its build OUT_DIR rather than
-      # next to the exe; the installer expects it in BinDir, so copy it there per arch.
-      # The build tree is searched by shape, not by package hash, and the crate's own
-      # vendored copy is the fallback, so neither a layout change nor a pruned cache
-      # can strand the installer step looking for a file that was never placed.
+      # next to the exe; the installer expects it in BinDir, so copy it there.
       - name: Stage WebView2Loader.dll
         run: |
-          foreach ($t in @(@{ bin = "target\release"; arch = "x64" }, @{ bin = "target\aarch64-pc-windows-msvc\release"; arch = "arm64" })) {
-            $dll = Get-ChildItem -Path "$($t.bin)\build\*\out\$($t.arch)\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $dll) { $dll = Get-ChildItem -Path "$HOME\.cargo\registry\src\*\webview2-com-sys-*\$($t.arch)\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1 }
-            if (-not $dll) {
-              Get-ChildItem -Path "$($t.bin)\build" -Filter "webview2*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                Get-ChildItem -Path $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { Write-Host "saw: $($_.FullName)" }
-              }
-              Write-Error "WebView2Loader.dll ($($t.arch)) not found under $($t.bin)\build"; exit 1
+          $dll = Get-ChildItem -Path "target\release\build\*\out\x64\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem -Path "$HOME\.cargo\registry\src\*\webview2-com-sys-*\x64\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if (-not $dll) {
+            Get-ChildItem -Path "target\release\build" -Filter "webview2*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+              Get-ChildItem -Path $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { Write-Host "saw: $($_.FullName)" }
             }
-            Copy-Item $dll.FullName "$($t.bin)\WebView2Loader.dll" -Force
-            Write-Host "staged $($dll.FullName) -> $($t.bin)\WebView2Loader.dll"
+            Write-Error "WebView2Loader.dll (x64) not found under target\release\build"; exit 1
           }
+          Copy-Item $dll.FullName "target\release\WebView2Loader.dll" -Force
+          Write-Host "staged $($dll.FullName) -> target\release\WebView2Loader.dll"
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -74,28 +57,11 @@ jobs:
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q installer\bitchord.iss
           if ($LASTEXITCODE) { exit 1 }
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DArm64 installer\bitchord.iss
-          if ($LASTEXITCODE) { exit 1 }
-
-      # The portable zips: the exe, the marker that makes it portable, README and LICENSE.
-      - name: Build portable zips
-        run: |
-          foreach ($b in @(@{ dir = "target\release"; suffix = "" }, @{ dir = "target\aarch64-pc-windows-msvc\release"; suffix = "-arm64" })) {
-            $out = "installer\Output\portable$($b.suffix)"
-            New-Item -ItemType Directory -Force $out | Out-Null
-            Copy-Item "$($b.dir)\bitchord.exe", installer\portable.txt, README.md, LICENSE $out
-            & "$env:SystemRoot\System32\tar.exe" -a -c -f "installer\Output\bitchord-portable-$env:VERSION$($b.suffix).zip" -C $out bitchord.exe portable.txt README.md LICENSE
-            if ($LASTEXITCODE) { exit 1 }
-          }
 
       - uses: actions/upload-artifact@v5
         with:
           name: windows
-          path: |
-            installer/Output/bitchord-setup-${{ env.VERSION }}.exe
-            installer/Output/bitchord-portable-${{ env.VERSION }}.zip
-            installer/Output/bitchord-setup-${{ env.VERSION }}-arm64.exe
-            installer/Output/bitchord-portable-${{ env.VERSION }}-arm64.zip
+          path: installer/Output/bitchord-setup-${{ env.VERSION }}.exe
           if-no-files-found: error
 
   attach:

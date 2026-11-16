@@ -770,6 +770,20 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     let cx = (x0 + x1) / 2.0;
     let enabled = track.is_some();
     let vol = app.audio.volume();
+    let last_vol_id = egui::Id::new("mini-last-vol-val");
+    let pop_until_id = egui::Id::new("vol-pop-until");
+    let last_vol = ctx.data(|d| d.get_temp::<f32>(last_vol_id));
+    if let Some(lv) = last_vol {
+        if (lv - vol).abs() > 0.005 {
+            ctx.data_mut(|d| d.insert_temp(pop_until_id, ui.input(|i| i.time) + 1.8));
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(last_vol_id, vol));
+    let vol_until = ctx.data(|d| d.get_temp::<f64>(pop_until_id)).unwrap_or(0.0);
+    let vol_popped = ui.input(|i| i.time) < vol_until;
+    if vol_popped {
+        ctx.request_repaint();
+    }
     let vpos = pos2(cx + 88.0, cy);
     let vhit = Rect::from_center_size(vpos, Vec2::splat(32.0));
     let slider = Rect::from_min_max(pos2(cx - 88.0, cy - 10.0), pos2(cx + 58.0, cy + 10.0));
@@ -779,7 +793,7 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     // (window chrome, the drag regions) would otherwise hide the pointer from it.
     let hover = |r: Rect| ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
     let vol_band = Rect::from_min_max(pos2(slider.left() - 4.0, cy - 14.0), pos2(vhit.right(), cy + 14.0));
-    let open = hover(vhit) || ui.rect_contains_pointer(vhit) || (was_open && (hover(vol_band) || ui.input(|i| i.pointer.any_down())));
+    let open = hover(vhit) || ui.rect_contains_pointer(vhit) || (was_open && (hover(vol_band) || ui.input(|i| i.pointer.any_down()))) || vol_popped;
     ui.data_mut(|d| d.insert_temp(open_id, open));
     if open != was_open {
         ctx.request_repaint();
@@ -853,7 +867,12 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     } else {
         let track_r = Rect::from_center_size(slider.center(), vec2(slider.width(), 4.0));
         ui.painter().rect_filled(track_r, 2.0, theme::glass(0.16));
-        let fill = Rect::from_min_size(track_r.min, vec2(track_r.width() * vol, 4.0));
+        let anim_id = ui.scope_id().with("mini-anim-vol");
+        let anim_vol = ui.ctx().animate_value_with_time(anim_id, vol, 0.15);
+        if (anim_vol - vol).abs() > 0.002 {
+            ui.ctx().request_repaint();
+        }
+        let fill = Rect::from_min_size(track_r.min, vec2(track_r.width() * anim_vol, 4.0));
         ui.painter().rect_filled(fill, 2.0, theme::text());
         ui.painter().circle_filled(pos2(fill.right(), track_r.center().y), 6.0, theme::text());
         let sresp = ui.interact(slider.expand2(vec2(0.0, 8.0)), ui.scope_id().with("mini-vol-slider"), Sense::click_and_drag());

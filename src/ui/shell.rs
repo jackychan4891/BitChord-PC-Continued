@@ -930,6 +930,20 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
     // Right: favourite, lyrics, up next, volume. Hovering the volume slides a slider
     // over the other three, as in the reference.
     let vol = app.audio.volume();
+    let last_vol_id = egui::Id::new("last-vol-val");
+    let pop_until_id = egui::Id::new("vol-pop-until");
+    let last_vol = ctx.data(|d| d.get_temp::<f32>(last_vol_id));
+    if let Some(lv) = last_vol {
+        if (lv - vol).abs() > 0.005 {
+            ctx.data_mut(|d| d.insert_temp(pop_until_id, ui.input(|i| i.time) + 1.8));
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(last_vol_id, vol));
+    let vol_until = ctx.data(|d| d.get_temp::<f64>(pop_until_id)).unwrap_or(0.0);
+    let vol_popped = ui.input(|i| i.time) < vol_until;
+    if vol_popped {
+        ctx.request_repaint();
+    }
     let rslot = |i: usize| right_l + 21.0 + i as f32 * 33.0;
     let vol_r = Rect::from_center_size(pos2(rslot(3), cy), Vec2::splat(28.0));
     let slider = Rect::from_min_size(pos2(cap.right() - pad - 33.0 - 96.0, cy - 10.0), vec2(96.0, 20.0));
@@ -939,7 +953,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
     // sit above this bar, so egui would report the pointer as being over them.
     let hover = |r: Rect| ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
     let band = Rect::from_min_max(pos2(slider.left() - 3.0, cy - 14.0), pos2(vol_r.right(), cy + 14.0));
-    let open = hover(vol_r) || (was && (hover(band) || ui.input(|i| i.pointer.any_down())));
+    let open = hover(vol_r) || (was && (hover(band) || ui.input(|i| i.pointer.any_down()))) || vol_popped;
     ui.data_mut(|d| d.insert_temp(open_id, open));
     let reveal = theme::anim_bool(&ctx, "bar-vol-reveal", open, 0.15);
     let rbtn = |ui: &mut Ui, i: usize, key: &str, name: &str| -> egui::Response {
@@ -1072,7 +1086,16 @@ fn volume_slider(app: &mut App, ui: &mut Ui, slider: Rect, salt: &str) {
     let vh = theme::anim_bool(ui.ctx(), ui.scope_id().with((salt, "h")), vresp.hovered() || vresp.dragged(), 0.15);
     let track_r = Rect::from_center_size(slider.center(), vec2(slider.width(), 4.0));
     ui.painter().rect_filled(track_r, 2.0, theme::glass(0.15));
-    let fill = Rect::from_min_size(track_r.min, vec2(track_r.width() * vol, 4.0));
+    let anim_id = ui.scope_id().with((salt, "anim-vol"));
+    let anim_vol = if vresp.dragged() {
+        vol
+    } else {
+        ui.ctx().animate_value_with_time(anim_id, vol, 0.15)
+    };
+    if (anim_vol - vol).abs() > 0.002 {
+        ui.ctx().request_repaint();
+    }
+    let fill = Rect::from_min_size(track_r.min, vec2(track_r.width() * anim_vol, 4.0));
     ui.painter().rect_filled(fill, 2.0, theme::lerp_color(theme::text_dim(), theme::text(), vh));
     ui.painter().circle_filled(pos2(fill.right(), track_r.center().y), 2.0 + 4.5 * vh, theme::text());
     if let Some(p) = vresp.interact_pointer_pos()
