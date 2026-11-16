@@ -8,17 +8,96 @@ use crate::backend;
 use super::{App, dev_var, notes, updatable};
 
 impl App {
+    pub fn discord_config(&self) -> crate::discord::Config {
+        crate::discord::Config {
+            use_details: self.discord_use_details,
+            show_audio_quality: self.discord_show_audio_quality,
+            activity_type: self.discord_activity_type,
+            activity_name: self.discord_activity_name.clone(),
+            button1_visible: self.discord_button1_visible,
+            button1_text: self.discord_button1_text.clone(),
+            button2_visible: self.discord_button2_visible,
+            button2_text: self.discord_button2_text.clone(),
+        }
+    }
+
     pub(super) fn set_discord_enabled(&mut self, enabled: bool) {
         self.discord_enabled = enabled;
         if enabled {
             if self.discord.is_none() {
                 self.discord = crate::discord::Discord::spawn();
             }
+            self.discord_sent = None;
+            self.discord_sent_config = None;
         } else {
             if let Some(discord) = self.discord.take() {
-                discord.set(None);
+                discord.clear();
             }
             self.discord_sent = None;
+            self.discord_sent_config = None;
+        }
+    }
+
+    pub fn current_audio_quality(&self) -> Option<String> {
+        let stats = self.stream_stats.as_ref().map(|(_, s)| s);
+        let hires = self.audio_info.as_ref().map(|(_, i)| i);
+        let mut parts = Vec::new();
+        if let Some(h) = hires {
+            if h.atmos {
+                parts.push("◗◖ Dolby Atmos".to_string());
+            } else if h.lossless() {
+                let is_hires = stats.map_or(false, |s| s.sample_rate > 48_000 || s.bit_depth.unwrap_or(0) > 16)
+                    || h.sample_rate.unwrap_or(0) > 48_000
+                    || h.bit_depth.unwrap_or(0) > 16;
+                if is_hires {
+                    parts.push("Hi-Res Lossless".to_string());
+                } else {
+                    parts.push("Lossless".to_string());
+                }
+            }
+        }
+        if let Some(s) = stats {
+            parts.push(s.codec.clone());
+            if let Some(bits) = s.bit_depth {
+                parts.push(format!("{bits}-bit"));
+            }
+            let khz = s.sample_rate as f32 / 1000.0;
+            if (khz.fract()).abs() < f32::EPSILON {
+                parts.push(format!("{:.0} kHz", khz));
+            } else {
+                parts.push(format!("{:.1} kHz", khz));
+            }
+            if let Some(kbps) = s.bitrate_kbps {
+                parts.push(format!("{} kbps", kbps));
+            }
+            match s.channels {
+                1 => parts.push("Mono".to_string()),
+                2 => parts.push("Stereo".to_string()),
+                n => parts.push(format!("{n} ch")),
+            }
+        } else if let Some(h) = hires {
+            if !h.codec.is_empty() {
+                parts.push(h.codec.clone());
+            }
+            if let Some(bits) = h.bit_depth {
+                parts.push(format!("{bits}-bit"));
+            }
+            if let Some(rate) = h.sample_rate {
+                let khz = rate as f32 / 1000.0;
+                if (khz.fract()).abs() < f32::EPSILON {
+                    parts.push(format!("{:.0} kHz", khz));
+                } else {
+                    parts.push(format!("{:.1} kHz", khz));
+                }
+            }
+            if let Some(kbps) = h.bitrate_kbps {
+                parts.push(format!("{} kbps", kbps));
+            }
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" · "))
         }
     }
 
@@ -30,26 +109,38 @@ impl App {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
         let start_ms = now - self.audio.status.position().as_millis() as i64;
         let dur = self.audio.status.duration_ms.load(Ordering::Relaxed) as i64;
-        // Position ticks every 100 ms; only a jump of 2 s or more is a real seek.
-        let same = match (track, &self.discord_sent) {
-            (Some(t), Some(b)) => b.video_id == t.id && (start_ms - b.start_ms).abs() < 2000 && b.end_ms.is_some() == (dur > 0),
+        let cfg = self.discord_config();
+        let audio_quality = if cfg.show_audio_quality { self.current_audio_quality() } else { None };
+
+        let same_track = match (track, &self.discord_sent) {
+            (Some(t), Some(b)) => {
+                b.video_id == t.id
+                    && (start_ms - b.start_ms).abs() < 2000
+                    && b.end_ms.is_some() == (dur > 0)
+                    && b.audio_quality == audio_quality
+            }
             (None, None) => true,
             _ => false,
         };
-        if same {
+
+        if same_track && self.discord_sent_config.as_ref() == Some(&cfg) {
             return;
         }
+
         let want = track.map(|t| crate::discord::Presence {
             video_id: t.id.clone(),
             title: t.title.clone(),
             artist: t.artist_line(),
             album: t.album.as_ref().map(|a| a.name.clone()),
             art: backend::art_url(t),
+            audio_quality,
             start_ms,
             end_ms: (dur > 0).then_some(start_ms + dur),
         });
-        d.set(want.clone());
+
+        d.set(want.clone(), cfg.clone());
         self.discord_sent = want;
+        self.discord_sent_config = Some(cfg);
     }
 
     /// Tell Last.fm what's playing, and scrobble it once it has played half its length
@@ -164,18 +255,28 @@ impl App {
     }
 
     /// "Close to tray": × hides the window behind a tray icon; the icon brings it
-    /// back or quits. eframe keeps running `logic` while the window is hidden.
+    /// back or quits. Holding Shift while clicking × quits immediately.
     pub(super) fn tray_window(&mut self, ctx: &egui::Context) {
+        let shift = ctx.input(|i| i.modifiers.shift);
+        if ctx.input(|i| i.viewport().close_requested()) && shift && !self.exiting {
+            self.quit(ctx);
+            return;
+        }
         if ctx.input(|i| i.viewport().close_requested()) && self.close_to_tray && !self.exiting {
-            let c = ctx.clone();
-            match crate::tray::Tray::new(crate::appicon::get(self.app_icon), move || c.request_repaint()) {
-                Ok(t) => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                    self.tray = Some(t);
+            if self.tray.is_none() {
+                let c = ctx.clone();
+                match crate::tray::Tray::new(crate::appicon::get(self.app_icon), move || c.request_repaint()) {
+                    Ok(t) => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        self.tray = Some(t);
+                    }
+                    // Without an icon there'd be no way back: just close.
+                    Err(e) => log::warn!("tray icon unavailable: {e:#}"),
                 }
-                // Without an icon there'd be no way back: just close.
-                Err(e) => log::warn!("tray icon unavailable: {e:#}"),
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             }
         }
         if self.tray.is_none() {
