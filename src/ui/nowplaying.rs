@@ -5,7 +5,7 @@
 use egui::{Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use super::widgets::{self, icon_button, named, text_at};
-use super::{Action, App, NpTab, Repeat, glyphs, karaoke};
+use super::{Action, App, NpTab, Repeat, karaoke};
 use crate::lyrics::{Lyrics, Sync, SyncKind};
 use crate::shader::Params;
 use crate::theme::{self, icon};

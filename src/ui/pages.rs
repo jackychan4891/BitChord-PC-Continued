@@ -561,7 +561,7 @@ fn recent_searches(ui: &mut Ui, app: &mut App) {
             if ch > 0.0 {
                 ui.painter().rect_filled(cr, 14.0, theme::glass(0.12 * ch));
             }
-            ui.painter().text(cr.center(), egui::Align2::CENTER_CENTER, "Clear all", theme::medium(13.5), theme::lerp_color(theme::text_dim(), theme::text(), ch));
+            ui.painter().text(cr.center(), egui::Align2::CENTER_CENTER, "Clear all", theme::semibold(13.5), theme::lerp_color(theme::text_dim(), theme::text(), ch));
             if cresp.clicked() {
                 clear_all = true;
             }
