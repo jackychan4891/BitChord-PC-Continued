@@ -5,7 +5,7 @@
 use egui::{Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use super::widgets::{self, icon_button, named, text_at};
-use super::{Action, App, NpTab, Repeat, karaoke};
+use super::{Action, App, NpTab, Repeat, glyphs, karaoke};
 use crate::lyrics::{Lyrics, Sync, SyncKind};
 use crate::shader::Params;
 use crate::theme::{self, icon};
@@ -283,6 +283,67 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
             }
         }
     }
+
+    // Floating animated volume pill when volume changes in now playing / full screen
+    let vol_popped = now < app.vol_pop_until;
+    let v_vis = theme::anim_bool(ui.ctx(), "np-vol-pill-vis", vol_popped, 0.18);
+    if v_vis > 0.001 {
+        let vol = app.audio.volume();
+        let anim_vol = ui.ctx().animate_value_with_time(ui.scope_id().with("np-anim-vol"), vol, 0.15).clamp(0.0, 1.0);
+        if (anim_vol - vol).abs() > 0.002 || (v_vis > 0.001 && v_vis < 0.999) || vol_popped {
+            ui.ctx().request_repaint();
+        }
+        let pill_w = 210.0;
+        let pill_h = 36.0;
+        let pill_y = area.top() + 24.0;
+        let pill_rect = Rect::from_center_size(pos2(area.center().x, pill_y), vec2(pill_w, pill_h));
+
+        // Background capsule with glass effect
+        ui.painter().rect_filled(pill_rect, 18.0, theme::with_alpha(theme::glass(0.24), v_vis));
+        ui.painter().rect_stroke(pill_rect, 18.0, egui::Stroke::new(1.0, theme::with_alpha(theme::glass(0.20), v_vis)), egui::StrokeKind::Inside);
+
+        // Speaker icon
+        let step = glyphs::volume_step(vol);
+        let vicon_pos = pos2(pill_rect.left() + 20.0, pill_rect.center().y);
+        glyphs::draw(ui, vicon_pos, 16.0, glyphs::VOLUME[step], theme::with_alpha(theme::text(), v_vis));
+
+        // Volume track
+        let track_left = pill_rect.left() + 38.0;
+        let track_w = 116.0;
+        let track_r = Rect::from_min_size(pos2(track_left, pill_rect.center().y - 2.0), vec2(track_w, 4.0));
+        ui.painter().rect_filled(track_r, 2.0, theme::with_alpha(theme::glass(0.18), v_vis));
+
+        // Animated fill
+        let fill_r = Rect::from_min_size(track_r.min, vec2(track_r.width() * anim_vol, 4.0));
+        let accent = app.accent_color();
+        ui.painter().rect_filled(fill_r, 2.0, theme::with_alpha(accent, v_vis));
+        ui.painter().circle_filled(pos2(fill_r.right(), track_r.center().y), 5.5, theme::with_alpha(Color32::WHITE, v_vis));
+
+        // Percentage label
+        let pct = format!("{:.0}%", (vol * 100.0).round());
+        ui.painter().text(pos2(pill_rect.right() - 24.0, pill_rect.center().y), egui::Align2::CENTER_CENTER, pct, theme::semibold(11.5), theme::with_alpha(theme::text(), v_vis));
+
+        // Interactive: click or drag track, or scroll over pill
+        let resp = ui.interact(pill_rect, ui.scope_id().with("np-vol-pill-resp"), Sense::click_and_drag());
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if let Some(p) = resp.interact_pointer_pos()
+            && (resp.dragged() || resp.clicked())
+        {
+            let new_v = ((p.x - track_r.left()) / track_r.width()).clamp(0.0, 1.0);
+            app.audio.set_volume(new_v);
+            app.vol_pop_until = now + 1.8;
+            app.last_vol = new_v;
+        }
+        if resp.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                let new_v = (vol + scroll / 600.0).clamp(0.0, 1.0);
+                app.audio.set_volume(new_v);
+                app.vol_pop_until = now + 1.8;
+                app.last_vol = new_v;
+            }
+        }
+    }
 }
 
 /// Size of the artwork laid out in `col`: what is left once the sleeve's information,
@@ -361,6 +422,13 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
         let art_resp = named(art_resp, if app.playing() { "Stop music" } else { "Play music" }).on_hover_cursor(egui::CursorIcon::PointingHand);
         if art_resp.clicked() {
             app.toggle();
+        }
+        let art_scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if art_resp.hovered() && art_scroll != 0.0 {
+            let new_v = (app.audio.volume() + art_scroll / 600.0).clamp(0.0, 1.0);
+            app.audio.set_volume(new_v);
+            app.vol_pop_until = now + 1.8;
+            app.last_vol = new_v;
         }
         if app.fullscreen_show_info {
             let info_y = art.bottom() + 20.0;
@@ -843,7 +911,7 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
         menu_resp.rect = menu_resp.rect.translate(vec2(0.0, -70.0));
     }
     egui::Popup::menu(&menu_resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_width(310.0);
+        ui.set_width(360.0);
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         ui.add_space(4.0);
         // Lyrics first: the source, translation and timing are what the menu is for

@@ -1315,6 +1315,14 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.shortcuts(&ctx);
         let now = ctx.input(|i| i.time);
+        let vol = self.audio.volume();
+        if self.last_vol >= 0.0 && (self.last_vol - vol).abs() > 0.005 {
+            self.vol_pop_until = now + 1.8;
+        }
+        self.last_vol = vol;
+        if now < self.vol_pop_until {
+            ctx.request_repaint();
+        }
         let screen = ctx.content_rect();
 
         self.sync_look();

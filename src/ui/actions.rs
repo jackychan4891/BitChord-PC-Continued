@@ -265,7 +265,9 @@ impl App {
                 self.set_fullscreen(ctx, !self.fullscreen);
             } else {
                 let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+                if !crate::fullscreen::set(!fs) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+                }
             }
         }
         for cmd in hits.into_iter().chain(mb.then_some(keys::Cmd::Back)).chain(mf.then_some(keys::Cmd::Forward)) {
@@ -300,7 +302,9 @@ impl App {
                         self.set_fullscreen(ctx, !self.fullscreen);
                     } else {
                         let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+                        if !crate::fullscreen::set(!fs) {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+                        }
                     }
                 }
                 keys::Cmd::Back if !strip => self.nav_back(),
@@ -309,7 +313,9 @@ impl App {
                     if self.fullscreen {
                         self.set_fullscreen(ctx, false);
                     } else if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                        if !crate::fullscreen::set(false) {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                        }
                     } else {
                         self.np_open = false;
                     }
