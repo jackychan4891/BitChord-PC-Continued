@@ -276,7 +276,10 @@ impl App {
                 keys::Cmd::VolumeUp | keys::Cmd::VolumeDown => {
                     let v = (self.audio.volume() + if cmd == keys::Cmd::VolumeUp { 0.05 } else { -0.05 }).clamp(0.0, 1.0);
                     self.audio.set_volume(v);
-                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("vol-pop-until"), ctx.input(|i| i.time) + 1.8));
+                    let now = ctx.input(|i| i.time);
+                    self.vol_pop_until = now + 1.8;
+                    self.last_vol = v;
+                    ctx.request_repaint();
                 }
                 keys::Cmd::Mute => shell::toggle_mute(self, ctx),
                 // The search box keeps its own focus, and asks for it through keys::hit.

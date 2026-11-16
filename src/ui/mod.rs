@@ -376,6 +376,8 @@ pub struct App {
     output_devices: Vec<crate::audio::OutputDevice>,
     radio_pending: bool,
     seek_drag: Option<f32>,
+    pub vol_pop_until: f64,
+    pub last_vol: f32,
 
     // visuals
     art_key: Option<String>,
@@ -751,6 +753,8 @@ impl App {
             media_cover: Default::default(),
             radio_pending: false,
             seek_drag: None,
+            vol_pop_until: 0.0,
+            last_vol: -1.0,
             art_key: None,
             apple_artists: Default::default(),
             apple_covers: Default::default(),

@@ -770,17 +770,11 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     let cx = (x0 + x1) / 2.0;
     let enabled = track.is_some();
     let vol = app.audio.volume();
-    let last_vol_id = egui::Id::new("mini-last-vol-val");
-    let pop_until_id = egui::Id::new("vol-pop-until");
-    let last_vol = ctx.data(|d| d.get_temp::<f32>(last_vol_id));
-    if let Some(lv) = last_vol {
-        if (lv - vol).abs() > 0.005 {
-            ctx.data_mut(|d| d.insert_temp(pop_until_id, ui.input(|i| i.time) + 1.8));
-        }
+    if app.last_vol >= 0.0 && (app.last_vol - vol).abs() > 0.005 {
+        app.vol_pop_until = now + 1.8;
     }
-    ctx.data_mut(|d| d.insert_temp(last_vol_id, vol));
-    let vol_until = ctx.data(|d| d.get_temp::<f64>(pop_until_id)).unwrap_or(0.0);
-    let vol_popped = ui.input(|i| i.time) < vol_until;
+    app.last_vol = vol;
+    let vol_popped = now < app.vol_pop_until;
     if vol_popped {
         ctx.request_repaint();
     }
@@ -868,7 +862,7 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
         let track_r = Rect::from_center_size(slider.center(), vec2(slider.width(), 4.0));
         ui.painter().rect_filled(track_r, 2.0, theme::glass(0.16));
         let anim_id = ui.scope_id().with("mini-anim-vol");
-        let anim_vol = ui.ctx().animate_value_with_time(anim_id, vol, 0.15);
+        let anim_vol = ui.ctx().animate_value_with_time(anim_id, vol, 0.15).clamp(0.0, 1.0);
         if (anim_vol - vol).abs() > 0.002 {
             ui.ctx().request_repaint();
         }
