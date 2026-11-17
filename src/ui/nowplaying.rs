@@ -153,7 +153,7 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
             let cover_hidden = (narrow || cs.layout == Layout::LyricsOnly) && shown_tab != NpTab::Art;
             if cover_hidden {
                 let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
-                options_menu(app, ui, r, &heard, shown_tab == NpTab::Lyrics && !no_lyrics);
+                options_menu(app, ui, r, &heard, shown_tab == NpTab::Lyrics && !no_lyrics, 1.0);
             }
         });
     }
@@ -262,22 +262,41 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
             rui.multiply_opacity(panel_vis * vis);
             match tab {
                 NpTab::Lyrics => lyrics_panel(app, &mut rui, r, now, centered),
-                _ => super::shell::queue_list(app, &mut rui, "np"),
+                _ => {
+                    rui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Up next").font(theme::bold(20.0)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if icon_button(ui, icon::X, 16.0, "Close queue (Q)", false).clicked() {
+                                app.np_tab = if app.no_lyrics() { NpTab::Art } else { NpTab::Lyrics };
+                            }
+                        });
+                    });
+                    rui.add_space(8.0);
+                    super::shell::queue_list(app, &mut rui, "np");
+                }
             }
         }
     }
 
-    // In full screen mode: exit full screen button (hidden until hovered near top right, matching enter full screen size)
+    // In full screen mode: exit full screen and options buttons (hidden until hovered near top right, or menu open)
     if is_fullscreen {
-        let near = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.x > area.right() - 72.0 && p.y < area.top() + 60.0);
-        let vis = theme::anim_bool(ui.ctx(), "np-fs-exit-vis", near, 0.18);
+        let r_exit = Rect::from_center_size(pos2(area.right() - 22.0, area.top() + 22.0), Vec2::splat(36.0));
+        let r_opts = Rect::from_center_size(pos2(area.right() - 62.0, area.top() + 22.0), Vec2::splat(36.0));
+        let opt_id = ui.scope_id().with("np-options");
+        let opt_resp = ui.interact(r_opts, opt_id, Sense::hover());
+        let popup_open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&opt_resp));
+        let near = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.x > area.right() - 95.0 && p.y < area.top() + 65.0);
+        let vis = theme::anim_bool(ui.ctx(), "np-fs-exit-vis", near || popup_open, 0.18);
+        if vis > 0.001 && vis < 0.999 {
+            ui.ctx().request_repaint();
+        }
         if vis > 0.01 {
-            let r_exit = Rect::from_center_size(pos2(area.right() - 28.0, area.top() + 24.0), Vec2::splat(36.0));
+            options_menu(app, ui, r_opts, &heard, shown_tab == NpTab::Lyrics && !no_lyrics, vis);
             let resp = ui.interact(r_exit, ui.scope_id().with("np-fs-exit-topright"), Sense::click());
             let resp = named(resp, "Exit full screen (F / Esc)").on_hover_cursor(egui::CursorIcon::PointingHand);
             let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.12);
-            ui.painter().circle_filled(r_exit.center(), 18.0, theme::with_alpha(theme::glass(0.18 + 0.12 * h), vis));
-            super::widgets::icon_at(ui, r_exit.center(), icon::SHRINK, 20.0, theme::with_alpha(theme::lerp_color(theme::text_dim(), Color32::WHITE, h), vis));
+            ui.painter().circle_filled(r_exit.center(), 17.0, theme::with_alpha(theme::glass(0.09 + 0.07 * h), vis));
+            super::widgets::icon_at(ui, r_exit.center(), icon::SHRINK, 18.0, theme::with_alpha(theme::lerp_color(theme::text_dim(), Color32::WHITE, h), vis));
             if resp.clicked() {
                 app.set_fullscreen(ui.ctx(), false);
             }
@@ -507,7 +526,7 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     }
     // The song's options, beside the star.
     let options = Rect::from_center_size(pos2(art.right() - 15.0, info_y + 14.0), Vec2::splat(34.0));
-    options_menu(app, ui, options, &heard, app.np_tab == NpTab::Lyrics && !no_lyrics);
+    options_menu(app, ui, options, &heard, app.np_tab == NpTab::Lyrics && !no_lyrics, 1.0);
 
     // Seek: a 4 px line that grows under the pointer, its times below.
     let status = app.audio.status.clone();
@@ -691,10 +710,10 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     }
 
     let queue_on = app.np_tab == NpTab::UpNext;
-    let (r, h, p) = btn(ui, 6, "queue", "Up next", true);
+    let (r, h, p) = btn(ui, 6, "queue", "Up next (Q)", true);
     super::glyphs::draw(ui, r.rect.center(), icons[6] * (1.0 - 0.1 * p), super::glyphs::QUEUE, if queue_on { app.accent_color() } else { ink(h, 0.55, 1.0) });
     if r.clicked() {
-        app.np_tab = if queue_on { NpTab::Art } else { NpTab::UpNext };
+        app.np_tab = if queue_on { if app.no_lyrics() { NpTab::Art } else { NpTab::Lyrics } } else { NpTab::UpNext };
     }
 }
 
@@ -897,18 +916,20 @@ fn sync_label(k: SyncKind) -> &'static str {
 
 /// The ⋯ menu: the song's actions, and with lyrics showing, the source picker,
 /// translation and romanization toggles, and this song's timing offset above them.
-fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Track, lyrics: bool) {
+fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Track, lyrics: bool, alpha: f32) {
     let resp = ui.interact(rect, ui.scope_id().with("np-options"), Sense::click());
     let resp = named(resp, "Options").on_hover_cursor(egui::CursorIcon::PointingHand);
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || open, 0.12);
-    ui.painter().circle_filled(rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
+    ui.painter().circle_filled(rect.center(), 17.0, theme::with_alpha(theme::glass(0.09 + 0.07 * h), alpha));
     for dx in [-6.0, 0.0, 6.0] {
-        ui.painter().circle_filled(rect.center() + vec2(dx, 0.0), 1.9, theme::with_alpha(Color32::WHITE, 0.75 + 0.25 * h));
+        ui.painter().circle_filled(rect.center() + vec2(dx, 0.0), 1.9, theme::with_alpha(Color32::WHITE, (0.75 + 0.25 * h) * alpha));
     }
     let mut menu_resp = resp.clone();
     if rect.top() > 100.0 {
         menu_resp.rect = menu_resp.rect.translate(vec2(0.0, -70.0));
+    } else {
+        menu_resp.rect = menu_resp.rect.translate(vec2(-324.0, 0.0));
     }
     egui::Popup::menu(&menu_resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_width(360.0);

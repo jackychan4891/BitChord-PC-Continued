@@ -299,8 +299,12 @@ impl App {
                     }
                 }
                 keys::Cmd::Queue if !strip && self.current().is_some() => {
-                    self.np_open = true;
-                    self.np_tab = NpTab::UpNext;
+                    if self.np_open && self.np_tab == NpTab::UpNext {
+                        self.np_tab = if self.no_lyrics() { NpTab::Art } else { NpTab::Lyrics };
+                    } else {
+                        self.np_open = true;
+                        self.np_tab = NpTab::UpNext;
+                    }
                 }
                 keys::Cmd::Fullscreen if !strip => {
                     let next = !(self.window_fullscreen || self.fullscreen);

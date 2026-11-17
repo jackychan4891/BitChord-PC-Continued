@@ -811,7 +811,7 @@ impl App {
             np_tab: if get("np_art").is_some_and(|v| v == "1") { NpTab::Art } else { NpTab::Lyrics },
             queue_open: false,
             fullscreen: false,
-            fullscreen_show_info: false,
+            fullscreen_show_info: get("fullscreen_show_info").is_some_and(|v| v == "1"),
             window_fullscreen: false,
             mini: mini::Mini::load(get),
             lyrics: None,
@@ -1587,6 +1587,7 @@ impl eframe::App for App {
         storage.set_string("crossfade_secs", self.crossfade_secs.to_string());
         storage.set_string("show_roman", b(self.show_roman));
         storage.set_string("show_trans", b(self.show_trans));
+        storage.set_string("fullscreen_show_info", b(self.fullscreen_show_info));
         // Background test runs mustn't change the listener's sources or per-song picks.
         if std::env::var_os("YTM_BACKGROUND").is_none() || std::env::var_os("YTM_SAVE_SESSION").is_some() {
             self.lyric_prefs.save(storage);

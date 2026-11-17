@@ -27,10 +27,11 @@ use crate::theme::{self, icon};
 
 /// The strip when first opened. It's as tall as its contents; the width goes from
 /// `MIN_W` to `MAX_W` by its sides.
-pub const SIZE: Vec2 = vec2(400.0, 112.0);
+pub const STRIP_H: f32 = 136.0;
+pub const SIZE: Vec2 = vec2(400.0, STRIP_H);
 /// The line being sung, when lyrics are on: a band above the strip the strip's own size,
 /// so the window doubles in height and the line gets the strip's whole width.
-pub const LYR_H: f32 = SIZE.y;
+pub const LYR_H: f32 = 110.0;
 const MIN_W: f32 = 330.0;
 const MAX_W: f32 = 720.0;
 /// Kept above other windows until unpinned.
@@ -40,7 +41,7 @@ const MARGIN: f32 = 16.0;
 
 /// The window's height: the strip, with the lyric band over it when lyrics are on.
 fn height(lyrics: bool) -> f32 {
-    if lyrics { SIZE.y + LYR_H } else { SIZE.y }
+    if lyrics { STRIP_H + LYR_H } else { STRIP_H }
 }
 
 /// A strip button's glyph: from the icon font, or one of Apple's own drawn ones.
@@ -480,7 +481,7 @@ impl Mini {
                     let w = std::env::var("YTM_MINI_W").ok().and_then(|w| w.parse().ok()).unwrap_or(SIZE.x);
                     clamp_size(Place { w, ..here }, self.lyrics)
                 }
-                (Some(p), _) if self.visible(p, frame) => p,
+                (Some(p), _) if self.visible(p, frame) => clamp_size(p, self.lyrics),
                 (_, here) => {
                     let scale = here.map_or(1.0, |h| h.scale);
                     // Not Windows: the bottom right of the full window, where the player bar was.
@@ -637,7 +638,7 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     app.mini.sync_lyrics(&ctx, timed);
     let side = app.mini.lyrics;
     let want = app.mini.lyrics_want;
-    let band = if side { Rect::from_min_max(r.min, pos2(r.right(), r.top() + LYR_H)) } else { r };
+    let band = if side { Rect::from_min_max(r.min, pos2(r.right(), r.bottom() - STRIP_H)) } else { r };
     let col = if side { Rect::from_min_max(pos2(r.left(), band.bottom()), r.max) } else { r };
     let art = Rect::from_min_size(col.min + Vec2::splat(pad), Vec2::splat(col.height() - 2.0 * pad - 4.0));
     match &track {
@@ -766,7 +767,7 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
 
     // One group, centred under the text: like, previous, play, next, volume. Hovering
     // the volume slides a volume track over the group, as the player bar's does.
-    let cy = art.bottom() - 17.0;
+    let cy = col.top() + 88.0;
     let cx = (x0 + x1) / 2.0;
     let enabled = track.is_some();
     let vol = app.audio.volume();
@@ -1162,21 +1163,21 @@ mod tests {
     fn first_place_is_the_work_areas_corner() {
         let area = Rect::from_min_max(pos2(0.0, 0.0), pos2(2560.0, 1400.0));
         let p = corner_place(area, Vec2::ZERO, 1.0, 1.0);
-        assert_eq!((p.x, p.y, p.w, p.h), (2560.0 - 400.0 - 16.0, 1400.0 - 112.0 - 16.0, SIZE.x, SIZE.y));
+        assert_eq!((p.x, p.y, p.w, p.h), (2560.0 - 400.0 - 16.0, 1400.0 - 136.0 - 16.0, SIZE.x, SIZE.y));
         // Scaled: pixels grow with the scale, points don't.
         let p = corner_place(area, vec2(0.0, 0.0), 1.5, 1.0);
-        assert_eq!((p.x, p.y, p.w), (2560.0 - 600.0 - 24.0, 1400.0 - 168.0 - 24.0, SIZE.x));
+        assert_eq!((p.x, p.y, p.w), (2560.0 - 600.0 - 24.0, 1400.0 - 204.0 - 24.0, SIZE.x));
         // A second monitor left of the main one has negative coordinates.
         let left = Rect::from_min_max(pos2(-1920.0, 100.0), pos2(0.0, 1140.0));
         let p = corner_place(left, vec2(2.0, 2.0), 1.0, 1.0);
-        assert_eq!((p.x, p.y), (-402.0 - 16.0, 1140.0 - 114.0 - 16.0));
+        assert_eq!((p.x, p.y), (-402.0 - 16.0, 1140.0 - 138.0 - 16.0));
         // Never past the area's top left, however small it is.
         let tiny = Rect::from_min_max(pos2(10.0, 20.0), pos2(200.0, 50.0));
         let p = corner_place(tiny, Vec2::ZERO, 1.0, 1.0);
         assert_eq!((p.x, p.y), (10.0, 20.0));
         // Zoomed in, a point is bigger: the strip still ends at the margin.
         let p = corner_place(area, Vec2::ZERO, 1.0, 2.0);
-        assert_eq!((p.x, p.y, p.zoom), (2560.0 - 800.0 - 16.0, 1400.0 - 224.0 - 16.0, 2.0));
+        assert_eq!((p.x, p.y, p.zoom), (2560.0 - 800.0 - 16.0, 1400.0 - 272.0 - 16.0, 2.0));
     }
 
     #[test]

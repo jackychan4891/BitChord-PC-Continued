@@ -992,7 +992,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
         glyphs::draw(ui, r.rect.center(), 18.0, glyphs::QUEUE, if queue_open { accent } else { ink(h) });
         if r.clicked() {
             if app.np_open {
-                app.np_tab = if queue_open { NpTab::Art } else { NpTab::UpNext };
+                app.np_tab = if queue_open { if app.no_lyrics() { NpTab::Art } else { NpTab::Lyrics } } else { NpTab::UpNext };
             } else {
                 app.queue_open = !app.queue_open;
             }
