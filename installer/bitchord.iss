@@ -6,7 +6,7 @@
 ;   iscc /DArm64 installer\bitchord.iss  ->  bitchord-setup-<version>-arm64.exe
 
 #define AppName "BitChord"
-#define AppVersion "2.1.2"
+#define AppVersion "2.1.3"
 #define AppExe "bitchord.exe"
 #ifdef Arm64
   #define Arch "arm64"

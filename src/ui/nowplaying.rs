@@ -63,7 +63,7 @@ pub fn overlay(app: &mut App, ctx: &egui::Context, now: f64) {
             // Swallow input so the page underneath doesn't react.
             ui.allocate_rect(rect, Sense::click_and_drag());
             // It covers the window's top too: that still moves the window.
-            if !app.fullscreen {
+            if !app.fullscreen && !app.window_fullscreen {
                 super::titlebar::drag_area(ui, Rect::from_min_size(rect.min, vec2(rect.width(), super::titlebar::HEIGHT)), "now-playing");
             }
             let painter = ui.painter_at(rect);

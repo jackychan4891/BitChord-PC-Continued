@@ -478,6 +478,7 @@ pub struct App {
     queue_open: bool,
     fullscreen: bool,
     pub fullscreen_show_info: bool,
+    pub window_fullscreen: bool,
     /// The mini player: the window shrunk to a strip.
     mini: mini::Mini,
     /// Every source's lyrics for the current song (by video ID).
@@ -811,6 +812,7 @@ impl App {
             queue_open: false,
             fullscreen: false,
             fullscreen_show_info: false,
+            window_fullscreen: false,
             mini: mini::Mini::load(get),
             lyrics: None,
             lyrics_extras: None,
@@ -1345,7 +1347,7 @@ impl eframe::App for App {
         // bar, so the pages and the full-screen background under it aren't drawn.
         let covered = !self.fullscreen && np >= 1.0;
         let bar_strip = egui::Rect::from_min_max(egui::pos2(screen.left(), screen.bottom() - self.bar_height()), screen.max);
-        titlebar::set_fullscreen(&ctx, self.fullscreen);
+        titlebar::set_fullscreen(&ctx, self.fullscreen || self.window_fullscreen);
         // The mini player, or nothing but the background while the window changes size.
         let layout = self.mini.layout(&ctx);
         // The strip's window is cut to the same corner as the artwork it frames; the
@@ -1364,7 +1366,7 @@ impl eframe::App for App {
             return;
         }
         shell::background(self, ui, screen, now, covered.then_some(bar_strip));
-        if !self.fullscreen && !covered {
+        if !self.fullscreen && !self.window_fullscreen && !covered {
             // The top of the window, down to the search box's row: what's on it comes after.
             titlebar::drag_area(ui, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), titlebar::HEIGHT)), "main");
         }
