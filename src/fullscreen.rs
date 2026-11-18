@@ -19,14 +19,12 @@ pub fn set_hwnd(hwnd: *mut std::ffi::c_void) {
 /// leaves it to winit.
 pub fn set(on: bool) -> bool {
     #[cfg(windows)]
-    if crate::ui::custom_titlebar() {
-        return imp::set(on);
-    }
+    return imp::set(on);
     #[cfg(not(windows))]
     {
         let _ = on;
+        false
     }
-    false
 }
 
 /// The work area (the monitor less the taskbar) of the monitor the window is on, in

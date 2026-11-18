@@ -280,8 +280,8 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
 
     // In full screen mode: exit full screen and options buttons (hidden until hovered near top right, or menu open)
     if is_fullscreen {
-        let r_exit = Rect::from_center_size(pos2(area.right() - 22.0, area.top() + 22.0), Vec2::splat(36.0));
-        let r_opts = Rect::from_center_size(pos2(area.right() - 62.0, area.top() + 22.0), Vec2::splat(36.0));
+        let r_exit = Rect::from_center_size(pos2(area.right() - 8.0, area.top() + 20.0), Vec2::splat(36.0));
+        let r_opts = Rect::from_center_size(pos2(area.right() - 50.0, area.top() + 20.0), Vec2::splat(36.0));
         let opt_id = ui.scope_id().with("np-options");
         let opt_resp = ui.interact(r_opts, opt_id, Sense::hover());
         let popup_open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&opt_resp));
@@ -928,11 +928,9 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
     let mut menu_resp = resp.clone();
     if rect.top() > 100.0 {
         menu_resp.rect = menu_resp.rect.translate(vec2(0.0, -70.0));
-    } else {
-        menu_resp.rect = menu_resp.rect.translate(vec2(-324.0, 0.0));
     }
     egui::Popup::menu(&menu_resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_width(360.0);
+        ui.set_width(250.0);
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         ui.add_space(4.0);
         // Lyrics first: the source, translation and timing are what the menu is for

@@ -347,7 +347,9 @@ impl App {
 
     pub fn set_window_fullscreen(&mut self, ctx: &egui::Context, on: bool) {
         self.window_fullscreen = on;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
+        if !crate::fullscreen::set(on) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
+        }
         ctx.request_repaint();
     }
 
