@@ -716,13 +716,6 @@ pub fn play_triangle(ui: &Ui, center: Pos2, r: f32, color: Color32) {
     ui.painter().add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
 }
 
-pub fn pause_bars(ui: &Ui, center: Pos2, r: f32, color: Color32) {
-    for dx in [-r * 0.45, r * 0.45] {
-        let bar = Rect::from_center_size(center + vec2(dx, 0.0), vec2(r * 0.42, r * 1.7));
-        ui.painter().rect_filled(bar, 1.5, color);
-    }
-}
-
 // ------------------------------------------------------------------ playing bars
 
 /// The playing row's bars: three rounded bars rising and falling at their own slow

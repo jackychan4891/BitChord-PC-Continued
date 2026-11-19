@@ -134,12 +134,33 @@ jobs:
           chmod 755 "out/$dir/bitchord"
           tar -czf "out/$dir.tar.gz" -C out "$dir"
 
+      - name: Build .deb package
+        run: |
+          pkg="out/deb"
+          mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/share/applications" "$pkg/usr/share/icons/hicolor/256x256/apps"
+          cp target/release/bitchord "$pkg/usr/bin/bitchord"
+          chmod 755 "$pkg/usr/bin/bitchord"
+          cp linux/bitchord.desktop "$pkg/usr/share/applications/bitchord.desktop"
+          cp assets/icon/icon.png "$pkg/usr/share/icons/hicolor/256x256/apps/bitchord.png"
+          cat > "$pkg/DEBIAN/control" <<EOF
+          Package: bitchord
+          Version: $VERSION
+          Section: sound
+          Priority: optional
+          Architecture: amd64
+          Depends: libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1, libasound2t64 | libasound2, libdbus-1-3, libssl3t64 | libssl3
+          Maintainer: Razan <razanofc@gmail.com>
+          Description: Native BitChord desktop music client
+          EOF
+          dpkg-deb --build --root-owner-group "$pkg" "out/bitchord_${VERSION}_amd64.deb"
+
       - uses: actions/upload-artifact@v5
         with:
           name: linux
           path: |
             out/bitchord-${{ env.VERSION }}-linux-x86_64.tar.gz
             out/bitchord-portable-${{ env.VERSION }}-linux-x86_64.tar.gz
+            out/bitchord_${{ env.VERSION }}_amd64.deb
           if-no-files-found: error
 
   macos:

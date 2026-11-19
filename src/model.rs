@@ -55,10 +55,6 @@ impl Track {
     pub fn artist_line(&self) -> String {
         self.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ")
     }
-
-    pub fn first_artist_id(&self) -> Option<&str> {
-        self.artists.iter().find_map(|a| a.id.as_deref())
-    }
 }
 
 /// Smallest thumbnail at least `min_px` wide (falls back to the largest).

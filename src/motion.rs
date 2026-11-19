@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub struct Frame {
     pub w: usize,

@@ -68,7 +68,7 @@ fn spotify_thumbs(art: &Option<String>) -> Vec<Thumb> {
 }
 
 /// The Spotify logo: a green rounded square with its three arcs.
-fn badge(ui: &Ui, rect: Rect) {
+pub(super) fn badge(ui: &Ui, rect: Rect) {
     ui.painter().rect_filled(rect, rect.width() * 0.27, SPOTIFY);
     let s = rect.width() / 24.0;
     let c = rect.center();
@@ -464,7 +464,7 @@ fn spotify_account_row(app: &mut App, ui: &mut Ui, account: &Account, compact: b
         ),
         Account::SignedIn { name, .. } => {
             let who = if name.is_empty() { "Signed in".to_owned() } else { format!("Signed in as {name}") };
-            ("Spotify account".to_owned(), format!("{who}. Saved encrypted in Windows Credential Manager."))
+            ("Spotify account".to_owned(), format!("{who}. Saved encrypted in {}.", crate::vault::label()))
         }
         Account::Unknown | Account::Loading => ("Spotify account".to_owned(), "Checking your sign-in…".to_owned()),
         Account::SignedOut if compact => ("Not signed in".to_owned(), "Needed for Liked Songs and private playlists. Public playlists work without it.".to_owned()),
@@ -1398,10 +1398,7 @@ fn failed(app: &mut App, ui: &mut Ui, e: &str) {
 
 /// Settings › Import.
 pub fn settings_section(app: &mut App, ui: &mut Ui) {
-    let xfer = app.transfer.clone();
-    xfer.ensure_account(&app.backend);
     section_label(ui, "Import", None);
-    let account = xfer.account.lock().unwrap().clone();
     let mut open = false;
     settings_card(ui, |ui| {
         let w = ui.available_width();
@@ -1415,8 +1412,6 @@ pub fn settings_section(app: &mut App, ui: &mut Ui) {
         ui.painter().galley(pos2(x, rect.center().y + 2.0), g, theme::text_dim());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
         open = pill(&mut child, "Open", None, true).clicked();
-        super::pages::divider(ui);
-        spotify_account_row(app, ui, &account, false);
     });
     if open {
         app.actions.push(Action::Go(Page::Transfer));

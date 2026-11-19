@@ -787,7 +787,7 @@ fn collection(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
             egui::TextEdit::singleline(query)
                 .hint_text(egui::RichText::new("Search in this list").color(theme::text_faint()))
                 .font(theme::regular(14.0))
-                .vertical_align(egui::Align::Center)
+                .align(Align2::LEFT_CENTER)
                 .frame(egui::Frame::NONE)
                 .desired_width(inner.width()),
         );
@@ -999,11 +999,83 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
 fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
     page_title(ui, "Library");
     if !app.logged_in {
-        ui.add_space(10.0);
-        ui.label(RichText::new("Sign in to see your playlists, liked songs and history.").color(theme::text_dim()));
-        ui.add_space(12.0);
-        if pill(ui, "Sign in with Google", Some(icon::CIRCLE_USER), true).clicked() {
-            app.start_sign_in(ui.ctx());
+        app.transfer.ensure_account(&app.backend);
+        let sp_account = app.transfer.account.lock().unwrap().clone();
+        match sp_account {
+            crate::transfer::Account::SignedIn { name, library } => {
+                ui.add_space(6.0);
+                let who = if name.is_empty() { "Spotify".to_owned() } else { name };
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.label(
+                        RichText::new(format!("Signed in as {who} · {} Spotify playlists", library.len()))
+                            .font(theme::regular(13.5))
+                            .color(theme::text_dim()),
+                    );
+                    if pill(ui, "Refresh", None, false).clicked() {
+                        app.transfer.load_account(&app.backend);
+                        app.toast("Refreshing Spotify playlists…");
+                    }
+                    if pill(ui, "Import", Some(icon::LIST_MUSIC), true).clicked() {
+                        app.actions.push(Action::Go(Page::Transfer));
+                    }
+                });
+                ui.add_space(16.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(20.0, 22.0);
+                    for e in library.iter() {
+                        let (rect, resp) = ui.allocate_exact_size(vec2(CARD, CARD + 48.0), Sense::click());
+                        let resp = named(resp, &e.name).on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.14);
+                        let art_r = Rect::from_min_size(rect.min, Vec2::splat(CARD));
+                        if let Some(url) = &e.art {
+                            let thumbs = vec![crate::model::Thumb { url: url.clone(), width: 300, height: 300 }];
+                            paint_cover(ui, art_r, &thumbs, theme::card_radius(), 1.0);
+                        } else {
+                            super::transfer::badge(ui, art_r);
+                        }
+                        if h > 0.01 {
+                            ui.painter().rect_filled(art_r, theme::card_radius(), theme::glass(0.08 * h));
+                        }
+                        let title_g = widgets::galley(ui, &e.name, theme::semibold(14.0), theme::text(), CARD);
+                        ui.painter().galley(pos2(rect.left(), art_r.bottom() + 8.0), title_g, theme::text());
+                        let sub = match e.count {
+                            Some(n) => format!("{n} songs"),
+                            None if !e.owner.is_empty() => e.owner.clone(),
+                            None => "Spotify".to_owned(),
+                        };
+                        let sub_g = widgets::galley(ui, &sub, theme::regular(12.5), theme::text_dim(), CARD);
+                        ui.painter().galley(pos2(rect.left(), art_r.bottom() + 28.0), sub_g, theme::text_dim());
+                        if resp.clicked() {
+                            app.xfer.picked = Some(e.source.clone());
+                            app.actions.push(Action::Go(Page::Transfer));
+                        }
+                    }
+                });
+            }
+            crate::transfer::Account::Unknown | crate::transfer::Account::Loading => {
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.spinner();
+                    ui.label(RichText::new("Loading your Spotify playlists…").color(theme::text_dim()));
+                });
+            }
+            crate::transfer::Account::SignedOut | crate::transfer::Account::Failed(_) => {
+                ui.add_space(10.0);
+                ui.label(RichText::new("Sign in to see your playlists, liked songs and history.").color(theme::text_dim()));
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    if pill(ui, "Sign in with Google", Some(icon::CIRCLE_USER), true).clicked() {
+                        app.start_sign_in(ui.ctx());
+                    }
+                    if pill(ui, "Sign in to Spotify", None, false).clicked() {
+                        app.spotify_open = true;
+                        app.actions.push(Action::Go(Page::Settings));
+                    }
+                });
+            }
         }
         return;
     }
@@ -1184,11 +1256,11 @@ struct SettingsSearch {
 struct SettingsRows(Vec<(String, String, String)>);
 
 fn search_key() -> egui::Id {
-    egui::Id::new("bitchord-settings-search")
+    egui::Id::unique("bitchord-settings-search")
 }
 
 fn rows_key() -> egui::Id {
-    egui::Id::new("bitchord-settings-rows")
+    egui::Id::unique("bitchord-settings-rows")
 }
 
 fn search_of(ui: &Ui) -> SettingsSearch {
@@ -1265,6 +1337,13 @@ fn settings_body(app: &mut App, ui: &mut Ui) {
         ui.add_space(40.0);
         return;
     }
+    if app.spotify_open {
+        if settings_spotify_subpage(app, ui) {
+            app.spotify_open = false;
+        }
+        ui.add_space(40.0);
+        return;
+    }
     page_title(ui, "Settings");
     settings_search_bar(ui, &mut app.settings_search);
     settings_account(app, ui);
@@ -1295,13 +1374,13 @@ fn settings_search_bar(ui: &mut Ui, query: &mut String) {
         egui::TextEdit::singleline(query)
             .hint_text(egui::RichText::new("Search settings").color(theme::text_faint()))
             .font(theme::regular(14.0))
-            .vertical_align(egui::Align::Center)
+            .align(Align2::LEFT_CENTER)
             .frame(egui::Frame::NONE)
             .desired_width(inner.width()),
     );
     if clearable {
         let x = Rect::from_center_size(pos2(rect.right() - 20.0, rect.center().y), Vec2::splat(26.0));
-        let resp = ui.interact(x, ui.id().with("settings-search-clear"), Sense::click());
+        let resp = ui.interact(x, ui.scope_id().with("settings-search-clear"), Sense::click());
         widgets::icon_at(ui, x.center(), icon::X, 14.0, theme::text_dim());
         if resp.clicked() {
             query.clear();
@@ -1315,7 +1394,6 @@ fn settings_account(app: &mut App, ui: &mut Ui) {
     section_label(ui, "Account", None);
     let busy = app.signing_in.load(Ordering::Relaxed);
     let (mut sign_in, mut sign_out) = (false, false);
-    let (mut sp_connect, mut sp_sign_out, mut sp_open_transfer) = (false, false, false);
     // Asked again now and then while Settings shows: a failed ask, or a channel made since.
     let now = ui.input(|i| i.time);
     if app.logged_in && app.channels_asked.is_none_or(|at| now - at > 60.0) {
@@ -1324,11 +1402,23 @@ fn settings_account(app: &mut App, ui: &mut Ui) {
     }
     app.transfer.ensure_account(&app.backend);
     let sp_account = app.transfer.account.lock().unwrap().clone();
-    let sp_busy = app.transfer.signing_in.load(Ordering::Relaxed);
+    let sp_row_desc = match &sp_account {
+        crate::transfer::Account::SignedIn { name, library } => {
+            if name.is_empty() {
+                format!("Connected · {} playlists loaded. Saved encrypted in {}.", library.len(), crate::vault::label())
+            } else {
+                format!("Connected as {name} · {} playlists loaded. Saved encrypted in {}.", library.len(), crate::vault::label())
+            }
+        }
+        crate::transfer::Account::Unknown | crate::transfer::Account::Loading => "Connecting to Spotify…".to_owned(),
+        crate::transfer::Account::Failed(_) => "Connection needs attention. Open to sign in with cookie or OAuth.".to_owned(),
+        crate::transfer::Account::SignedOut => "Connect via cookie (sp_dc) or OAuth to import playlists and Liked Songs.".to_owned(),
+    };
     settings_card(ui, |ui| {
         if app.logged_in {
             let name = app.account_name.clone().unwrap_or_else(|| "YouTube Music".to_owned());
-            setting_row(ui, &name, Some("Signed in with Google. Your home feed, library and likes come from this account. Saved encrypted in Windows Credential Manager."), |ui| {
+            let google_desc = format!("Signed in with Google. Your home feed, library and likes come from this account. Saved encrypted in {}.", crate::vault::label());
+            setting_row(ui, &name, Some(&google_desc), |ui| {
                 sign_out = pill(ui, "Sign out", Some(icon::LOG_OUT), false).clicked();
             });
             // Also with one, when the one in use isn't it (a brand channel since deleted).
@@ -1348,67 +1438,8 @@ fn settings_account(app: &mut App, ui: &mut Ui) {
             });
         }
         divider(ui);
-        // Spotify sign-in via `sp_dc` cookie token (also powers Transfer from Spotify).
-        let (sp_title, sp_desc) = match &sp_account {
-            crate::transfer::Account::SignedIn { name, library } => {
-                let who = if name.is_empty() { "Signed in to Spotify".to_owned() } else { format!("Signed in as {name}") };
-                ("Spotify", format!("{who} · {} playlists. Ready to import songs and playlists from Spotify.", library.len()))
-            }
-            crate::transfer::Account::Unknown | crate::transfer::Account::Loading => {
-                ("Spotify", "Connecting to Spotify with your sp_dc cookie token…".to_owned())
-            }
-            crate::transfer::Account::SignedOut => {
-                ("Spotify (sp_dc cookie)", "Connect Spotify using your sp_dc cookie token to import playlists and Liked Songs.".to_owned())
-            }
-            crate::transfer::Account::Failed(e) => ("Spotify (sp_dc cookie)", e.clone()),
-        };
-        let sp_visible = {
-            let s = search_of(ui);
-            s.words.is_empty() || s.all || settings_hit(&format!("{sp_title} {sp_desc}"), &s.words)
-        };
-        setting_row(ui, sp_title, Some(&sp_desc), |ui| {
-            match &sp_account {
-                crate::transfer::Account::SignedIn { .. } => {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    sp_sign_out = pill(ui, "Sign out", Some(icon::LOG_OUT), false).clicked();
-                    sp_open_transfer = pill(ui, "Import", None, true).clicked();
-                }
-                crate::transfer::Account::Unknown | crate::transfer::Account::Loading => {
-                    ui.spinner();
-                }
-                crate::transfer::Account::SignedOut | crate::transfer::Account::Failed(_) => {
-                    if sp_busy {
-                        ui.spinner();
-                    }
-                }
-            }
-        });
-        if sp_visible && matches!(sp_account, crate::transfer::Account::SignedOut | crate::transfer::Account::Failed(_)) && !sp_busy {
-            let w = ui.available_width();
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                let input_w = (w - 116.0).max(160.0);
-                let (rect, _) = ui.allocate_exact_size(vec2(input_w, 38.0), Sense::hover());
-                ui.painter().rect_filled(rect, 10.0, theme::glass(0.08));
-                let inner = rect.shrink2(vec2(12.0, 4.0));
-                let edit = ui.put(
-                    inner,
-                    egui::TextEdit::singleline(&mut app.spotify_sp_dc)
-                        .password(true)
-                        .hint_text(RichText::new("Paste Spotify sp_dc cookie token").color(theme::text_faint()))
-                        .font(theme::regular(13.5))
-                        .frame(egui::Frame::NONE)
-                        .align(Align2::LEFT_CENTER)
-                        .desired_width(inner.width()),
-                );
-                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    sp_connect = true;
-                }
-                if pill(ui, "Connect", None, true).clicked() {
-                    sp_connect = true;
-                }
-            });
-            ui.add_space(10.0);
+        if spotify_open_row(ui, "Sign in to Spotify", &sp_row_desc) {
+            app.spotify_open = true;
         }
         divider(ui);
         // Listen together opens as its own section, under the account it borrows its name from.
@@ -1426,7 +1457,223 @@ fn settings_account(app: &mut App, ui: &mut Ui) {
     if sign_out {
         app.backend.request(crate::backend::Req::Logout);
     }
-    if sp_connect {
+}
+
+/// Settings › Account › Sign in to Spotify: choose between `sp_dc` cookie or OAuth browser sign-in.
+fn settings_spotify_subpage(app: &mut App, ui: &mut Ui) -> bool {
+    ui.add_space(12.0);
+    let back = pill(ui, "Account", Some(icon::CHEVRON_LEFT), false).clicked();
+    page_title(ui, "Sign in to Spotify");
+    ui.label(
+        RichText::new("Connect your Spotify account to import playlists and Liked Songs into YouTube Music. Choose either your sp_dc cookie token or OAuth browser sign-in.")
+            .font(theme::regular(13.5))
+            .color(theme::text_dim()),
+    );
+
+    app.transfer.ensure_account(&app.backend);
+    let sp_account = app.transfer.account.lock().unwrap().clone();
+    let sp_busy = app.transfer.signing_in.load(Ordering::Relaxed);
+    let accent = app.accent_color();
+    let sp_green = Color32::from_rgb(0x1E, 0xD7, 0x60);
+
+    let (mut sp_connect_cookie, mut sp_connect_oauth, mut sp_refresh, mut sp_sign_out, mut sp_open_transfer) = (false, false, false, false, false);
+
+    match &sp_account {
+        crate::transfer::Account::SignedIn { name, library } => {
+            section_label(ui, "Connected account", None);
+            settings_card(ui, |ui| {
+                let w = ui.available_width();
+                let (row_rect, _) = ui.allocate_exact_size(vec2(w, 72.0), Sense::hover());
+                let badge_r = Rect::from_min_size(pos2(row_rect.left(), row_rect.center().y - 20.0), vec2(40.0, 40.0));
+                super::transfer::badge(ui, badge_r);
+                let text_x = badge_r.right() + 14.0;
+                let right_reserve = 320.0;
+                let text_w = (row_rect.right() - text_x - right_reserve).max(160.0);
+                let who = if name.is_empty() { "Spotify account".to_owned() } else { name.clone() };
+                let title_g = widgets::galley(ui, &who, theme::semibold(15.0), theme::text(), text_w);
+                let desc = format!("{} playlists loaded · saved encrypted in {}.", library.len(), crate::vault::label());
+                let desc_g = widgets::galley_wrapped(ui, &desc, theme::regular(12.5), theme::text_dim(), text_w, 2);
+                let text_h = title_g.size().y + 3.0 + desc_g.size().y;
+                let top = row_rect.center().y - text_h / 2.0;
+                ui.painter().galley(pos2(text_x, top), title_g.clone(), theme::text());
+                let tag_g = widgets::galley(ui, "Connected", theme::semibold(11.0), sp_green, 100.0);
+                let tag_rect = Rect::from_min_size(
+                    pos2(text_x + title_g.size().x + 8.0, top + (title_g.size().y - 18.0) / 2.0),
+                    vec2(tag_g.size().x + 14.0, 18.0),
+                );
+                ui.painter().rect_filled(tag_rect, 9.0, theme::with_alpha(sp_green, 0.16));
+                ui.painter().galley(pos2(tag_rect.left() + 7.0, tag_rect.center().y - tag_g.size().y / 2.0), tag_g, sp_green);
+                ui.painter().galley(pos2(text_x, top + title_g.size().y + 3.0), desc_g, theme::text_dim());
+
+                let ctl_rect = Rect::from_min_max(pos2(row_rect.right() - right_reserve, row_rect.top()), row_rect.max);
+                let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(ctl_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+                cui.spacing_mut().item_spacing.x = 8.0;
+                sp_sign_out = pill(&mut cui, "Sign out", Some(icon::LOG_OUT), false).clicked();
+                sp_refresh = pill(&mut cui, "Refresh", None, false).clicked();
+                sp_open_transfer = pill(&mut cui, "Import", Some(icon::LIST_MUSIC), true).clicked();
+            });
+        }
+        crate::transfer::Account::Unknown | crate::transfer::Account::Loading => {
+            section_label(ui, "Status", None);
+            settings_card(ui, |ui| {
+                setting_row(ui, "Connecting to Spotify…", Some("Verifying your session and loading your playlists."), |ui| {
+                    ui.spinner();
+                });
+            });
+        }
+        crate::transfer::Account::SignedOut | crate::transfer::Account::Failed(_) => {
+            if let crate::transfer::Account::Failed(e) = &sp_account {
+                ui.add_space(10.0);
+                egui::Frame::new()
+                    .fill(theme::with_alpha(theme::RED, 0.12))
+                    .stroke(egui::Stroke::new(1.0, theme::with_alpha(theme::RED, 0.30)))
+                    .corner_radius(10.0)
+                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new(e).font(theme::regular(13.0)).color(theme::RED));
+                    });
+            }
+
+            // Option 1: Cookie (`sp_dc`) sign-in
+            section_label(ui, "Option 1 · Cookie token (sp_dc)", None);
+            settings_card(ui, |ui| {
+                ui.add_space(12.0);
+                ui.label(RichText::new("Sign in with sp_dc cookie").font(theme::semibold(14.5)).color(theme::text()));
+                ui.add_space(3.0);
+                ui.label(
+                    RichText::new("Paste your sp_dc cookie value from open.spotify.com. Works with both Free and Premium accounts.")
+                        .font(theme::regular(12.5))
+                        .color(theme::text_dim()),
+                );
+                ui.add_space(12.0);
+
+                let w = ui.available_width();
+                let (bar_rect, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
+                let btn_w = 112.0;
+                let gap = 10.0;
+                let input_rect = Rect::from_min_max(bar_rect.min, pos2((bar_rect.right() - btn_w - gap).max(bar_rect.left() + 160.0), bar_rect.bottom()));
+                let btn_rect = Rect::from_min_max(pos2(input_rect.right() + gap, bar_rect.top()), bar_rect.max);
+
+                let input_id = ui.scope_id().with("spotify-sp-dc-input");
+                let has_focus = ui.memory(|m| m.has_focus(input_id));
+                let fill_a = if has_focus { 0.11 } else { 0.07 };
+                let stroke = if has_focus {
+                    egui::Stroke::new(1.2, theme::with_alpha(accent, 0.65))
+                } else {
+                    egui::Stroke::new(1.0, theme::glass(0.11))
+                };
+                ui.painter().rect_filled(input_rect, 12.0, theme::glass(fill_a));
+                ui.painter().rect_stroke(input_rect, 12.0, stroke, egui::StrokeKind::Inside);
+                widgets::icon_at(ui, pos2(input_rect.left() + 18.0, input_rect.center().y), icon::LINK, 15.0, if has_focus { accent } else { theme::text_dim() });
+
+                let has_text = !app.spotify_sp_dc.is_empty();
+                let right_pad = if has_text { 74.0 } else { 48.0 };
+                let inner = Rect::from_min_max(pos2(input_rect.left() + 36.0, input_rect.top() + 4.0), pos2(input_rect.right() - right_pad, input_rect.bottom() - 4.0));
+                let edit = ui.put(
+                    inner,
+                    egui::TextEdit::singleline(&mut app.spotify_sp_dc)
+                        .id(input_id)
+                        .password(!app.spotify_sp_dc_show)
+                        .hint_text(RichText::new("Paste sp_dc cookie token (e.g. AQB…)").color(theme::text_faint()))
+                        .font(theme::regular(13.5))
+                        .frame(egui::Frame::NONE)
+                        .align(Align2::LEFT_CENTER)
+                        .desired_width(inner.width()),
+                );
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    sp_connect_cookie = true;
+                }
+
+                let toggle_r = Rect::from_min_max(pos2(input_rect.right() - 44.0, input_rect.top() + 6.0), pos2(input_rect.right() - 8.0, input_rect.bottom() - 6.0));
+                let toggle_resp = ui.interact(toggle_r, ui.scope_id().with("spotify-sp-dc-vis"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                ui.painter().text(
+                    toggle_r.center(),
+                    Align2::CENTER_CENTER,
+                    if app.spotify_sp_dc_show { "Hide" } else { "Show" },
+                    theme::semibold(11.5),
+                    if toggle_resp.hovered() { theme::text() } else { theme::text_dim() },
+                );
+                if toggle_resp.clicked() {
+                    app.spotify_sp_dc_show = !app.spotify_sp_dc_show;
+                }
+
+                if has_text {
+                    let clr_r = Rect::from_center_size(pos2(toggle_r.left() - 14.0, input_rect.center().y), Vec2::splat(22.0));
+                    let clr_resp = ui.interact(clr_r, ui.scope_id().with("spotify-sp-dc-clr"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    widgets::icon_at(ui, clr_r.center(), icon::X, 13.0, if clr_resp.hovered() { theme::text() } else { theme::text_dim() });
+                    if clr_resp.clicked() {
+                        app.spotify_sp_dc.clear();
+                    }
+                }
+
+                let mut bui = ui.new_child(egui::UiBuilder::new().max_rect(btn_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+                if pill(&mut bui, "Connect", Some(icon::CHECK), true).clicked() {
+                    sp_connect_cookie = true;
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.label(
+                        RichText::new(format!("Saved encrypted in {} · accepts raw token or full sp_dc=… cookie header.", crate::vault::label()))
+                            .font(theme::regular(11.5))
+                            .color(theme::text_faint()),
+                    );
+                    let help_lbl = if app.spotify_sp_dc_help { "Hide guide" } else { "How to get sp_dc?" };
+                    let help_resp = ui
+                        .add(egui::Label::new(RichText::new(help_lbl).font(theme::semibold(11.5)).color(accent)).sense(Sense::click()))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if help_resp.clicked() {
+                        app.spotify_sp_dc_help = !app.spotify_sp_dc_help;
+                    }
+                });
+                if app.spotify_sp_dc_help {
+                    ui.add_space(8.0);
+                    egui::Frame::new()
+                        .fill(theme::glass(0.05))
+                        .stroke(egui::Stroke::new(1.0, theme::glass(0.08)))
+                        .corner_radius(10.0)
+                        .inner_margin(egui::Margin::symmetric(12, 10))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            for step in [
+                                "1. Open open.spotify.com in your browser and sign in.",
+                                "2. Press F12 (DevTools) → Application (or Storage) → Cookies → https://open.spotify.com.",
+                                "3. Find the cookie named sp_dc and copy its Value.",
+                                "4. Paste the token above and click Connect.",
+                            ] {
+                                ui.label(RichText::new(step).font(theme::regular(12.0)).color(theme::text_dim()));
+                            }
+                        });
+                }
+                ui.add_space(12.0);
+            });
+
+            // Option 2: OAuth / Browser sign-in
+            section_label(ui, "Option 2 · OAuth / Browser", None);
+            settings_card(ui, |ui| {
+                setting_row(
+                    ui,
+                    "Sign in with Spotify",
+                    Some("Opens Spotify's official login window and links your account automatically once signed in."),
+                    |ui| {
+                        if sp_busy {
+                            ui.spinner();
+                        } else {
+                            sp_connect_oauth = pill(ui, "Continue with Spotify", Some(icon::CIRCLE_USER), true).clicked();
+                        }
+                    },
+                );
+            });
+            if sp_busy {
+                ui.add_space(6.0);
+                ui.label(RichText::new("Finish signing in in the Spotify window that opened.").font(theme::regular(12.5)).color(theme::text_dim()));
+            }
+        }
+    }
+
+    if sp_connect_cookie {
         if let Some(token) = crate::transfer::normalize_sp_dc(&app.spotify_sp_dc) {
             app.spotify_sp_dc.clear();
             app.transfer.set_cookie(Some(token), &app.backend);
@@ -1435,14 +1682,24 @@ fn settings_account(app: &mut App, ui: &mut Ui) {
             app.toast("Paste a valid Spotify sp_dc cookie token");
         }
     }
+    if sp_connect_oauth {
+        app.start_spotify_sign_in(ui.ctx());
+    }
+    if sp_refresh {
+        app.transfer.load_account(&app.backend);
+        app.toast("Refreshing Spotify playlists…");
+    }
     if sp_sign_out {
         app.transfer.set_cookie(None, &app.backend);
         app.xfer.picked = None;
         app.toast("Signed out of Spotify");
     }
     if sp_open_transfer {
+        app.spotify_open = false;
         app.actions.push(Action::Go(Page::Transfer));
     }
+
+    back
 }
 
 fn channel_picker(app: &mut App, ui: &mut Ui) {
@@ -1511,7 +1768,7 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
             toggle(ui, &mut app.play_songs, "Play songs, not music videos");
         });
         divider(ui);
-        setting_row(ui, "Output device", Some("Where the music plays. A picked device that isn't connected leaves it to Windows' default until it's back."), |ui| {
+        setting_row(ui, "Output device", Some("Where the music plays. A picked device that isn't connected leaves it to the system default until it's back."), |ui| {
             output_device_picker(app, ui);
         });
         divider(ui);
@@ -2171,13 +2428,6 @@ fn network(app: &mut App, ui: &mut Ui) {
     }
 }
 
-/// Paint `v` into `rect`, from the ICO entry that fits its size in physical pixels.
-pub(super) fn paint_app_icon(ui: &Ui, v: &crate::appicon::Variant, rect: Rect) {
-    let px = (rect.width() * ui.ctx().pixels_per_point()).ceil() as u32;
-    let png = v.png(px);
-    egui::Image::from_bytes(format!("bytes://app-icon/{}-{}.png", v.id, png.len()), png).paint_at(ui, rect);
-}
-
 /// The font setting: the theme's own, a bundled face, or one installed on this PC.
 /// Returns the new choice ("" for the theme's).
 fn font_picker(ui: &mut Ui) -> Option<String> {
@@ -2401,6 +2651,30 @@ pub(super) fn open_row(ui: &mut Ui, title: &str, desc: &str) -> bool {
     let title_h = title_g.size().y;
     ui.painter().galley(pos2(rect.left(), top), title_g, theme::text());
     ui.painter().galley(pos2(rect.left(), top + title_h + 3.0), desc_g, theme::text_dim());
+    widgets::icon_at(ui, pos2(rect.right() - 8.0, rect.center().y), icon::CHEVRON_RIGHT, 16.0, theme::text_faint());
+    resp.clicked()
+}
+
+fn spotify_open_row(ui: &mut Ui, title: &str, desc: &str) -> bool {
+    if !settings_row_shown(ui, title, desc) {
+        return false;
+    }
+    let w = ui.available_width();
+    let icon_sz = 32.0;
+    let gap = 14.0;
+    let text_w = (w - icon_sz - gap - 40.0).max(200.0);
+    let title_g = widgets::galley(ui, title, theme::semibold(14.5), theme::text(), text_w);
+    let desc_g = widgets::galley_wrapped(ui, desc, theme::regular(12.5), theme::text_dim(), text_w, 3);
+    let text_h = title_g.size().y + desc_g.size().y + 3.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, (text_h + 26.0).max(62.0)), Sense::click());
+    let resp = named(resp, title).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let badge_r = Rect::from_min_size(pos2(rect.left(), rect.center().y - icon_sz / 2.0), vec2(icon_sz, icon_sz));
+    super::transfer::badge(ui, badge_r);
+    let text_x = badge_r.right() + gap;
+    let top = rect.center().y - text_h / 2.0;
+    let title_h = title_g.size().y;
+    ui.painter().galley(pos2(text_x, top), title_g, theme::text());
+    ui.painter().galley(pos2(text_x, top + title_h + 3.0), desc_g, theme::text_dim());
     widgets::icon_at(ui, pos2(rect.right() - 8.0, rect.center().y), icon::CHEVRON_RIGHT, 16.0, theme::text_faint());
     resp.clicked()
 }

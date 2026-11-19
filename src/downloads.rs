@@ -91,7 +91,8 @@ pub fn show_file(path: &Path) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", path.display())).spawn();
+        let clean = path.display().to_string().replace('"', "");
+        let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{clean}\"")).spawn();
     }
     // macOS: Finder reveals it.
     #[cfg(target_os = "macos")]
@@ -182,10 +183,22 @@ pub fn save(t: &Track, audio: &[u8], duration_ms: u64, loudness_db: Option<f32>,
     // Every entry keeps its song, so the Downloads page can list it later.
     let song = Some(t.clone());
     st.index.insert(t.id.clone(), Entry { path: path.clone(), duration_ms, loudness_db, stands_for, song });
-    if let Ok(json) = serde_json::to_vec(&st.index) {
-        let _ = std::fs::write(&st.file, json);
+    if let Err(e) = write_index(&st.file, &st.index) {
+        log::warn!("couldn't save downloads index {}: {e:#}", st.file.display());
     }
     Ok(path)
+}
+
+/// Write `downloads.json` atomically via a temp file beside it so a crash never corrupts the index.
+fn write_index(file: &Path, index: &HashMap<String, Entry>) -> anyhow::Result<()> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_vec(index)?;
+    let tmp = file.with_extension("json.part");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, file)?;
+    Ok(())
 }
 
 /// "Artists - Title", safe as a Windows file name.
@@ -250,5 +263,18 @@ mod tests {
         let t = track("What? / Why: \"Now\"...", vec![Link { name: "AC/DC".into(), id: None }]);
         assert_eq!(file_stem(&t), "AC_DC - What_ _ Why_ _Now_");
         assert_eq!(file_stem(&track("...", Vec::new())), "abc");
+    }
+
+    #[test]
+    fn write_index_round_trip() {
+        let dir = std::env::temp_dir().join(format!("bitchord-dl-test-{}", std::process::id()));
+        let file = dir.join("downloads.json");
+        let mut idx = HashMap::new();
+        idx.insert("vid1".into(), Entry { path: dir.join("song.m4a"), duration_ms: 1234, loudness_db: None, stands_for: None, song: None });
+        write_index(&file, &idx).unwrap();
+        assert!(!file.with_extension("json.part").exists());
+        let loaded: HashMap<String, Entry> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(loaded.get("vid1").map(|e| e.duration_ms), Some(1234));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

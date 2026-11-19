@@ -39,7 +39,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// seconds on a cold lookup; cutting it at the search's timeout throws away good copies.
 const STREAM_TIMEOUT: Duration = Duration::from_secs(18);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const SEARCH_LIMIT: usize = 25;
 /// How many of the search's candidates get a `/stream` call before giving up. They're
 /// asked together: one addon answers a cold lookup in the time three sequential ones take.
 const STREAM_TRIES: usize = 3;

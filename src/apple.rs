@@ -486,11 +486,6 @@ fn url_after_key<'a>(html: &'a str, anchor: &str, key: &str) -> Option<&'a str> 
     Some(&tail[..end])
 }
 
-fn mvod(u: Option<&str>) -> Option<String> {
-    let u = u?.replace("\\/", "/");
-    u.starts_with("https://").then_some(u)
-}
-
 fn url_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {

@@ -552,6 +552,10 @@ pub struct App {
     settings_search: String,
     /// Pending Spotify `sp_dc` cookie token typed in Settings › Account.
     spotify_sp_dc: String,
+    /// Whether the `sp_dc` token input in Settings › Account is shown in plain text.
+    spotify_sp_dc_show: bool,
+    /// Whether the "How to get sp_dc?" guide is expanded in Settings › Account › Sign in to Spotify.
+    spotify_sp_dc_help: bool,
     /// The keyboard shortcuts, with what the user changed over the defaults.
     keys: keys::Map,
     /// The shortcut row waiting for a key, if one is being recorded.
@@ -564,6 +568,8 @@ pub struct App {
     jam_device: String,
     /// Settings shows the Listen together section rather than its list of sections.
     jam_open: bool,
+    /// Settings › Account › Sign in to Spotify is open as its own subpage.
+    spotify_open: bool,
     actions: Vec<Action>,
     dialog: Option<Dialog>,
     share_pending: Option<String>,
@@ -724,12 +730,15 @@ impl App {
             coll_search: None,
             settings_search: String::new(),
             spotify_sp_dc: String::new(),
+            spotify_sp_dc_show: false,
+            spotify_sp_dc_help: false,
             keys: keys::Map::default(),
             keys_edit: None,
             jam_server: String::new(),
             jam_user: String::new(),
             jam_device: String::new(),
             jam_open: false,
+            spotify_open: false,
             update_checked: None,
             update_announced: false,
             notes_dialog: None,
@@ -830,6 +839,7 @@ impl App {
             smoke: None,
         };
         app.request_liked(false);
+        app.transfer.ensure_account(&app.backend);
         // Dev hooks: YTM_SMOKE="query" searches and plays the first song ("id:<videoId>[,<videoId>…]"
         // plays that video); YTM_SEARCH
         // only searches; YTM_PAGE opens a page; YTM_NOWPLAYING opens the overlay.
@@ -948,6 +958,7 @@ impl App {
         self.page_changed = -1.0; // stamped with the frame time on the next pass
         // Any section opened inside Settings is left behind with the page.
         self.jam_open = false;
+        self.spotify_open = false;
         // The search box holds the query of the search page you're on, and is empty elsewhere.
         self.search_synced = match &self.page {
             Page::Search(q) => q.clone(),
@@ -1414,15 +1425,24 @@ impl eframe::App for App {
                 });
             // The player: a frosted strip over the bottom of the main section, above the
             // pages, so their last rows fade under it instead of stopping at a seam.
-            let strip = egui::Rect::from_min_max(egui::pos2(section.left(), screen.bottom() - self.bar_height()), egui::pos2(main_right, screen.bottom()));
-            egui::Area::new(egui::Id::new("player-bar"))
-                .fixed_pos(strip.min)
-                .order(egui::Order::Middle)
-                .show(&ctx, |ui| {
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
-                        shell::player_bar(self, ui, now, true);
+            // Hidden smoothly while Settings is open, and shown again on every other page.
+            let bar_vis = theme::anim_bool(&ctx, "player-bar-visible", self.page != Page::Settings, 0.20);
+            if bar_vis > 0.001 {
+                let bh = self.bar_height();
+                let slide = (1.0 - theme::ease_out(bar_vis)) * (bh + 16.0);
+                let strip = egui::Rect::from_min_max(
+                    egui::pos2(section.left(), screen.bottom() - bh + slide),
+                    egui::pos2(main_right, screen.bottom() + slide),
+                );
+                egui::Area::new(egui::Id::unique("player-bar"))
+                    .fixed_pos(strip.min)
+                    .order(egui::Order::Middle)
+                    .show(&ctx, |ui| {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+                            shell::player_bar(self, ui, now, true);
+                        });
                     });
-                });
+            }
         }
         if np > 0.001 {
             let pages = theme::set_mode(&ctx, false);

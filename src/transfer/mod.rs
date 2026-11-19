@@ -202,7 +202,7 @@ pub enum Account {
     Unknown,
     SignedOut,
     Loading,
-    SignedIn { name: String, library: Vec<spotify::Entry> },
+    SignedIn { name: String, library: Arc<Vec<spotify::Entry>> },
     Failed(String),
 }
 
@@ -349,7 +349,7 @@ impl Transfer {
                 return; // signed out or in again meanwhile
             }
             *account = match res {
-                Ok(a) => Account::SignedIn { name: a.name, library: a.library },
+                Ok(a) => Account::SignedIn { name: a.name, library: Arc::new(a.library) },
                 Err(e) if e.is::<spotify::SignedOut>() => {
                     crate::vault::delete(VAULT, &this.data_dir);
                     Account::Failed(e.to_string())

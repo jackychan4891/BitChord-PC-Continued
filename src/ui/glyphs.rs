@@ -50,7 +50,7 @@ pub const LUCIDE_GLYPH: f32 = 18.0;
 fn texture(ui: &Ui, glyph: &'static [u8]) -> Option<egui::TextureId> {
     let ctx = ui.ctx();
     // Each const has its own address, so it doubles as the cache key.
-    let id = egui::Id::new(("bc-glyph", glyph.as_ptr()));
+    let id = egui::Id::unique(("bc-glyph", glyph.as_ptr()));
     if let Some(t) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
         return Some(t.id());
     }

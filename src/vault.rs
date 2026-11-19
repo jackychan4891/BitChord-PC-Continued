@@ -11,6 +11,18 @@ use std::path::Path;
 
 const SERVICE: &str = "ytm-rs";
 
+/// Human-readable name of the OS credential store on this platform.
+pub fn label() -> &'static str {
+    #[cfg(windows)]
+    { "Windows Credential Manager" }
+    #[cfg(target_os = "macos")]
+    { "macOS Keychain" }
+    #[cfg(target_os = "linux")]
+    { "your Linux keyring" }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    { "local encrypted storage" }
+}
+
 /// The credential names for `name`, scoped to the data folder when it isn't the
 /// default one (`YTM_DATA_DIR` dev profiles, tests), so those never share or touch
 /// the real sign-ins.
@@ -113,6 +125,7 @@ mod file {
     pub fn set(key: &str, dir: &Path, secret: &[u8]) -> anyhow::Result<()> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
+        std::fs::create_dir_all(dir)?;
         let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path(key, dir))?;
         Ok(f.write_all(secret)?)
     }

@@ -167,7 +167,7 @@ pub fn sidebar_collapse(app: &App, ctx: &egui::Context) -> f32 {
 /// The small chevron that walks the page history, centred on `at`.
 fn history_button(ui: &mut Ui, at: Pos2, glyph: char, name: &str) -> bool {
     let rect = Rect::from_center_size(at, Vec2::splat(22.0));
-    let resp = named(ui.interact(rect, ui.id().with(name), Sense::click()), name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let resp = named(ui.interact(rect, ui.scope_id().with(name), Sense::click()), name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
     let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.15);
     if h > 0.0 {
         ui.painter().circle_filled(rect.center(), 11.0, theme::glass(0.10 * h));
@@ -196,7 +196,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         // Full strength in both states: `a` is the label fade, and the rail has no labels to
         // fade — tinting the mark by it left the collapsed sidebar with no logo at all.
         mark(ui, Rect::from_center_size(logo.center(), vec2(30.0, 20.0)), theme::text());
-        let resp = named(ui.interact(logo, ui.id().with("sidebar-home"), Sense::click()), "Home");
+        let resp = named(ui.interact(logo, ui.scope_id().with("sidebar-home"), Sense::click()), "Home");
         let resp = if collapsed { resp } else { resp.on_hover_cursor(egui::CursorIcon::PointingHand) };
         if resp.clicked() && !collapsed {
             app.actions.push(Action::Go(Page::Home));
@@ -271,17 +271,72 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     let list_h = (ui.available_height() - bottom_h).max(0.0);
     ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
         if !app.logged_in {
-            // Too wide to squeeze: cross-fade the message and the rail's icon.
-            if t < 0.5 {
-                ui.multiply_opacity(1.0 - 2.0 * t);
-                ui.label(egui::RichText::new("Sign in to see your playlists").color(theme::text_dim()));
-                ui.add_space(8.0);
-                if widgets::pill(ui, "Sign in", None, false).clicked() {
-                    app.start_sign_in(ui.ctx());
+            app.transfer.ensure_account(&app.backend);
+            let sp_account = app.transfer.account.lock().unwrap().clone();
+            match sp_account {
+                crate::transfer::Account::SignedIn { library, .. } => {
+                    let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0 * (1.0 - t)), Sense::hover());
+                    if a > 0.0 {
+                        ui.painter().text(head.left_top() + vec2(8.0, 0.0), Align2::LEFT_TOP, "SPOTIFY PLAYLISTS", theme::semibold(11.0), theme::with_alpha(theme::text_faint(), a));
+                    }
+                    let bars = if t > 0.0 { egui::scroll_area::ScrollBarVisibility::AlwaysHidden } else { egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded };
+                    egui::ScrollArea::vertical().id_salt("sidebar-sp-pl").auto_shrink(false).scroll_bar_visibility(bars).show(ui, |ui| {
+                        for e in library.iter() {
+                            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::click());
+                            if !ui.is_rect_visible(rect) {
+                                continue;
+                            }
+                            let mut resp = named(resp, &e.name).on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if collapsed {
+                                resp = resp.on_hover_text(&e.name);
+                            }
+                            let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.15);
+                            let selected = app.page == Page::Transfer && app.xfer.picked.as_ref() == Some(&e.source);
+                            ui.painter().rect_filled(rect, 8.0, theme::glass(0.05 * h + if selected { 0.08 } else { 0.0 }));
+                            let img = Rect::from_center_size(pos2(rect.left() + ICON_X, rect.center().y), Vec2::splat(36.0));
+                            if let Some(url) = &e.art {
+                                let thumbs = vec![crate::model::Thumb { url: url.clone(), width: 64, height: 64 }];
+                                paint_cover(ui, img, &thumbs, theme::thumb_radius(), 1.0);
+                            } else {
+                                super::transfer::badge(ui, img);
+                            }
+                            if a > 0.0 {
+                                let w = full_w - 58.0;
+                                let sub = match e.count {
+                                    Some(n) => format!("{n} songs"),
+                                    None if !e.owner.is_empty() => e.owner.clone(),
+                                    None => "Spotify".to_owned(),
+                                };
+                                text_at(ui, pos2(img.right() + 10.0, rect.top() + 7.0), &e.name, theme::semibold(13.5), theme::with_alpha(theme::text(), a), w);
+                                text_at(ui, pos2(img.right() + 10.0, rect.top() + 26.0), &sub, theme::regular(12.0), theme::with_alpha(theme::text_dim(), a), w);
+                            }
+                            if resp.clicked() {
+                                app.xfer.picked = Some(e.source.clone());
+                                app.actions.push(Action::Go(Page::Transfer));
+                            }
+                        }
+                    });
                 }
-            } else {
-                ui.multiply_opacity(2.0 * t - 1.0);
-                nav(ui, glyphs::PERSON_CIRCLE, LUCIDE, "Sign in", Page::Settings, false, &mut go_to);
+                crate::transfer::Account::Unknown | crate::transfer::Account::Loading => {
+                    ui.horizontal(|ui| {
+                        ui.add_space(ICON_X - 8.0);
+                        ui.spinner();
+                    });
+                }
+                crate::transfer::Account::SignedOut | crate::transfer::Account::Failed(_) => {
+                    // Too wide to squeeze: cross-fade the message and the rail's icon.
+                    if t < 0.5 {
+                        ui.multiply_opacity(1.0 - 2.0 * t);
+                        ui.label(egui::RichText::new("Sign in to see your playlists").color(theme::text_dim()));
+                        ui.add_space(8.0);
+                        if widgets::pill(ui, "Sign in", None, false).clicked() {
+                            app.start_sign_in(ui.ctx());
+                        }
+                    } else {
+                        ui.multiply_opacity(2.0 * t - 1.0);
+                        nav(ui, glyphs::PERSON_CIRCLE, LUCIDE, "Sign in", Page::Settings, false, &mut go_to);
+                    }
+                }
             }
             return;
         }
@@ -318,7 +373,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 Target::Playlist(id) => app.playlist_order.iter().position(|x| x == id).unwrap_or(usize::MAX),
                 _ => usize::MAX,
             });
-            let drag_key = egui::Id::new("sidebar-pl-drag");
+            let drag_key = egui::Id::unique("sidebar-pl-drag");
             let dragging: Option<String> = ui.data(|d| d.get_temp(drag_key));
             let down = ui.input(|i| i.pointer.any_down());
             let pointer = ui.input(|i| i.pointer.interact_pos());
@@ -444,6 +499,10 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
     egui::Area::new(ui.scope_id().with("account")).order(egui::Order::Middle).fixed_pos(at).show(ui.ctx(), |ui| {
         let (r, resp) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::click());
         let resp = named(resp, "Account").on_hover_cursor(egui::CursorIcon::PointingHand);
+        let sp_name = match &*app.transfer.account.lock().unwrap() {
+            crate::transfer::Account::SignedIn { name, .. } => Some(name.clone()),
+            _ => None,
+        };
         let initial = app.account_name.as_deref().and_then(|n| n.chars().next()).unwrap_or('?');
         if app.logged_in {
             ui.painter().circle_filled(r.center(), 18.0, theme::lerp_color(app.accent_color(), Color32::BLACK, 0.35));
@@ -452,11 +511,18 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
             } else {
                 ui.painter().text(r.center(), Align2::CENTER_CENTER, initial, theme::bold(16.0), Color32::WHITE);
             }
+        } else if let Some(name) = &sp_name {
+            let sp_initial = name.chars().next().map(|c| c.to_ascii_uppercase()).unwrap_or('S');
+            ui.painter().circle_filled(r.center(), 18.0, Color32::from_rgb(0x1E, 0xD7, 0x60));
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, sp_initial, theme::bold(16.0), Color32::from_rgb(12, 12, 12));
         } else {
             ui.painter().circle_filled(r.center(), 18.0, theme::glass(0.12));
             icon_at(ui, r.center(), icon::USER, 18.0, theme::text_dim());
         }
         if resp.clicked() {
+            if !app.logged_in && sp_name.is_some() {
+                app.spotify_open = true;
+            }
             app.actions.push(Action::Go(Page::Settings));
         }
         if app.loading {
@@ -696,35 +762,23 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
     if frosted {
         // The page scrolls on under this strip: fade it out rather than end it at the
         // player's edge. Clicks in the fade stay with the player, not the rows beneath.
-        vgradient(ui.painter(), full, theme::panel(0.0), theme::panel(0.66));
-        ui.interact(full, ui.id().with("player-strip"), Sense::hover());
+        vgradient(ui.painter(), full, theme::panel(0.0), theme::panel(0.76));
+        ui.interact(full, ui.scope_id().with("player-strip"), Sense::hover());
     }
     const H: f32 = 56.0;
     let w = (full.width() - 24.0).min(668.0);
     let cap = Rect::from_min_size(pos2(full.center().x - w / 2.0, full.bottom() - 16.0 - H), vec2(w, H));
     let ctx = ui.ctx().clone();
     let accent = app.accent_color();
-    widgets::soft_shadow(ui, cap, H / 2.0, 20.0, 0.40);
-    // Frosted blur-glass capsule tinted by the active theme and accent color,
-    // framed with a soft WhiteSmoke (#F5F5F5) glowing border.
-    let glass_tint = theme::lerp_color(theme::surface_fill(), accent, if theme::light() { 0.14 } else { 0.22 });
-    ui.painter().rect_filled(cap, H / 2.0, theme::with_alpha(glass_tint, if theme::light() { 0.76 } else { 0.66 }));
-    ui.painter().rect_filled(cap, H / 2.0, theme::glass(if theme::light() { 0.04 } else { 0.06 }));
-    let white_smoke = Color32::from_rgb(245, 245, 245);
-    ui.painter().rect_stroke(
-        cap.expand(3.0),
-        H / 2.0 + 3.0,
-        egui::Stroke::new(2.0, theme::with_alpha(white_smoke, 0.08)),
-        egui::StrokeKind::Outside,
-    );
-    ui.painter().rect_stroke(
-        cap.expand(1.5),
-        H / 2.0 + 1.5,
-        egui::Stroke::new(1.5, theme::with_alpha(white_smoke, 0.18)),
-        egui::StrokeKind::Outside,
-    );
-    ui.painter().rect_stroke(cap, H / 2.0, egui::Stroke::new(1.2, theme::with_alpha(white_smoke, 0.48)), egui::StrokeKind::Inside);
-    ui.painter().hline(cap.x_range().shrink(26.0), cap.top() + 1.0, egui::Stroke::new(1.0, theme::with_alpha(white_smoke, 0.35)));
+    widgets::soft_shadow(ui, cap, H / 2.0, 28.0, 0.34);
+    // Thick acrylic frosted glass capsule: heavier diffusion layers so scrolling content
+    // beneath is deeply softened while staying synced with the theme and accent color.
+    let frosted_base = theme::lerp_color(theme::surface_fill(), accent, if theme::light() { 0.08 } else { 0.10 });
+    ui.painter().rect_filled(cap, H / 2.0, theme::panel(if theme::light() { 0.72 } else { 0.68 }));
+    ui.painter().rect_filled(cap, H / 2.0, theme::with_alpha(frosted_base, if theme::light() { 0.42 } else { 0.36 }));
+    ui.painter().rect_filled(cap, H / 2.0, theme::glass(if theme::light() { 0.14 } else { 0.13 }));
+    ui.painter().rect_filled(cap, H / 2.0, theme::with_alpha(accent, if theme::light() { 0.07 } else { 0.09 }));
+    ui.painter().rect_stroke(cap, H / 2.0, egui::Stroke::new(1.0, theme::glass(0.10)), egui::StrokeKind::Inside);
 
     let status = app.audio.status.clone();
     // An Automix handoff keeps the outgoing song on this strip until the next one is
@@ -1062,7 +1116,7 @@ fn mark(ui: &Ui, r: Rect, tint: Color32) {
 
 /// Where Mute keeps the volume to go back to (the player bar's and the mini player's).
 pub fn unmute_id() -> egui::Id {
-    egui::Id::new("unmute")
+    egui::Id::unique("unmute")
 }
 
 /// Mute and back, from the player bar, the mini strip or the keyboard. What the volume

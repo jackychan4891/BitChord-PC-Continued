@@ -12,7 +12,7 @@ use crate::theme::{self, icon};
 
 /// Where the player remembers the last song whose lyrics were asked for by name.
 fn forced_id() -> egui::Id {
-    egui::Id::new("np-lyrics-forced")
+    egui::Id::unique("np-lyrics-forced")
 }
 
 /// Was this song's panel asked for, even though it has nothing to show? The mark is the
@@ -917,7 +917,7 @@ fn quality_mark_aspect(atmos: bool) -> f32 {
 /// The icon as white pixels with its own alpha, so it takes the badge's tint.
 fn quality_icon_texture(ui: &Ui, atmos: bool, mark: bool) -> egui::TextureHandle {
     let ctx = ui.ctx();
-    let id = egui::Id::new(("quality-icon", atmos, mark));
+    let id = egui::Id::unique(("quality-icon", atmos, mark));
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return tex;
     }
