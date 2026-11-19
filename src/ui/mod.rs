@@ -266,9 +266,19 @@ pub struct App {
     ch: Channels,
     media: Option<Media>,
     discord: Option<crate::discord::Discord>,
-    discord_enabled: bool,
+    pub discord_enabled: bool,
+    pub discord_use_details: bool,
+    pub discord_show_audio_quality: bool,
+    pub discord_advanced_mode: bool,
+    pub discord_activity_type: crate::discord::ActivityTypeChoice,
+    pub discord_activity_name: String,
+    pub discord_button1_visible: bool,
+    pub discord_button1_text: String,
+    pub discord_button2_visible: bool,
+    pub discord_button2_text: String,
     /// Last state sent to Discord, to send only real changes.
     discord_sent: Option<crate::discord::Presence>,
+    discord_sent_config: Option<crate::discord::Config>,
     /// The Last.fm account scrobbles go to; a sign-in in progress and its outcome.
     lastfm_user: Option<String>,
     lastfm_busy: Arc<AtomicBool>,
@@ -575,6 +585,15 @@ impl App {
         // Dev hook: YTM_FONT=<font name> tries a font without saving it.
         theme::set_font_choice(&dev_var("YTM_FONT").map(str::to_owned).or_else(|| get("font")).unwrap_or_default());
         let discord_enabled = get("discord_enabled").is_none_or(|v| v == "1");
+        let discord_use_details = get("discord_use_details").is_some_and(|v| v == "1");
+        let discord_show_audio_quality = get("discord_show_audio_quality").is_none_or(|v| v == "1");
+        let discord_advanced_mode = get("discord_advanced_mode").is_some_and(|v| v == "1");
+        let discord_activity_type = crate::discord::ActivityTypeChoice::from_key(&get("discord_activity_type").unwrap_or_else(|| "listening".to_owned()));
+        let discord_activity_name = get("discord_activity_name").unwrap_or_default();
+        let discord_button1_visible = get("discord_button1_visible").is_none_or(|v| v == "1");
+        let discord_button1_text = get("discord_button1_text").unwrap_or_else(|| "Listen on YouTube Music".to_owned());
+        let discord_button2_visible = get("discord_button2_visible").is_none_or(|v| v == "1");
+        let discord_button2_text = get("discord_button2_text").unwrap_or_else(|| "BitChord".to_owned());
         let app_icon = crate::appicon::load(backend.data_dir());
         let wgpu_renderer = crate::renderer::load(backend.data_dir()) == crate::renderer::Renderer::Wgpu;
         // Updates reinstall the shortcuts with the classic icon: always put ours back,
@@ -608,7 +627,17 @@ impl App {
             media,
             discord: discord_enabled.then(crate::discord::Discord::spawn).flatten(),
             discord_enabled,
+            discord_use_details,
+            discord_show_audio_quality,
+            discord_advanced_mode,
+            discord_activity_type,
+            discord_activity_name,
+            discord_button1_visible,
+            discord_button1_text,
+            discord_button2_visible,
+            discord_button2_text,
             discord_sent: None,
+            discord_sent_config: None,
             lastfm_user: crate::lastfm::user(),
             lastfm_busy: Default::default(),
             lastfm_result: Default::default(),
@@ -1452,6 +1481,15 @@ impl eframe::App for App {
             storage.set_string("last_version", crate::update::current_version());
         }
         storage.set_string("discord_enabled", b(self.discord_enabled));
+        storage.set_string("discord_use_details", b(self.discord_use_details));
+        storage.set_string("discord_show_audio_quality", b(self.discord_show_audio_quality));
+        storage.set_string("discord_advanced_mode", b(self.discord_advanced_mode));
+        storage.set_string("discord_activity_type", self.discord_activity_type.key().to_owned());
+        storage.set_string("discord_activity_name", self.discord_activity_name.clone());
+        storage.set_string("discord_button1_visible", b(self.discord_button1_visible));
+        storage.set_string("discord_button1_text", self.discord_button1_text.clone());
+        storage.set_string("discord_button2_visible", b(self.discord_button2_visible));
+        storage.set_string("discord_button2_text", self.discord_button2_text.clone());
         if dev_var("YTM_APPEARANCE").is_none() {
             storage.set_string("appearance", self.appearance.key().to_owned());
         }

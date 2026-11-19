@@ -1587,8 +1587,14 @@ fn settings_appearance(app: &mut App, ui: &mut Ui) {
 fn settings_window(app: &mut App, ui: &mut Ui) {
     section_label(ui, "Window", None);
     settings_card(ui, |ui| {
-        setting_row(ui, "Close to tray", Some("Clicking × hides the window and keeps the music playing. Click the tray icon to bring it back, or right-click it to quit."), |ui| {
+        setting_row(ui, "Close to tray", Some("Clicking × hides the window and keeps the music playing. Press Ctrl+Q or hold Shift while closing to quit immediately."), |ui| {
             toggle(ui, &mut app.close_to_tray, "Close to tray");
+        });
+        divider(ui);
+        setting_row(ui, "Quit BitChord", Some("Close the application and stop playback (Ctrl+Q)."), |ui| {
+            if ui.button("Quit BitChord").clicked() {
+                app.quit(ui.ctx());
+            }
         });
         divider(ui);
         setting_row(ui, "Collapse sidebar", Some("Show only icons in the sidebar, for narrow windows. The menu button at its top does the same."), |ui| {
@@ -1625,12 +1631,101 @@ fn settings_window(app: &mut App, ui: &mut Ui) {
 /// Settings › Connections.
 fn settings_connections(app: &mut App, ui: &mut Ui) {
     let mut discord_enabled = app.discord_enabled;
-    section_label(ui, "Connections", None);
+    section_label(ui, "Discord", None);
     settings_card(ui, |ui| {
-        setting_row(ui, "Discord", Some("Show what you're playing on your Discord profile."), |ui| {
+        setting_row(ui, "Show what you're playing", Some("Display the currently playing song on your Discord profile."), |ui| {
             toggle(ui, &mut discord_enabled, "Discord");
         });
-        divider(ui);
+        if discord_enabled {
+            divider(ui);
+            setting_row(
+                ui,
+                "Lead with the song",
+                Some("Puts the track title first in your status; otherwise the artist leads."),
+                |ui| {
+                    toggle(ui, &mut app.discord_use_details, "Lead with the song");
+                },
+            );
+            divider(ui);
+            setting_row(
+                ui,
+                "Show audio quality",
+                Some("Show format, codec, sample rate and bitrate in the cover tooltip."),
+                |ui| {
+                    toggle(ui, &mut app.discord_show_audio_quality, "Show audio quality");
+                },
+            );
+            divider(ui);
+            setting_row(
+                ui,
+                "Customize card",
+                Some("Activity type, name override and custom button labels."),
+                |ui| {
+                    toggle(ui, &mut app.discord_advanced_mode, "Customize card");
+                },
+            );
+            if app.discord_advanced_mode {
+                divider(ui);
+                let mut pick_act = None;
+                setting_row(ui, "Activity type", Some("The verb shown above the card."), |ui| {
+                    let btn = dropdown_button(ui, app.discord_activity_type.label(), 160.0, "Activity type");
+                    egui::Popup::menu(&btn).show(|ui| {
+                        ui.set_width(160.0);
+                        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                        ui.add_space(4.0);
+                        for a in crate::discord::ActivityTypeChoice::ALL {
+                            if option_row(ui, a.label(), a == app.discord_activity_type).clicked() {
+                                pick_act = Some(a);
+                                ui.close();
+                            }
+                        }
+                        ui.add_space(4.0);
+                    });
+                });
+                if let Some(a) = pick_act {
+                    app.discord_activity_type = a;
+                }
+                divider(ui);
+                setting_row(ui, "Activity name", Some("Overrides the app name shown in Discord; leave blank for default."), |ui| {
+                    setting_text_input(ui, &mut app.discord_activity_name, "BitChord PC Continued", 64);
+                });
+                divider(ui);
+                setting_row(ui, "First button", Some("Show button linking to the song on YouTube Music."), |ui| {
+                    toggle(ui, &mut app.discord_button1_visible, "First button");
+                });
+                if app.discord_button1_visible {
+                    divider(ui);
+                    setting_row(ui, "First button label", Some("Supports {song_name}, {artist_name}, {album_name}."), |ui| {
+                        setting_text_input(ui, &mut app.discord_button1_text, "Listen on YouTube Music", 32);
+                    });
+                }
+                divider(ui);
+                setting_row(ui, "Second button", Some("Show button linking to BitChord's repository."), |ui| {
+                    toggle(ui, &mut app.discord_button2_visible, "Second button");
+                });
+                if app.discord_button2_visible {
+                    divider(ui);
+                    setting_row(ui, "Second button label", Some("Supports {song_name}, {artist_name}, {album_name}."), |ui| {
+                        setting_text_input(ui, &mut app.discord_button2_text, "BitChord", 32);
+                    });
+                }
+            }
+        }
+    });
+
+    if discord_enabled {
+        section_label(ui, "Discord Preview", None);
+        settings_card(ui, |ui| {
+            discord_preview(app, ui);
+        });
+    }
+
+    if discord_enabled != app.discord_enabled {
+        app.set_discord_enabled(discord_enabled);
+    }
+
+    section_label(ui, "Last.fm", None);
+    settings_card(ui, |ui| {
         let busy = app.lastfm_busy.load(Ordering::Relaxed);
         let desc = match &app.lastfm_user {
             Some(name) => format!("Scrobbling what you play to {name}'s profile."),
@@ -1638,7 +1733,7 @@ fn settings_connections(app: &mut App, ui: &mut Ui) {
             None => "Scrobble what you play to your Last.fm profile.".to_owned(),
         };
         let (mut connect, mut disconnect) = (false, false);
-        setting_row(ui, "Last.fm", Some(&desc), |ui| {
+        setting_row(ui, "Last.fm Scrobbler", Some(&desc), |ui| {
             if app.lastfm_user.is_some() {
                 disconnect = pill(ui, "Disconnect", None, false).clicked();
             } else if busy {
@@ -1654,9 +1749,130 @@ fn settings_connections(app: &mut App, ui: &mut Ui) {
             app.lastfm_sign_out();
         }
     });
-    if discord_enabled != app.discord_enabled {
-        app.set_discord_enabled(discord_enabled);
+}
+
+fn setting_text_input(ui: &mut Ui, text: &mut String, hint: &str, max_len: usize) {
+    let (rect, _) = ui.allocate_exact_size(vec2(220.0, 32.0), Sense::hover());
+    ui.painter().rect_filled(rect, 8.0, theme::glass(0.08));
+    let inner = rect.shrink2(vec2(10.0, 4.0));
+    ui.put(
+        inner,
+        egui::TextEdit::singleline(text)
+            .hint_text(RichText::new(hint).color(theme::text_faint()))
+            .font(theme::regular(13.0))
+            .char_limit(max_len)
+            .frame(egui::Frame::NONE)
+            .align(egui::Align2::LEFT_CENTER)
+            .desired_width(inner.width()),
+    );
+}
+
+fn discord_preview(app: &App, ui: &mut Ui) {
+    let track = app.playing_track();
+    let sample_title = "Never Gonna Give You Up";
+    let sample_artist = "Rick Astley";
+    let sample_album = "Whenever You Need Somebody";
+
+    let title = track.map(|t| t.title.as_str()).unwrap_or(sample_title);
+    let artist = track.map(|t| t.artist_line()).unwrap_or_else(|| sample_artist.to_string());
+    let album = track.and_then(|t| t.album.as_ref().map(|a| a.name.as_str())).unwrap_or(sample_album);
+
+    let name = if app.discord_activity_name.trim().is_empty() {
+        crate::discord::APP_NAME
+    } else {
+        app.discord_activity_name.trim()
+    };
+    let header_text = format!("{} {}", app.discord_activity_type.verb(), name).to_uppercase();
+
+    ui.add_space(2.0);
+    ui.label(RichText::new(&header_text).font(theme::bold(11.0)).color(theme::text_dim()));
+    ui.add_space(10.0);
+
+    ui.horizontal(|ui| {
+        let (art_rect, _) = ui.allocate_exact_size(vec2(76.0, 76.0), Sense::hover());
+        if let Some(t) = track {
+            paint_cover(ui, art_rect, &t.thumbs, 8.0, 1.0);
+        } else {
+            ui.painter().rect_filled(art_rect, 8.0, theme::glass(0.12));
+            ui.painter().text(art_rect.center(), Align2::CENTER_CENTER, "🎵", theme::regular(24.0), theme::text_dim());
+        }
+
+        ui.add_space(12.0);
+        ui.vertical(|ui| {
+            let (title_font, title_color) = if app.discord_use_details {
+                (theme::bold(14.5), theme::text())
+            } else {
+                (theme::regular(14.5), theme::text_dim())
+            };
+            let (artist_font, artist_color) = if app.discord_use_details {
+                (theme::regular(13.5), theme::text_dim())
+            } else {
+                (theme::bold(13.5), theme::text())
+            };
+
+            ui.add(egui::Label::new(RichText::new(title).font(title_font).color(title_color)).truncate());
+            ui.add(egui::Label::new(RichText::new(&artist).font(artist_font).color(artist_color)).truncate());
+
+            if app.discord_show_audio_quality {
+                let quality = app.current_audio_quality().unwrap_or_else(|| "Hi-Res Lossless · FLAC · 24-bit · 96 kHz · Stereo".to_owned());
+                ui.add(egui::Label::new(RichText::new(quality).font(theme::regular(12.0)).color(theme::text_faint())).truncate());
+            }
+
+            ui.add_space(4.0);
+            let pos_secs = app.audio.status.position().as_secs();
+            let dur_secs = (app.audio.status.duration_ms.load(Ordering::Relaxed) / 1000) as u64;
+            let (pos_str, dur_str, fraction) = if dur_secs > 0 {
+                let frac = (pos_secs as f32 / dur_secs as f32).clamp(0.0, 1.0);
+                (super::fmt_time(pos_secs as u32), super::fmt_time(dur_secs as u32), frac)
+            } else {
+                ("1:24".to_string(), "3:32".to_string(), 0.39)
+            };
+
+            ui.horizontal(|ui| {
+                let bar_w = (ui.available_width() - 90.0).max(80.0);
+                let (bar_rect, _) = ui.allocate_exact_size(vec2(bar_w, 4.0), Sense::hover());
+                ui.painter().rect_filled(bar_rect, 2.0, theme::glass(0.15));
+                let filled_w = bar_rect.width() * fraction;
+                let filled_rect = Rect::from_min_size(bar_rect.min, vec2(filled_w, bar_rect.height()));
+                ui.painter().rect_filled(filled_rect, 2.0, Color32::WHITE);
+
+                ui.add_space(8.0);
+                let time_text = format!("{pos_str} / {dur_str}");
+                ui.label(RichText::new(time_text).font(theme::regular(11.0)).color(theme::text_faint()));
+            });
+        });
+    });
+
+    let show_btn1 = app.discord_button1_visible;
+    let show_btn2 = app.discord_button2_visible;
+    if show_btn1 || show_btn2 {
+        ui.add_space(12.0);
+        if show_btn1 {
+            let label = crate::discord::button_label(
+                &crate::discord::resolve_variables(&app.discord_button1_text, title, &artist, Some(album)),
+                "Listen on YouTube Music",
+            );
+            preview_button(ui, &label);
+        }
+        if show_btn2 {
+            if show_btn1 {
+                ui.add_space(6.0);
+            }
+            let label = crate::discord::button_label(
+                &crate::discord::resolve_variables(&app.discord_button2_text, title, &artist, Some(album)),
+                "BitChord",
+            );
+            preview_button(ui, &label);
+        }
     }
+}
+
+fn preview_button(ui: &mut Ui, label: &str) {
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::hover());
+    let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.12);
+    ui.painter().rect_filled(rect, 6.0, theme::glass(0.10 + 0.05 * h));
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, theme::semibold(13.0), theme::text());
 }
 
 /// Settings › Keyboard shortcuts.
