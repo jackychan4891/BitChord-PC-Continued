@@ -51,6 +51,7 @@
 - **Quality controls in the player** — see the active audio quality, prefer Dolby Atmos when available, and revert or upgrade quality from the player menu.
 - **Automix and crossfade** — DJ-style transitions between songs, with a mixing state shown in the player during transitions.
 - **Queue and playback controls** — shuffle, repeat, autoplay, song radio, next-track prefetch, volume normalization, and output device selection.
+- **Bit-perfect output (Windows)** — lossless tracks go straight to the selected DAC in WASAPI exclusive mode, with no Windows mixer, volume, EQ, normalization, crossfade or Automix in the path.
 - **Downloads** — save songs for offline playback.
 
 **Lyrics and interface**

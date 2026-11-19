@@ -310,8 +310,9 @@ impl App {
         let shown = carried.clone().unwrap_or_else(|| track.clone());
         self.audio.status.duration_ms.store(shown.duration.map_or(0, |d| d as u64 * 1000), Ordering::Relaxed);
         // A song running into the next crossfades (so does Next, when that's switched
-        // on); going back or picking a song cuts over.
-        self.audio.send(if self.handoff && at.is_zero() { AudioCmd::Handoff } else { AudioCmd::Stop });
+        // on); going back or picking a song cuts over. Bit-perfect output never mixes
+        // two songs, so even Next is a clean cut there.
+        self.audio.send(if self.handoff && at.is_zero() && !self.bit_perfect { AudioCmd::Handoff } else { AudioCmd::Stop });
         self.buffering = true;
         self.seek_drag = None;
         // A carried song version goes with its music video, which plays if the song won't.
@@ -475,6 +476,17 @@ impl App {
             return;
         }
         let playing = self.playing();
+        // A bit-perfect track that ran out or lost its exclusive stream has nothing
+        // loaded to resume: start it again. A paused one keeps its DAC open.
+        if !playing
+            && !self.buffering
+            && self.bit_perfect
+            && self.audio.status.bit_perfect_current.load(Ordering::Relaxed)
+            && !self.audio.status.bit_perfect.load(Ordering::Relaxed)
+        {
+            self.play_current();
+            return;
+        }
         // The media controls catch up in `logic` once the player has switched.
         self.audio.send(if playing { AudioCmd::Pause } else { AudioCmd::Resume });
     }
@@ -486,6 +498,27 @@ impl App {
         if self.queue.shuffle_upcoming() {
             self.toast("Shuffled up next");
             self.prefetch_next();
+        }
+    }
+
+    /// Switch lossless playback between the normal mixer and WASAPI exclusive output.
+    pub(super) fn set_bit_perfect(&mut self, on: bool) {
+        if self.bit_perfect == on {
+            return;
+        }
+        self.bit_perfect = on;
+        self.audio.send(AudioCmd::SetBitPerfect(on));
+        // Bit-perfect carries stereo PCM, so do not ask for an Atmos rendition while it
+        // is on. The listener's own Atmos choice comes back when it is switched off.
+        self.backend.set_prefer_atmos(self.prefer_atmos && !on);
+        self.toast(if on {
+            "Bit-perfect output on \u{2014} lossless tracks go straight to the DAC"
+        } else {
+            "Bit-perfect output off"
+        });
+        if self.current().is_some() {
+            let at = self.audio.status.position();
+            self.play_current_at(at, false);
         }
     }
 }

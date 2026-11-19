@@ -769,6 +769,14 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
                 app.actions.push(Action::UpgradeQuality);
             }
         }
+        if cfg!(windows) {
+            menu_divider(ui);
+            let mut bit_perfect = app.bit_perfect;
+            switch_row(ui, "Bit-perfect output", &mut bit_perfect);
+            if bit_perfect != app.bit_perfect {
+                app.actions.push(Action::BitPerfect(bit_perfect));
+            }
+        }
         ui.add_space(4.0);
     });
 }

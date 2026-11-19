@@ -1259,6 +1259,24 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
         setting_row(ui, "Output device", Some("Where the music plays. A picked device that isn't connected leaves it to Windows' default until it's back."), |ui| {
             output_device_picker(app, ui);
         });
+        if cfg!(windows) {
+            divider(ui);
+            setting_row(ui, "Bit-perfect output", Some("Send lossless tracks straight to the selected DAC in WASAPI exclusive mode: no Windows mixer, volume, EQ, normalization, crossfade or Automix. YouTube's Opus/AAC stay on the normal path, and volume belongs to the DAC."), |ui| {
+                let mut on = app.bit_perfect;
+                if toggle(ui, &mut on, "Bit-perfect output").changed() {
+                    app.actions.push(Action::BitPerfect(on));
+                }
+            });
+            if app.bit_perfect {
+                let active = app.audio.status.bit_perfect.load(Ordering::Relaxed);
+                let rate = app.audio.status.bit_perfect_rate.load(Ordering::Relaxed);
+                let bits = app.audio.status.bit_perfect_bits.load(Ordering::Relaxed);
+                let status = if active { format!("Active \u{2014} {rate} Hz, {bits}-bit") } else { "Waiting for a lossless track".to_owned() };
+                ui.add_space(2.0);
+                ui.label(RichText::new(status).size(12.0).color(theme::text_dim()));
+                ui.add_space(6.0);
+            }
+        }
         divider(ui);
         setting_row(ui, "Automix", Some("Slide from one song into the next the way a DJ would: both hold their level for a moment, then swap in one smooth move, instead of a straight fade. The mix picks its own length, in phrases of 8 or 16 bars (16 on long songs), following the beat it hears."), |ui| {
             if toggle(ui, &mut app.automix, "Automix").changed() {
@@ -1294,9 +1312,9 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
         hires_sources_editor(app, ui);
         ui.add_space(10.0);
         divider(ui);
-        setting_row(ui, "Prefer Dolby Atmos", Some("Ask the hi-res sources for a Dolby Atmos copy when they offer one. Falls back to the best stereo copy when the stream's codec can't be decoded."), |ui| {
+        setting_row(ui, "Prefer Dolby Atmos", Some("Ask the hi-res sources for a Dolby Atmos copy when they offer one. Falls back to the best stereo copy when the stream's codec can't be decoded. Bit-perfect output always takes the stereo copy."), |ui| {
             if toggle(ui, &mut app.prefer_atmos, "Prefer Dolby Atmos").changed() {
-                app.backend.set_prefer_atmos(app.prefer_atmos);
+                app.backend.set_prefer_atmos(app.prefer_atmos && !app.bit_perfect);
             }
         });
         divider(ui);
