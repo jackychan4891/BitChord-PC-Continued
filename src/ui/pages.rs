@@ -1315,12 +1315,16 @@ fn settings_account(app: &mut App, ui: &mut Ui) {
     section_label(ui, "Account", None);
     let busy = app.signing_in.load(Ordering::Relaxed);
     let (mut sign_in, mut sign_out) = (false, false);
+    let (mut sp_connect, mut sp_sign_out, mut sp_open_transfer) = (false, false, false);
     // Asked again now and then while Settings shows: a failed ask, or a channel made since.
     let now = ui.input(|i| i.time);
     if app.logged_in && app.channels_asked.is_none_or(|at| now - at > 60.0) {
         app.channels_asked = Some(now);
         app.backend.request(crate::backend::Req::Channels);
     }
+    app.transfer.ensure_account(&app.backend);
+    let sp_account = app.transfer.account.lock().unwrap().clone();
+    let sp_busy = app.transfer.signing_in.load(Ordering::Relaxed);
     settings_card(ui, |ui| {
         if app.logged_in {
             let name = app.account_name.clone().unwrap_or_else(|| "YouTube Music".to_owned());
@@ -1344,6 +1348,69 @@ fn settings_account(app: &mut App, ui: &mut Ui) {
             });
         }
         divider(ui);
+        // Spotify sign-in via `sp_dc` cookie token (also powers Transfer from Spotify).
+        let (sp_title, sp_desc) = match &sp_account {
+            crate::transfer::Account::SignedIn { name, library } => {
+                let who = if name.is_empty() { "Signed in to Spotify".to_owned() } else { format!("Signed in as {name}") };
+                ("Spotify", format!("{who} · {} playlists. Ready to import songs and playlists from Spotify.", library.len()))
+            }
+            crate::transfer::Account::Unknown | crate::transfer::Account::Loading => {
+                ("Spotify", "Connecting to Spotify with your sp_dc cookie token…".to_owned())
+            }
+            crate::transfer::Account::SignedOut => {
+                ("Spotify (sp_dc cookie)", "Connect Spotify using your sp_dc cookie token to import playlists and Liked Songs.".to_owned())
+            }
+            crate::transfer::Account::Failed(e) => ("Spotify (sp_dc cookie)", e.clone()),
+        };
+        let sp_visible = {
+            let s = search_of(ui);
+            s.words.is_empty() || s.all || settings_hit(&format!("{sp_title} {sp_desc}"), &s.words)
+        };
+        setting_row(ui, sp_title, Some(&sp_desc), |ui| {
+            match &sp_account {
+                crate::transfer::Account::SignedIn { .. } => {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    sp_sign_out = pill(ui, "Sign out", Some(icon::LOG_OUT), false).clicked();
+                    sp_open_transfer = pill(ui, "Import", None, true).clicked();
+                }
+                crate::transfer::Account::Unknown | crate::transfer::Account::Loading => {
+                    ui.spinner();
+                }
+                crate::transfer::Account::SignedOut | crate::transfer::Account::Failed(_) => {
+                    if sp_busy {
+                        ui.spinner();
+                    }
+                }
+            }
+        });
+        if sp_visible && matches!(sp_account, crate::transfer::Account::SignedOut | crate::transfer::Account::Failed(_)) && !sp_busy {
+            let w = ui.available_width();
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                let input_w = (w - 116.0).max(160.0);
+                let (rect, _) = ui.allocate_exact_size(vec2(input_w, 38.0), Sense::hover());
+                ui.painter().rect_filled(rect, 10.0, theme::glass(0.08));
+                let inner = rect.shrink2(vec2(12.0, 4.0));
+                let edit = ui.put(
+                    inner,
+                    egui::TextEdit::singleline(&mut app.spotify_sp_dc)
+                        .password(true)
+                        .hint_text(RichText::new("Paste Spotify sp_dc cookie token").color(theme::text_faint()))
+                        .font(theme::regular(13.5))
+                        .frame(egui::Frame::NONE)
+                        .align(Align2::LEFT_CENTER)
+                        .desired_width(inner.width()),
+                );
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    sp_connect = true;
+                }
+                if pill(ui, "Connect", None, true).clicked() {
+                    sp_connect = true;
+                }
+            });
+            ui.add_space(10.0);
+        }
+        divider(ui);
         // Listen together opens as its own section, under the account it borrows its name from.
         if open_row(ui, "Listen together", &format!("Play the same music at the same moment, on up to {} devices.", crate::jam::DEFAULT_MEMBERS)) {
             app.jam_open = true;
@@ -1358,6 +1425,23 @@ fn settings_account(app: &mut App, ui: &mut Ui) {
     }
     if sign_out {
         app.backend.request(crate::backend::Req::Logout);
+    }
+    if sp_connect {
+        if let Some(token) = crate::transfer::normalize_sp_dc(&app.spotify_sp_dc) {
+            app.spotify_sp_dc.clear();
+            app.transfer.set_cookie(Some(token), &app.backend);
+            app.toast("Connecting to Spotify…");
+        } else {
+            app.toast("Paste a valid Spotify sp_dc cookie token");
+        }
+    }
+    if sp_sign_out {
+        app.transfer.set_cookie(None, &app.backend);
+        app.xfer.picked = None;
+        app.toast("Signed out of Spotify");
+    }
+    if sp_open_transfer {
+        app.actions.push(Action::Go(Page::Transfer));
     }
 }
 

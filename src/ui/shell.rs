@@ -703,14 +703,28 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
     let w = (full.width() - 24.0).min(668.0);
     let cap = Rect::from_min_size(pos2(full.center().x - w / 2.0, full.bottom() - 16.0 - H), vec2(w, H));
     let ctx = ui.ctx().clone();
-    widgets::soft_shadow(ui, cap, H / 2.0, 20.0, 0.45);
-    // Frosted: the page's colours show through a milky pane, with a lit top half and
-    // a bright rim standing in for the blur egui can't do.
-    ui.painter().rect_filled(cap, H / 2.0, theme::panel(0.88));
-    let top = Rect::from_min_max(cap.min, pos2(cap.max.x, cap.min.y + H * 0.55));
-    ui.painter().rect_filled(top, egui::CornerRadius { nw: 28, ne: 28, sw: 0, se: 0 }, theme::glass(0.07));
-    ui.painter().rect_stroke(cap, H / 2.0, egui::Stroke::new(1.0, theme::glass(0.2)), egui::StrokeKind::Inside);
-    ui.painter().hline(cap.x_range().shrink(26.0), cap.top() + 1.0, egui::Stroke::new(1.0, theme::glass(0.24)));
+    let accent = app.accent_color();
+    widgets::soft_shadow(ui, cap, H / 2.0, 20.0, 0.40);
+    // Frosted blur-glass capsule tinted by the active theme and accent color,
+    // framed with a soft WhiteSmoke (#F5F5F5) glowing border.
+    let glass_tint = theme::lerp_color(theme::surface_fill(), accent, if theme::light() { 0.14 } else { 0.22 });
+    ui.painter().rect_filled(cap, H / 2.0, theme::with_alpha(glass_tint, if theme::light() { 0.76 } else { 0.66 }));
+    ui.painter().rect_filled(cap, H / 2.0, theme::glass(if theme::light() { 0.04 } else { 0.06 }));
+    let white_smoke = Color32::from_rgb(245, 245, 245);
+    ui.painter().rect_stroke(
+        cap.expand(3.0),
+        H / 2.0 + 3.0,
+        egui::Stroke::new(2.0, theme::with_alpha(white_smoke, 0.08)),
+        egui::StrokeKind::Outside,
+    );
+    ui.painter().rect_stroke(
+        cap.expand(1.5),
+        H / 2.0 + 1.5,
+        egui::Stroke::new(1.5, theme::with_alpha(white_smoke, 0.18)),
+        egui::StrokeKind::Outside,
+    );
+    ui.painter().rect_stroke(cap, H / 2.0, egui::Stroke::new(1.2, theme::with_alpha(white_smoke, 0.48)), egui::StrokeKind::Inside);
+    ui.painter().hline(cap.x_range().shrink(26.0), cap.top() + 1.0, egui::Stroke::new(1.0, theme::with_alpha(white_smoke, 0.35)));
 
     let status = app.audio.status.clone();
     // An Automix handoff keeps the outgoing song on this strip until the next one is
@@ -722,7 +736,6 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, frosted: bool) {
     };
     let enabled = track.is_some();
     let playing = app.playing();
-    let accent = app.accent_color();
     let cy = cap.center().y;
     let narrow = cap.width() < 550.0;
     let pad = 16.0;

@@ -36,6 +36,23 @@ const SAVE_EVERY: Duration = Duration::from_secs(5);
 /// The credential the Spotify sign-in (`sp_dc` cookie) is saved under.
 const VAULT: &str = "spotify sp_dc";
 
+/// Extract and clean a Spotify `sp_dc` cookie token from user input (accepts a raw token,
+/// `sp_dc=<token>`, or a semicolon-delimited `Cookie` header containing `sp_dc=...`).
+pub fn normalize_sp_dc(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let val = if let Some(idx) = trimmed.find("sp_dc=") {
+        let after = &trimmed[idx + "sp_dc=".len()..];
+        after.split(';').next().unwrap_or("")
+    } else {
+        trimmed.split(';').next().unwrap_or("")
+    };
+    let clean = val.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+    (!clean.is_empty()).then(|| clean.to_owned())
+}
+
 /// How a song came out of the search.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Search {
@@ -1746,6 +1763,16 @@ mod live {
             sure += r.is_some_and(|(_, s)| s) as usize;
         }
         assert_eq!(sure, songs.len());
+    }
+
+    #[test]
+    fn normalize_sp_dc_accepts_raw_and_cookie_header() {
+        assert_eq!(super::normalize_sp_dc("  AQB_token_123  ").as_deref(), Some("AQB_token_123"));
+        assert_eq!(super::normalize_sp_dc("\"AQB_token_123\"").as_deref(), Some("AQB_token_123"));
+        assert_eq!(super::normalize_sp_dc("sp_dc=AQB_token_123; Path=/; HttpOnly").as_deref(), Some("AQB_token_123"));
+        assert_eq!(super::normalize_sp_dc("sp_t=abc; sp_dc=AQB_token_123; sp_key=xyz").as_deref(), Some("AQB_token_123"));
+        assert_eq!(super::normalize_sp_dc("   "), None);
+        assert_eq!(super::normalize_sp_dc("sp_dc=; Path=/"), None);
     }
 
     /// `YTM_DATA_DIR=<profile> cargo test --release -- --ignored liked_music_live --nocapture`

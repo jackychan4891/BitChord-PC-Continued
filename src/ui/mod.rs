@@ -550,6 +550,8 @@ pub struct App {
     coll_search: Option<(String, String)>,
     /// What's typed in the box above Settings; the page keeps only what it matches.
     settings_search: String,
+    /// Pending Spotify `sp_dc` cookie token typed in Settings › Account.
+    spotify_sp_dc: String,
     /// The keyboard shortcuts, with what the user changed over the defaults.
     keys: keys::Map,
     /// The shortcut row waiting for a key, if one is being recorded.
@@ -721,6 +723,7 @@ impl App {
             hidden_playlists: get("hidden_playlists").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
             coll_search: None,
             settings_search: String::new(),
+            spotify_sp_dc: String::new(),
             keys: keys::Map::default(),
             keys_edit: None,
             jam_server: String::new(),

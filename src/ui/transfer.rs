@@ -20,7 +20,7 @@ const SPOTIFY: Color32 = Color32::from_rgb(30, 215, 96);
 #[derive(Default)]
 pub struct Setup {
     /// The chosen library entry, by source.
-    picked: Option<Source>,
+    pub(super) picked: Option<Source>,
     link: String,
     /// Playlist name; follows the picked source until edited.
     name: String,
