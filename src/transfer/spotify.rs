@@ -141,8 +141,8 @@ impl Client {
     pub async fn connect(sp_dc: Option<&str>, data_dir: &Path) -> Result<Self> {
         let http = crate::proxy::apply(reqwest::Client::builder())
             .user_agent(UA)
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(20))
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(30))
             .build()?;
 
         let resp = http.get("https://open.spotify.com").send().await?.error_for_status()?;
@@ -508,16 +508,24 @@ async fn client_token(http: &reqwest::Client, client_version: &str, client_id: &
         "client_id": client_id,
         "js_sdk_data": {"device_brand": "unknown", "device_model": "unknown", "os": "windows", "os_version": "NT 10.0", "device_id": device_id, "device_type": "computer"},
     }});
-    let resp: Value = http
-        .post("https://clienttoken.spotify.com/v1/clienttoken")
-        .header("Accept", "application/json")
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()
-        .context("Spotify refused a client token")?
-        .json()
-        .await?;
+    let mut tries = 0;
+    let resp: Value = loop {
+        let res = http
+            .post("https://clienttoken.spotify.com/v1/clienttoken")
+            .header("Accept", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status());
+        tries += 1;
+        match res {
+            Ok(r) => break r.json().await?,
+            Err(e) if tries < 3 && (e.is_connect() || e.is_timeout() || e.status().is_some_and(|s| s.is_server_error() || s.as_u16() == 429)) => {
+                tokio::time::sleep(std::time::Duration::from_millis(500 * tries)).await;
+            }
+            Err(e) => return Err(e).context("Spotify refused a client token"),
+        }
+    };
     ensure!(resp["response_type"] == "RESPONSE_GRANTED_TOKEN_RESPONSE", "Spotify refused a client token: {}", resp["response_type"]);
     Ok(resp["granted_token"]["token"].as_str().context("no client token")?.to_owned())
 }
