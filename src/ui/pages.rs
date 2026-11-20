@@ -2149,10 +2149,21 @@ fn settings_window(app: &mut App, ui: &mut Ui) {
 fn settings_connections(app: &mut App, ui: &mut Ui) {
     let mut discord_enabled = app.discord_enabled;
     let prefs_before = app.discord_prefs.clone();
+    let discord_paused = app.discord.as_ref().is_some_and(|d| d.is_paused());
+    let mut discord_reconnect = false;
     section_label(ui, "Connections", None);
     settings_card(ui, |ui| {
-        setting_row(ui, "Discord", Some("Show what you're playing on your Discord profile."), |ui| {
+        let discord_desc = if discord_paused {
+            "Discord wasn't reachable after 2 tries — auto-reconnect paused. Click Reconnect once Discord is open."
+        } else {
+            "Show what you're playing on your Discord profile."
+        };
+        setting_row(ui, "Discord", Some(discord_desc), |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
             toggle(ui, &mut discord_enabled, "Discord");
+            if app.discord_enabled {
+                discord_reconnect = pill(ui, "Reconnect", None, discord_paused).clicked();
+            }
         });
         divider(ui);
         let busy = app.lastfm_busy.load(Ordering::Relaxed);
@@ -2180,6 +2191,12 @@ fn settings_connections(app: &mut App, ui: &mut Ui) {
     });
     if discord_enabled != app.discord_enabled {
         app.set_discord_enabled(discord_enabled);
+    }
+    if discord_reconnect {
+        if let Some(d) = &app.discord {
+            d.reconnect();
+            app.toast("Reconnecting to Discord…");
+        }
     }
     // The card's wording, as the desktop app's Discord settings: a few switches, then
     // the activity and its name behind "Customize the card".

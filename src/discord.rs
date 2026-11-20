@@ -5,6 +5,8 @@
 //! (Discord rate-limits activity updates) and reconnects every 15 s while Discord is
 //! closed.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
@@ -16,6 +18,7 @@ use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 const CLIENT_ID: &str = "1521756469433991299";
 
 const RETRY: Duration = Duration::from_secs(15);
+const MAX_FAILURES: u8 = 2;
 
 /// The name after the verb, until the card is customised: the head of the card reads
 /// "Listening to BitChord PC Continued", which is what the app is called.
@@ -142,22 +145,26 @@ const PROJECT_URL: &str = "https://github.com/jackychan4891/BitChord-PC-Continue
 /// The cover when a song has no artwork URL: the card always has one, as the old app's did.
 const FALLBACK_ART: &str = "https://raw.githubusercontent.com/kushagrasinghx/BitChord/main/app/src/main/ic_launcher-playstore.png";
 
-/// What the worker is told: a new presence, or new wording for the card.
+/// What the worker is told: a new presence, new wording, or a manual reconnect.
 enum Msg {
     Presence(Option<Presence>),
     Prefs(Prefs),
+    Reconnect,
 }
 
 pub struct Discord {
     tx: Sender<Msg>,
+    paused: Arc<AtomicBool>,
 }
 
 impl Discord {
     pub fn spawn() -> Option<Self> {
         let id = std::env::var("YTM_DISCORD_ID").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| CLIENT_ID.to_owned());
         let (tx, rx) = crossbeam_channel::unbounded();
-        std::thread::Builder::new().name("discord".into()).spawn(move || run(&id, rx)).ok()?;
-        Some(Self { tx })
+        let paused = Arc::new(AtomicBool::new(false));
+        let flag = paused.clone();
+        std::thread::Builder::new().name("discord".into()).spawn(move || run(&id, rx, flag)).ok()?;
+        Some(Self { tx, paused })
     }
 
     /// `None` clears the status (paused / stopped).
@@ -169,26 +176,54 @@ impl Discord {
     pub fn set_prefs(&self, p: Prefs) {
         let _ = self.tx.send(Msg::Prefs(p));
     }
+
+    /// True once automatic reconnects stopped after repeated failures.
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    /// Reset the failure counter and try connecting to Discord again now.
+    pub fn reconnect(&self) {
+        self.paused.store(false, Ordering::Relaxed);
+        let _ = self.tx.send(Msg::Reconnect);
+    }
 }
 
-fn run(id: &str, rx: Receiver<Msg>) {
+fn should_pause(failures: u8) -> bool {
+    failures >= MAX_FAILURES
+}
+
+fn run(id: &str, rx: Receiver<Msg>, paused: Arc<AtomicBool>) {
     let mut client: Option<DiscordIpcClient> = None;
     let mut want: Option<Presence> = None;
     let mut prefs = Prefs::default();
     let mut dirty = false;
+    let mut failures: u8 = 0;
     let mut next_try = Instant::now();
     loop {
-        match rx.recv_timeout(RETRY) {
+        let incoming = if should_pause(failures) {
+            rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        } else {
+            rx.recv_timeout(RETRY)
+        };
+        match incoming {
             Ok(m) => {
                 // Let a burst (skip, skip, seek) settle, then send only the last state.
                 std::thread::sleep(Duration::from_millis(400));
+                let mut reconnecting = false;
                 let mut apply = |m: Msg| match m {
                     Msg::Presence(p) => want = p,
                     Msg::Prefs(p) => prefs = p,
+                    Msg::Reconnect => reconnecting = true,
                 };
                 apply(m);
                 while let Ok(m) = rx.try_recv() {
                     apply(m);
+                }
+                if reconnecting {
+                    failures = 0;
+                    paused.store(false, Ordering::Relaxed);
+                    next_try = Instant::now();
                 }
                 dirty = true;
             }
@@ -199,6 +234,9 @@ fn run(id: &str, rx: Receiver<Msg>) {
             continue;
         }
         if client.is_none() {
+            if should_pause(failures) {
+                continue;
+            }
             if Instant::now() < next_try {
                 continue;
             }
@@ -206,10 +244,18 @@ fn run(id: &str, rx: Receiver<Msg>) {
             match c.connect() {
                 Ok(()) => {
                     log::info!("discord: connected");
+                    failures = 0;
+                    paused.store(false, Ordering::Relaxed);
                     client = Some(c);
                 }
                 Err(_) => {
-                    next_try = Instant::now() + RETRY;
+                    failures = failures.saturating_add(1);
+                    if should_pause(failures) {
+                        paused.store(true, Ordering::Relaxed);
+                        log::warn!("discord: failed to connect {MAX_FAILURES} times; stopping retries until reconnected in Settings");
+                    } else {
+                        next_try = Instant::now() + RETRY;
+                    }
                     continue;
                 }
             }
@@ -229,13 +275,20 @@ fn run(id: &str, rx: Receiver<Msg>) {
                 } else {
                     log::debug!("discord: activity set");
                 }
+                failures = 0;
                 dirty = false;
             }
             Err(e) => {
-                log::warn!("discord: {e}; reconnecting");
                 let _ = c.close();
                 client = None;
-                next_try = Instant::now() + RETRY;
+                failures = failures.saturating_add(1);
+                if should_pause(failures) {
+                    paused.store(true, Ordering::Relaxed);
+                    log::warn!("discord: {e}; failed {MAX_FAILURES} times, stopping retries until reconnected in Settings");
+                } else {
+                    log::warn!("discord: {e}; reconnecting");
+                    next_try = Instant::now() + RETRY;
+                }
             }
         }
     }
@@ -289,4 +342,17 @@ fn field(s: &str) -> String {
         out.push('\u{2800}');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pauses_after_two_failures() {
+        assert!(!should_pause(0));
+        assert!(!should_pause(1));
+        assert!(should_pause(2));
+        assert!(should_pause(5));
+    }
 }
