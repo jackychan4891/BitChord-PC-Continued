@@ -229,9 +229,11 @@ pub struct ArtistPage {
 pub struct Library {
     pub playlists: Vec<Card>,
     pub albums: Vec<Card>,
+    pub podcasts: Vec<Card>,
     /// That half didn't load (YouTube Music refused it, say): the one shown stays.
     pub playlists_failed: bool,
     pub albums_failed: bool,
+    pub podcasts_failed: bool,
 }
 
 /// The signed-in account's channels.
@@ -898,7 +900,7 @@ impl Backend {
         let api = &*self.api;
         // Liked songs are Liked Music, loaded like any playlist. Each half shows
         // without the other; it only fails when both do.
-        let (pls, albums) = tokio::join!(ytm::saved_playlists(api), ytm::saved_albums(api));
+        let (pls, albums, podcasts) = tokio::join!(ytm::saved_playlists(api), ytm::saved_albums(api), ytm::saved_podcasts(api));
         let pls = match (pls, &albums) {
             (Err(e), Err(_)) => return Err(e),
             (pls, _) => pls,
@@ -909,11 +911,16 @@ impl Backend {
         if let Err(e) = &albums {
             log::warn!("saved albums didn't load: {e:#}");
         }
+        if let Err(e) = &podcasts {
+            log::warn!("saved podcasts didn't load: {e:#}");
+        }
         Ok(Resp::Library(Library {
             playlists_failed: pls.is_err(),
             albums_failed: albums.is_err(),
+            podcasts_failed: podcasts.is_err(),
             playlists: pls.map(|p| p.into_iter().filter(saved_playlist_visible).collect()).unwrap_or_default(),
             albums: albums.unwrap_or_default(),
+            podcasts: podcasts.map(|p| p.into_iter().filter(saved_playlist_visible).collect()).unwrap_or_default(),
         }))
     }
 
@@ -1644,12 +1651,15 @@ impl Backend {
     async fn stream_playlist(&self, id: String, load: u64, me: bool) -> anyhow::Result<Resp> {
         let (c, mut token, limit) = ytm::playlist_start(&self.api, &id, me, None).await?;
         let mut have = c.tracks.len();
+        // A podcast's later pages carry no header: its episodes are credited from the first.
+        let show = if ytm::is_podcast(&id) { c.artists.clone() } else { Vec::new() };
         let mut resp = Resp::Collection { load, c, more: token.is_some() && have < limit };
         while let Some(t) = token.take().filter(|_| have < limit) {
             let _ = self.tx.send(resp);
             self.wake();
             // Failing here, the page keeps what came.
             let (mut tracks, mut set_ids, next) = ytm::playlist_more(&self.api, &t, me).await?;
+            ytm::credit_episodes(&mut tracks, &show);
             tracks.truncate(limit - have);
             set_ids.truncate(limit - have);
             have += tracks.len();
