@@ -23,9 +23,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const LATEST: &str = "https://api.github.com/repos/razannnnnn/BitChord-PC-Continued/releases/latest";
-const BY_TAG: &str = "https://api.github.com/repos/razannnnnn/BitChord-PC-Continued/releases/tags/v";
-pub const RELEASES: &str = "https://github.com/razannnnnn/BitChord-PC-Continued/releases";
+const LATEST: &str = "https://api.github.com/repos/jackychan4891/BitChord-PC-Official/releases/latest";
+const BY_TAG: &str = "https://api.github.com/repos/jackychan4891/BitChord-PC-Official/releases/tags/v";
+pub const RELEASES: &str = "https://github.com/jackychan4891/BitChord-PC-Official/releases";
 
 /// Release notes by version: `None` while fetching or when there are none.
 type Notes = Arc<Mutex<std::collections::HashMap<String, Option<String>>>>;

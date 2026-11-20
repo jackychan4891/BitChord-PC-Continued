@@ -149,7 +149,7 @@ jobs:
           Priority: optional
           Architecture: amd64
           Depends: libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1, libasound2t64 | libasound2, libdbus-1-3, libssl3t64 | libssl3
-          Maintainer: Razan <razanofc@gmail.com>
+          Maintainer: BitChord Contributors <noreply@github.com>
           Description: Native BitChord desktop music client
           EOF
           dpkg-deb --build --root-owner-group "$pkg" "out/bitchord_${VERSION}_amd64.deb"
