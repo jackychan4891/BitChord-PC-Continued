@@ -13,6 +13,8 @@ pub struct Media {
     controls: MediaControls,
     /// The play state last sent, so the per-frame sync only reports changes.
     playing: Option<bool>,
+    /// The volume last sent, so the per-frame sync only reports changes.
+    volume: Option<f32>,
     #[cfg(windows)]
     thumbbar: Option<Box<std::cell::RefCell<Option<thumbbar::ThumbBar>>>>,
 }
@@ -24,7 +26,7 @@ impl Media {
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Option<Self> {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
-        let config = PlatformConfig { display_name: "YT Music", dbus_name: "ytm_rs", hwnd };
+        let config = PlatformConfig { display_name: "BitChord", dbus_name: "bitchord", hwnd };
         let mut controls = MediaControls::new(config)
             .map_err(|e| log::warn!("media controls unavailable: {e:?}"))
             .ok()?;
@@ -43,6 +45,7 @@ impl Media {
         Some(Self {
             controls,
             playing: None,
+            volume: None,
             #[cfg(windows)]
             thumbbar,
         })
@@ -73,6 +76,17 @@ impl Media {
         #[cfg(windows)]
         if let Some(bar) = self.thumbbar.as_ref().and_then(|c| c.try_borrow_mut().ok()).as_mut().and_then(|b| b.as_mut()) {
             bar.set_playing(playing);
+        }
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        if self.volume.is_some_and(|v| (v - volume).abs() < 0.001) {
+            return;
+        }
+        self.volume = Some(volume);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let _ = self.controls.set_volume(volume as f64);
         }
     }
 }

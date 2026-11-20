@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use souvlaki::MediaControlEvent;
+use souvlaki::{MediaControlEvent, SeekDirection};
 
 use crate::audio::{AudioCmd, AudioEvent};
 use crate::backend::{Req, Resp};
@@ -92,6 +92,36 @@ impl App {
                 MediaControlEvent::Toggle => self.toggle(),
                 MediaControlEvent::Next => self.next(),
                 MediaControlEvent::Previous => self.prev(),
+                MediaControlEvent::SetVolume(vol) => {
+                    let v = (vol as f32).clamp(0.0, 1.0);
+                    self.audio.set_volume(v);
+                    if let Some(m) = &mut self.media {
+                        m.set_volume(v);
+                    }
+                }
+                MediaControlEvent::SetPosition(pos) => {
+                    self.seek_to(pos.0);
+                    self.lyric_view.resume();
+                }
+                MediaControlEvent::Seek(dir) => {
+                    let delta = Duration::from_secs(5);
+                    let cur = self.audio.status.position_smooth();
+                    let target = match dir {
+                        SeekDirection::Forward => cur.saturating_add(delta),
+                        SeekDirection::Backward => cur.saturating_sub(delta),
+                    };
+                    self.seek_to(target);
+                    self.lyric_view.resume();
+                }
+                MediaControlEvent::SeekBy(dir, delta) => {
+                    let cur = self.audio.status.position_smooth();
+                    let target = match dir {
+                        SeekDirection::Forward => cur.saturating_add(delta),
+                        SeekDirection::Backward => cur.saturating_sub(delta),
+                    };
+                    self.seek_to(target);
+                    self.lyric_view.resume();
+                }
                 _ => {}
             }
         }

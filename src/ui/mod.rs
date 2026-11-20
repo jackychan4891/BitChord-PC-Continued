@@ -1147,8 +1147,10 @@ impl eframe::App for App {
         self.skip_segments(ctx, now);
         // System media controls and taskbar buttons follow the player however it changed.
         let playing = self.playing() || self.buffering;
+        let volume = self.audio.volume();
         if let Some(m) = &mut self.media {
             m.set_playing(playing);
+            m.set_volume(volume);
         }
         self.request_lyric_extras();
         // Upload: files from the picker, or dropped onto the window.
