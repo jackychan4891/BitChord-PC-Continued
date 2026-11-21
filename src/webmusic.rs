@@ -18,6 +18,15 @@ use crate::jsc::Solver;
 
 pub const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 const VERSION: &str = "1.20260707.12.00";
+const AUTH_COOKIES: &[(&str, &str)] = &[
+    ("SAPISIDHASH", "SAPISID"),
+    ("SAPISID1PHASH", "__Secure-1PAPISID"),
+    ("SAPISID3PHASH", "__Secure-3PAPISID"),
+];
+
+pub(crate) fn is_auth_cookie(name: &str) -> bool {
+    AUTH_COOKIES.iter().any(|(_, cookie)| *cookie == name)
+}
 
 /// The signed-in Google session: the youtube.com cookies the sign-in window captured,
 /// plus which signed-in account and channel they are for.
@@ -145,10 +154,10 @@ impl Session {
     /// `SAPISIDHASH` authorization, as the web clients send it.
     fn authorization(&self, origin: &str) -> anyhow::Result<String> {
         let ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        let parts: Vec<String> = [("SAPISIDHASH", "SAPISID"), ("SAPISID1PHASH", "__Secure-1PAPISID"), ("SAPISID3PHASH", "__Secure-3PAPISID")]
+        let parts: Vec<String> = AUTH_COOKIES
             .iter()
             .filter_map(|(scheme, cookie)| {
-                let sid = self.get(cookie)?;
+                let sid = self.get(cookie).filter(|value| !value.is_empty())?;
                 let hash = Sha1::digest(format!("{ts} {sid} {origin}"));
                 let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
                 Some(format!("{scheme} {ts}_{hex}"))

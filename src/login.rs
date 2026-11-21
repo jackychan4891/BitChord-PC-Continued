@@ -55,11 +55,13 @@ impl Site {
         }
     }
 
-    /// The cookie that only a signed-in session has.
-    fn session_cookie(self) -> &'static str {
+    fn session(self, cookies: &[wry::cookie::Cookie<'_>]) -> Option<String> {
         match self {
-            Site::Google => "SAPISID",
-            Site::Spotify => "sp_dc",
+            Site::Google if cookies.iter().any(|c| crate::webmusic::is_auth_cookie(c.name()) && !c.value().is_empty()) => {
+                Some(cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; "))
+            }
+            Site::Google => None,
+            Site::Spotify => cookies.iter().find(|c| c.name() == "sp_dc" && !c.value().is_empty()).map(|c| c.value().to_owned()),
         }
     }
 }
@@ -241,13 +243,9 @@ fn run(site: Site, profile_dir: PathBuf) -> anyhow::Result<Outcome> {
         match event {
             Event::UserEvent(()) => match cookies_for(&webview, site.home()) {
                 Ok(cookies) => {
-                    // Landing there while signed out also fires this; only a signed-in
-                    // session has the session cookie (SAPISID, sp_dc).
-                    if let Some(c) = cookies.iter().find(|c| c.name() == site.session_cookie()) {
-                        outcome = Outcome::Cookie(match site {
-                            Site::Spotify => c.value().to_owned(),
-                            Site::Google => cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; "),
-                        });
+                    // The signed-out home page also fires this event.
+                    if let Some(session) = site.session(&cookies) {
+                        outcome = Outcome::Cookie(session);
                         *flow = ControlFlow::Exit;
                     }
                 }
@@ -266,7 +264,8 @@ fn run(site: Site, profile_dir: PathBuf) -> anyhow::Result<Outcome> {
 
 #[cfg(test)]
 mod tests {
-    use super::domain_matches;
+    use super::{Site, domain_matches};
+    use wry::cookie::Cookie;
 
     #[test]
     fn parent_domain_cookies_go_to_subdomains() {
@@ -276,5 +275,19 @@ mod tests {
         assert!(!domain_matches("music.youtube.com", "accounts.google.com"));
         assert!(!domain_matches("music.youtube.com", "tube.com"));
         assert!(!domain_matches("evilyoutube.com", ".youtube.com"));
+    }
+
+    #[test]
+    fn google_login_accepts_each_supported_auth_cookie() {
+        for name in ["SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"] {
+            let cookies = [Cookie::new(name, "test"), Cookie::new("SID", "account")];
+            assert_eq!(Site::Google.session(&cookies), Some(format!("{name}=test; SID=account")));
+        }
+    }
+
+    #[test]
+    fn google_login_does_not_finish_without_an_auth_cookie_value() {
+        let cookies = [Cookie::new("VISITOR_INFO1_LIVE", "visitor"), Cookie::new("SAPISID", "")];
+        assert!(Site::Google.session(&cookies).is_none());
     }
 }
