@@ -283,6 +283,19 @@ pub fn pressed(ctx: &Context, map: &Map) -> Vec<Cmd> {
                     out.push(info.cmd);
                 }
             }
+            // With standard function keys enabled, macOS sends F7–F9 to the focused app.
+            // Keep any explicit binding to those keys ahead of the media shortcut.
+            if MAC && !repeat && modifiers.is_none() && !editing {
+                let transport = match key {
+                    Key::F7 => Cmd::Previous,
+                    Key::F8 => Cmd::PlayPause,
+                    Key::F9 => Cmd::Next,
+                    _ => continue,
+                };
+                if map.clash(transport, Combo::key(*key)).is_none() && !out.contains(&transport) {
+                    out.push(transport);
+                }
+            }
         }
     });
     out
@@ -375,5 +388,29 @@ mod tests {
         assert_ne!(map.get(Cmd::Mute), map.get(Cmd::MiniPlayer));
         assert!(map.get(Cmd::MiniPlayer).command);
         assert!(!map.get(Cmd::Mute).command);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn standard_function_keys_control_playback_unless_rebound() {
+        let ctx = Context::default();
+        ctx.begin_pass(egui::RawInput {
+            events: [Key::F7, Key::F8, Key::F9]
+                .into_iter()
+                .map(|key| Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                })
+                .collect(),
+            ..Default::default()
+        });
+        let mut map = Map::default();
+        assert_eq!(pressed(&ctx, &map), [Cmd::Previous, Cmd::PlayPause, Cmd::Next]);
+        map.set(Cmd::Mute, Combo::key(Key::F8));
+        assert_eq!(pressed(&ctx, &map), [Cmd::Previous, Cmd::Mute, Cmd::Next]);
+        ctx.end_pass().textures_delta.clear();
     }
 }

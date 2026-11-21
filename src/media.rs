@@ -4,15 +4,14 @@
 #[cfg(windows)]
 mod thumbbar;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crossbeam_channel::Sender;
-use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
+use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig};
 
 pub struct Media {
     controls: MediaControls,
-    /// The play state last sent, so the per-frame sync only reports changes.
-    playing: Option<bool>,
+    playback: Option<MediaPlayback>,
     #[cfg(windows)]
     thumbbar: Option<Box<std::cell::RefCell<Option<thumbbar::ThumbBar>>>>,
 }
@@ -42,7 +41,7 @@ impl Media {
         let _ = (tx, wake);
         Some(Self {
             controls,
-            playing: None,
+            playback: None,
             #[cfg(windows)]
             thumbbar,
         })
@@ -56,20 +55,29 @@ impl Media {
             cover_url: cover,
             duration: secs.map(|s| std::time::Duration::from_secs(s as u64)),
         });
+        // Souvlaki replaces the macOS Now Playing dictionary when metadata changes.
+        // Send the elapsed time again even if the play state and position are unchanged.
+        #[cfg(target_os = "macos")]
+        {
+            self.playback = None;
+        }
     }
 
     /// Also called every frame with the player's state, so pausing from anywhere (a
     /// headset, the Windows media flyout, a song ending) updates SMTC and the taskbar.
-    pub fn set_playing(&mut self, playing: bool) {
-        if self.playing == Some(playing) {
+    pub fn set_playing(&mut self, playing: bool, position: Option<Duration>) {
+        let mac = cfg!(target_os = "macos");
+        let progress = position.filter(|_| mac).map(|at| MediaPosition(Duration::from_secs(at.as_secs())));
+        let playback = match (playing, mac && progress.is_none()) {
+            (_, true) => MediaPlayback::Stopped,
+            (true, false) => MediaPlayback::Playing { progress },
+            (false, false) => MediaPlayback::Paused { progress },
+        };
+        if self.playback.as_ref() == Some(&playback) {
             return;
         }
-        self.playing = Some(playing);
-        let _ = self.controls.set_playback(if playing {
-            MediaPlayback::Playing { progress: None }
-        } else {
-            MediaPlayback::Paused { progress: None }
-        });
+        self.playback = Some(playback.clone());
+        let _ = self.controls.set_playback(playback);
         #[cfg(windows)]
         if let Some(bar) = self.thumbbar.as_ref().and_then(|c| c.try_borrow_mut().ok()).as_mut().and_then(|b| b.as_mut()) {
             bar.set_playing(playing);
