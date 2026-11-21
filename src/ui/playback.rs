@@ -188,6 +188,7 @@ impl App {
         self.audio.status.position_ms.store(s.position_ms, Ordering::Relaxed);
         self.resume_at = Some(Duration::from_millis(s.position_ms));
         self.listened_at = s.listened_at;
+        self.show_in_media(&shown);
         self.request_art();
         self.backend.request(Req::Lyrics(shown));
     }
@@ -229,6 +230,7 @@ impl App {
         self.audio.status.position_ms.store(0, Ordering::Relaxed);
         self.resume_at = Some(Duration::ZERO);
         self.resume_counts = true;
+        self.show_in_media(&track);
         self.request_art();
         self.backend.request(Req::Lyrics(track.clone()));
         self.toast(format!("Picked up \"{}\" from your other device. Press play to carry on.", track.title));
@@ -314,8 +316,9 @@ impl App {
             self.request_art();
             self.refresh_lyrics(shown);
         }
+        #[cfg(not(target_os = "macos"))]
         if let Some(m) = &mut self.media {
-            m.set_playing(true);
+            m.set_playing(true, None);
         }
         self.top_up();
     }

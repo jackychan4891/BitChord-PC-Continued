@@ -1200,8 +1200,15 @@ impl eframe::App for App {
         self.skip_segments(ctx, now);
         // System media controls and taskbar buttons follow the player however it changed.
         let playing = self.playing() || self.buffering;
+        #[cfg(target_os = "macos")]
+        let position = self.current().map(|_| match self.mix_hold() {
+            Some(track) => std::time::Duration::from_secs_f32(self.mix_hold_pos(track)),
+            None => self.audio.status.position(),
+        });
+        #[cfg(not(target_os = "macos"))]
+        let position = None;
         if let Some(m) = &mut self.media {
-            m.set_playing(playing);
+            m.set_playing(playing, position);
         }
         self.request_lyric_extras();
         // Upload: files from the picker, or dropped onto the window.

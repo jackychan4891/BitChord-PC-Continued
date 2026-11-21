@@ -98,6 +98,14 @@ impl App {
                 MediaControlEvent::Toggle => self.toggle(),
                 MediaControlEvent::Next => self.next(),
                 MediaControlEvent::Previous => self.prev(),
+                #[cfg(target_os = "macos")]
+                MediaControlEvent::SetPosition(souvlaki::MediaPosition(at))
+                    if self.current().is_some() && !self.buffering && self.mix_hold().is_none() =>
+                {
+                    if let Some(duration) = self.audio.status.duration() {
+                        self.apply(Action::Seek(at.min(duration).as_secs_f32()));
+                    }
+                }
                 _ => {}
             }
         }
