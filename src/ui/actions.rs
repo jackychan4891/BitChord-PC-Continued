@@ -259,6 +259,22 @@ impl App {
         // The mini player has no pages or now playing to go to, nor does a window on
         // its way back until it's there.
         let strip = self.mini.busy();
+        // F11 toggles full screen anywhere in the app (when not typing/editing shortcuts).
+        if !strip && self.keys_edit.is_none() && ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            let next = !(self.window_fullscreen || self.fullscreen);
+            if self.np_open {
+                self.set_fullscreen(ctx, next);
+            } else {
+                self.set_window_fullscreen(ctx, next);
+            }
+        }
+        // Escape always exits full screen if active
+        if !strip && self.keys_edit.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.window_fullscreen || self.fullscreen {
+                self.set_fullscreen(ctx, false);
+                self.set_window_fullscreen(ctx, false);
+            }
+        }
         for cmd in hits.into_iter().chain(mb.then_some(keys::Cmd::Back)).chain(mf.then_some(keys::Cmd::Forward)) {
             match cmd {
                 keys::Cmd::PlayPause => self.toggle(),
@@ -267,6 +283,10 @@ impl App {
                 keys::Cmd::VolumeUp | keys::Cmd::VolumeDown => {
                     let v = (self.audio.volume() + if cmd == keys::Cmd::VolumeUp { 0.05 } else { -0.05 }).clamp(0.0, 1.0);
                     self.audio.set_volume(v);
+                    let now = ctx.input(|i| i.time);
+                    self.vol_pop_until = now + 1.8;
+                    self.last_vol = v;
+                    ctx.request_repaint();
                 }
                 keys::Cmd::Mute => shell::toggle_mute(self, ctx),
                 // The search box keeps its own focus, and asks for it through keys::hit.
@@ -279,15 +299,27 @@ impl App {
                     }
                 }
                 keys::Cmd::Queue if !strip && self.current().is_some() => {
-                    self.np_open = true;
-                    self.np_tab = NpTab::UpNext;
+                    if self.np_open && self.np_tab == NpTab::UpNext {
+                        self.np_tab = if self.no_lyrics() { NpTab::Art } else { NpTab::Lyrics };
+                    } else {
+                        self.np_open = true;
+                        self.np_tab = NpTab::UpNext;
+                    }
                 }
-                keys::Cmd::Fullscreen if !strip && self.np_open => self.set_fullscreen(ctx, !self.fullscreen),
+                keys::Cmd::Fullscreen if !strip => {
+                    let next = !(self.window_fullscreen || self.fullscreen);
+                    if self.np_open {
+                        self.set_fullscreen(ctx, next);
+                    } else {
+                        self.set_window_fullscreen(ctx, next);
+                    }
+                }
                 keys::Cmd::Back if !strip => self.nav_back(),
                 keys::Cmd::Forward if !strip => self.nav_forward(),
                 keys::Cmd::Close if !strip => {
-                    if self.fullscreen {
+                    if self.window_fullscreen || self.fullscreen {
                         self.set_fullscreen(ctx, false);
+                        self.set_window_fullscreen(ctx, false);
                     } else {
                         self.np_open = false;
                     }
@@ -313,13 +345,17 @@ impl App {
         self.mini.toggle(ctx, now);
     }
 
-    pub(super) fn set_fullscreen(&mut self, ctx: &egui::Context, on: bool) {
-        self.fullscreen = on;
-        // Windows: in one step, without winit's unthemed-frame flash.
+    pub fn set_window_fullscreen(&mut self, ctx: &egui::Context, on: bool) {
+        self.window_fullscreen = on;
         if !crate::fullscreen::set(on) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
         }
         ctx.request_repaint();
+    }
+
+    pub(super) fn set_fullscreen(&mut self, ctx: &egui::Context, on: bool) {
+        self.fullscreen = on;
+        self.set_window_fullscreen(ctx, on);
     }
 }
 

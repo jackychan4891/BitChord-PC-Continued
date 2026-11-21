@@ -1,14 +1,9 @@
 name: Release
 
-# Builds an installer and a portable download for every platform from the tagged source:
-# Windows (setup exe and portable zip, x64 and ARM64), Linux (install.sh tarball and
-# portable tarball) and macOS (disk image and portable zip, Apple silicon and Intel), then attaches them all to the GitHub release for that tag.
-# Releases are written as drafts (with notes) and published here only once every
-# file is attached, so the app's updater, which reads the latest published release,
-# never sees one without them. If no release exists yet, one is created as a draft
-# to be given notes and published by hand.
+# Builds a Windows installer from the source and attaches it to GitHub release.
 on:
   push:
+    branches: ["custom-features"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -22,8 +17,6 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
 
@@ -42,29 +35,20 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
-      # Cross-compiled on the x64 runner, whose Visual Studio has the ARM64 tools.
-      - name: Build ARM64
-        run: cargo build --release --locked --target aarch64-pc-windows-msvc
-
       # webview2-com-sys extracts WebView2Loader.dll into its build OUT_DIR rather than
-      # next to the exe; the installer expects it in BinDir, so copy it there per arch.
-      # The build tree is searched by shape, not by package hash, and the crate's own
-      # vendored copy is the fallback, so neither a layout change nor a pruned cache
-      # can strand the installer step looking for a file that was never placed.
+      # next to the exe; the installer expects it in BinDir, so copy it there.
       - name: Stage WebView2Loader.dll
         run: |
-          foreach ($t in @(@{ bin = "target\release"; arch = "x64" }, @{ bin = "target\aarch64-pc-windows-msvc\release"; arch = "arm64" })) {
-            $dll = Get-ChildItem -Path "$($t.bin)\build\*\out\$($t.arch)\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $dll) { $dll = Get-ChildItem -Path "$HOME\.cargo\registry\src\*\webview2-com-sys-*\$($t.arch)\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1 }
-            if (-not $dll) {
-              Get-ChildItem -Path "$($t.bin)\build" -Filter "webview2*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                Get-ChildItem -Path $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { Write-Host "saw: $($_.FullName)" }
-              }
-              Write-Error "WebView2Loader.dll ($($t.arch)) not found under $($t.bin)\build"; exit 1
+          $dll = Get-ChildItem -Path "target\release\build\*\out\x64\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem -Path "$HOME\.cargo\registry\src\*\webview2-com-sys-*\x64\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if (-not $dll) {
+            Get-ChildItem -Path "target\release\build" -Filter "webview2*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+              Get-ChildItem -Path $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { Write-Host "saw: $($_.FullName)" }
             }
-            Copy-Item $dll.FullName "$($t.bin)\WebView2Loader.dll" -Force
-            Write-Host "staged $($dll.FullName) -> $($t.bin)\WebView2Loader.dll"
+            Write-Error "WebView2Loader.dll (x64) not found under target\release\build"; exit 1
           }
+          Copy-Item $dll.FullName "target\release\WebView2Loader.dll" -Force
+          Write-Host "staged $($dll.FullName) -> target\release\WebView2Loader.dll"
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -73,154 +57,36 @@ jobs:
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q installer\bitchord.iss
           if ($LASTEXITCODE) { exit 1 }
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DArm64 installer\bitchord.iss
-          if ($LASTEXITCODE) { exit 1 }
-
-      # The portable zips: the exe, the marker that makes it portable, README and LICENSE.
-      - name: Build portable zips
-        run: |
-          foreach ($b in @(@{ dir = "target\release"; suffix = "" }, @{ dir = "target\aarch64-pc-windows-msvc\release"; suffix = "-arm64" })) {
-            $out = "installer\Output\portable$($b.suffix)"
-            New-Item -ItemType Directory -Force $out | Out-Null
-            Copy-Item "$($b.dir)\bitchord.exe", installer\portable.txt, README.md, LICENSE $out
-            & "$env:SystemRoot\System32\tar.exe" -a -c -f "installer\Output\bitchord-portable-$env:VERSION$($b.suffix).zip" -C $out bitchord.exe portable.txt README.md LICENSE
-            if ($LASTEXITCODE) { exit 1 }
-          }
 
       - uses: actions/upload-artifact@v5
         with:
           name: windows
-          path: |
-            installer/Output/bitchord-setup-${{ env.VERSION }}.exe
-            installer/Output/bitchord-portable-${{ env.VERSION }}.zip
-            installer/Output/bitchord-setup-${{ env.VERSION }}-arm64.exe
-            installer/Output/bitchord-portable-${{ env.VERSION }}-arm64.zip
-          if-no-files-found: error
-
-  linux:
-    # The oldest supported Ubuntu, so the binary runs on older glibc too.
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev libasound2-dev libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev libdbus-1-dev
-
-      - name: Build
-        run: |
-          cargo build --release --locked
-          echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
-
-      # The installer tarball: the binary, install.sh with the launcher and icon it
-      # installs, README and LICENSE. The portable one: the binary, the marker that makes
-      # it portable, README and LICENSE. The updater on Linux reads them too.
-      - name: Build tarballs
-        run: |
-          dir="bitchord-$VERSION-linux-x86_64"
-          mkdir -p "out/$dir"
-          cp target/release/bitchord linux/install.sh linux/bitchord.desktop README.md LICENSE "out/$dir/"
-          cp assets/icon/icon.png "out/$dir/bitchord.png"
-          chmod 755 "out/$dir/bitchord" "out/$dir/install.sh"
-          tar -czf "out/$dir.tar.gz" -C out "$dir"
-          dir="bitchord-portable-$VERSION-linux-x86_64"
-          mkdir -p "out/$dir"
-          cp target/release/bitchord linux/portable.txt README.md LICENSE "out/$dir/"
-          chmod 755 "out/$dir/bitchord"
-          tar -czf "out/$dir.tar.gz" -C out "$dir"
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: linux
-          path: |
-            out/bitchord-${{ env.VERSION }}-linux-x86_64.tar.gz
-            out/bitchord-portable-${{ env.VERSION }}-linux-x86_64.tar.gz
-          if-no-files-found: error
-
-  macos:
-    runs-on: macos-latest
-    env:
-      MACOSX_DEPLOYMENT_TARGET: "11.0"
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
-
-      # The tests run on the Apple silicon runner itself; a release isn't published
-      # without them passing.
-      - name: Test
-        run: cargo test --locked --target aarch64-apple-darwin
-
-      # The Intel build is cross-compiled on the Apple silicon runner.
-      - name: Build
-        run: |
-          cargo build --release --locked --target aarch64-apple-darwin
-          cargo build --release --locked --target x86_64-apple-darwin
-          echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
-
-      # Per architecture, the installer: a disk image with the app and an Applications
-      # link to drag it to. And the portable zip: the app with the portable marker,
-      # README and LICENSE. The updater on macOS reads them too.
-      - name: Build installers and portable zips
-        run: |
-          for arch in aarch64 x86_64; do
-            bin="target/$arch-apple-darwin/release/bitchord"
-            stage="out/dmg-$arch"
-            dmg="out/bitchord-setup-$VERSION-macos-$arch.dmg"
-            mkdir -p "$stage"
-            sh macos/bundle.sh "$bin" "$VERSION" "$stage"
-            ln -s /Applications "$stage/Applications"
-            # hdiutil on the hosted runners sometimes fails with "Resource busy"; retry.
-            for try in 1 2 3; do
-              hdiutil create -volname "BitChord" -srcfolder "$stage" -ov -format UDZO "$dmg" && break
-              sleep 10
-            done
-            [ -f "$dmg" ]
-            dir="bitchord-portable-$VERSION-macos-$arch"
-            mkdir -p "out/$dir"
-            sh macos/bundle.sh "$bin" "$VERSION" "out/$dir" portable
-            cp README.md LICENSE "out/$dir/"
-            ditto -c -k --norsrc --keepParent "out/$dir" "out/$dir.zip"
-          done
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: macos
-          path: |
-            out/bitchord-setup-${{ env.VERSION }}-macos-aarch64.dmg
-            out/bitchord-portable-${{ env.VERSION }}-macos-aarch64.zip
-            out/bitchord-setup-${{ env.VERSION }}-macos-x86_64.dmg
-            out/bitchord-portable-${{ env.VERSION }}-macos-x86_64.zip
+          path: installer/Output/bitchord-setup-${{ env.VERSION }}.exe
           if-no-files-found: error
 
   attach:
-    if: github.ref_type == 'tag'
-    needs: [windows, linux, macos]
+    needs: [windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v5
         with:
+          name: windows
           path: files
-          merge-multiple: true
 
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          ls -l files
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" files/* --clobber
-            gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          TAG="v${VERSION}"
+          echo "Releasing $TAG"
+          ls -la files
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" files/* --clobber
+            gh release edit "$TAG" --draft=false --latest
           else
-            gh release create "$GITHUB_REF_NAME" files/* --draft --title "bitchord ${GITHUB_REF_NAME#v}" --notes ""
+            gh release create "$TAG" files/* --title "BitChord $TAG" --notes "BitChord $TAG Windows Release"
           fi

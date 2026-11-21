@@ -163,6 +163,7 @@ mod imp {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set(on: bool) -> bool {
         let Some(&h) = WINDOW.get() else { return false };
         let hwnd = HWND(h as *mut _);

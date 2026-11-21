@@ -376,6 +376,8 @@ pub struct App {
     output_devices: Vec<crate::audio::OutputDevice>,
     radio_pending: bool,
     seek_drag: Option<f32>,
+    pub vol_pop_until: f64,
+    pub last_vol: f32,
 
     // visuals
     art_key: Option<String>,
@@ -475,6 +477,8 @@ pub struct App {
     np_tab: NpTab,
     queue_open: bool,
     fullscreen: bool,
+    pub fullscreen_show_info: bool,
+    pub window_fullscreen: bool,
     /// The mini player: the window shrunk to a strip.
     mini: mini::Mini,
     /// Every source's lyrics for the current song (by video ID).
@@ -750,6 +754,8 @@ impl App {
             media_cover: Default::default(),
             radio_pending: false,
             seek_drag: None,
+            vol_pop_until: 0.0,
+            last_vol: -1.0,
             art_key: None,
             apple_artists: Default::default(),
             apple_covers: Default::default(),
@@ -805,6 +811,8 @@ impl App {
             np_tab: if get("np_art").is_some_and(|v| v == "1") { NpTab::Art } else { NpTab::Lyrics },
             queue_open: false,
             fullscreen: false,
+            fullscreen_show_info: get("fullscreen_show_info").is_some_and(|v| v == "1"),
+            window_fullscreen: false,
             mini: mini::Mini::load(get),
             lyrics: None,
             lyrics_extras: None,
@@ -1309,6 +1317,14 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.shortcuts(&ctx);
         let now = ctx.input(|i| i.time);
+        let vol = self.audio.volume();
+        if self.last_vol >= 0.0 && (self.last_vol - vol).abs() > 0.005 {
+            self.vol_pop_until = now + 1.8;
+        }
+        self.last_vol = vol;
+        if now < self.vol_pop_until {
+            ctx.request_repaint();
+        }
         let screen = ctx.content_rect();
 
         self.sync_look();
@@ -1331,7 +1347,7 @@ impl eframe::App for App {
         // bar, so the pages and the full-screen background under it aren't drawn.
         let covered = !self.fullscreen && np >= 1.0;
         let bar_strip = egui::Rect::from_min_max(egui::pos2(screen.left(), screen.bottom() - self.bar_height()), screen.max);
-        titlebar::set_fullscreen(&ctx, self.fullscreen);
+        titlebar::set_fullscreen(&ctx, self.fullscreen || self.window_fullscreen);
         // The mini player, or nothing but the background while the window changes size.
         let layout = self.mini.layout(&ctx);
         // The strip's window is cut to the same corner as the artwork it frames; the
@@ -1350,7 +1366,7 @@ impl eframe::App for App {
             return;
         }
         shell::background(self, ui, screen, now, covered.then_some(bar_strip));
-        if !self.fullscreen && !covered {
+        if !self.fullscreen && !self.window_fullscreen && !covered {
             // The top of the window, down to the search box's row: what's on it comes after.
             titlebar::drag_area(ui, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), titlebar::HEIGHT)), "main");
         }
@@ -1571,6 +1587,7 @@ impl eframe::App for App {
         storage.set_string("crossfade_secs", self.crossfade_secs.to_string());
         storage.set_string("show_roman", b(self.show_roman));
         storage.set_string("show_trans", b(self.show_trans));
+        storage.set_string("fullscreen_show_info", b(self.fullscreen_show_info));
         // Background test runs mustn't change the listener's sources or per-song picks.
         if std::env::var_os("YTM_BACKGROUND").is_none() || std::env::var_os("YTM_SAVE_SESSION").is_some() {
             self.lyric_prefs.save(storage);

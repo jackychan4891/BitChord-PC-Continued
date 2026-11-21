@@ -63,7 +63,7 @@ pub fn overlay(app: &mut App, ctx: &egui::Context, now: f64) {
             // Swallow input so the page underneath doesn't react.
             ui.allocate_rect(rect, Sense::click_and_drag());
             // It covers the window's top too: that still moves the window.
-            if !app.fullscreen {
+            if !app.fullscreen && !app.window_fullscreen {
                 super::titlebar::drag_area(ui, Rect::from_min_size(rect.min, vec2(rect.width(), super::titlebar::HEIGHT)), "now-playing");
             }
             let painter = ui.painter_at(rect);
@@ -127,40 +127,49 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     let cs = &look.cover;
     let area = ui.max_rect();
     let no_lyrics = app.no_lyrics();
-    let shown_tab = view(app, ui.ctx());
+    let is_fullscreen = app.fullscreen;
+    let shown_tab = if is_fullscreen { NpTab::Lyrics } else { view(app, ui.ctx()) };
     // The content is this area less its margins: a cover column beside the panel needs
     // 860 points, and below that the cover gives way to the panel.
     let narrow = area.width() - 64.0 < 860.0;
     // Header: on the window buttons' line, when the app draws them.
     let lift = 20.0 - f32::from(super::titlebar::top_margin(20, 44.0));
-    let header = Rect::from_min_size(area.min - vec2(0.0, if app.fullscreen { 0.0 } else { lift }), vec2(area.width(), 44.0));
-    let mut hui = ui.new_child(egui::UiBuilder::new().max_rect(header).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    // The player's own close, top left; the window buttons keep the top right.
-    if icon_button(&mut hui, icon::CHEVRON_DOWN, 22.0, "Close now playing", false).clicked() {
-        app.np_open = false;
-        if app.fullscreen {
-            app.set_fullscreen(ui.ctx(), false);
+    let header = Rect::from_min_size(area.min - vec2(0.0, if is_fullscreen { 0.0 } else { lift }), vec2(area.width(), 44.0));
+    if !is_fullscreen {
+        let mut hui = ui.new_child(egui::UiBuilder::new().max_rect(header).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        // The player's own close, top left; the window buttons keep the top right.
+        if icon_button(&mut hui, icon::CHEVRON_DOWN, 22.0, "Close now playing", false).clicked() {
+            app.np_open = false;
         }
+        hui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(super::titlebar::right_gap(ui.ctx(), ui.max_rect(), 0.0));
+            if icon_button(ui, icon::EXPAND, 20.0, "Full screen (F)", false).clicked() {
+                app.set_fullscreen(ui.ctx(), true);
+            }
+            // Its actions (like, download, share…) are for what's heard: a song version
+            // standing in for the music video. It lives beside the star under the cover;
+            // only when the cover column is hidden (a narrow window showing lyrics) does
+            // it stay up here.
+            let cover_hidden = (narrow || cs.layout == Layout::LyricsOnly) && shown_tab != NpTab::Art;
+            if cover_hidden {
+                let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
+                options_menu(app, ui, r, &heard, shown_tab == NpTab::Lyrics && !no_lyrics, 1.0);
+            }
+        });
     }
-    hui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.add_space(super::titlebar::right_gap(ui.ctx(), ui.max_rect(), 0.0));
-        // Its actions (like, download, share…) are for what's heard: a song version
-        // standing in for the music video. It lives beside the star under the cover;
-        // only when the cover column is hidden (a narrow window showing lyrics) does
-        // it stay up here.
-        let cover_hidden = (narrow || cs.layout == Layout::LyricsOnly) && shown_tab != NpTab::Art;
-        if cover_hidden {
-            let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
-            options_menu(app, ui, r, &heard, shown_tab == NpTab::Lyrics && !no_lyrics);
-        }
-    });
 
-    let content = Rect::from_min_max(pos2(area.left(), header.bottom() + 12.0), area.max);
+    let content = if is_fullscreen {
+        area
+    } else {
+        Rect::from_min_max(pos2(area.left(), header.bottom() + 12.0), area.max)
+    };
     // The side panel (lyrics / up next) slides in and out when its chip is toggled. A
     // song with no lyrics has no lyrics panel to show: it's the artwork instead, unless
     // the panel was asked for and its "no lyrics" note is what's wanted.
     let last_id = egui::Id::unique("np-last-panel");
-    let panel_tab = if shown_tab == NpTab::Art {
+    let panel_tab = if is_fullscreen {
+        NpTab::Lyrics
+    } else if shown_tab == NpTab::Art {
         ui.ctx().data(|d| d.get_temp(last_id)).unwrap_or(NpTab::Lyrics)
     } else {
         ui.ctx().data_mut(|d| d.insert_temp(last_id, shown_tab));
@@ -176,7 +185,9 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     let p = shown;
     // Whichever is leaving slides and fades out over the first 45%, then the other
     // comes in over the last 70%, both easing out, in either direction.
-    let (panel_vis, art_vis) = if shown_tab != NpTab::Art {
+    let (panel_vis, art_vis) = if is_fullscreen {
+        (1.0, 1.0)
+    } else if shown_tab != NpTab::Art {
         (theme::ease_out((p - 0.3) / 0.7), 1.0 - theme::ease_out(p / 0.45))
     } else {
         let q = 1.0 - p;
@@ -184,7 +195,7 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     };
     // The cover gliding between its two places (wide layouts): a gentle S-curve.
     let glide = p * p * (3.0 - 2.0 * p);
-    let lyrics_only = narrow || cs.layout == Layout::LyricsOnly;
+    let lyrics_only = !is_fullscreen && (narrow || cs.layout == Layout::LyricsOnly);
     // reCover: the backdrop cover sits on the left, so the lyrics take the right side.
     let beside_cover = !narrow && cs.layout == Layout::LyricsOnly && look.background.mode == crate::preset::BgMode::CoverFullbleed;
     let centered = lyrics_only && !beside_cover;
@@ -251,40 +262,106 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
             rui.multiply_opacity(panel_vis * vis);
             match tab {
                 NpTab::Lyrics => lyrics_panel(app, &mut rui, r, now, centered),
-                _ => super::shell::queue_list(app, &mut rui, "np"),
+                _ => {
+                    rui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Up next").font(theme::bold(20.0)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if icon_button(ui, icon::X, 16.0, "Close queue (Q)", false).clicked() {
+                                app.np_tab = if app.no_lyrics() { NpTab::Art } else { NpTab::Lyrics };
+                            }
+                        });
+                    });
+                    rui.add_space(8.0);
+                    super::shell::queue_list(app, &mut rui, "np");
+                }
             }
         }
     }
 
-    // Corner toggles, both bottom-right: up next in the corner, lyrics beside it. Each
-    // lights up while its panel is the one showing; clicking the lit one returns to the
-    // artwork alone.
-    let accent = app.accent_color();
-    let ink = |h: f32| theme::lerp_color(theme::text_dim(), theme::text(), h);
-    let corner = |ui: &mut Ui, center: egui::Pos2, key: &str, name: &str| -> egui::Response {
-        let r = Rect::from_center_size(center, Vec2::splat(34.0));
-        let resp = ui.interact(r, ui.scope_id().with(("np-corner", key)), Sense::click());
-        named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand)
-    };
-    let r = corner(ui, pos2(area.right() - 64.0, area.bottom() - 20.0), "lyrics", "Lyrics");
-    let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
-    let on = shown_tab == NpTab::Lyrics;
-    ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
-    glyphs::draw(ui, r.rect.center(), 18.0, if on { glyphs::LYRICS } else { glyphs::LYRICS_OFF }, if on { accent } else { ink(h) });
-    if r.clicked() {
-        if on {
-            app.np_tab = NpTab::Art;
-        } else {
-            ask_lyrics(app, ui.ctx());
+    // In full screen mode: exit full screen and options buttons (hidden until hovered near top right, or menu open)
+    if is_fullscreen {
+        let r_exit = Rect::from_center_size(pos2(area.right() - 8.0, area.top() + 20.0), Vec2::splat(36.0));
+        let r_opts = Rect::from_center_size(pos2(area.right() - 50.0, area.top() + 20.0), Vec2::splat(36.0));
+        let opt_id = ui.scope_id().with("np-options");
+        let opt_resp = ui.interact(r_opts, opt_id, Sense::hover());
+        let popup_open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&opt_resp));
+        let near = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.x > area.right() - 95.0 && p.y < area.top() + 65.0);
+        let vis = theme::anim_bool(ui.ctx(), "np-fs-exit-vis", near || popup_open, 0.18);
+        if vis > 0.001 && vis < 0.999 {
+            ui.ctx().request_repaint();
+        }
+        if vis > 0.01 {
+            options_menu(app, ui, r_opts, &heard, shown_tab == NpTab::Lyrics && !no_lyrics, vis);
+            let resp = ui.interact(r_exit, ui.scope_id().with("np-fs-exit-topright"), Sense::click());
+            let resp = named(resp, "Exit full screen (F / Esc)").on_hover_cursor(egui::CursorIcon::PointingHand);
+            let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.12);
+            ui.painter().circle_filled(r_exit.center(), 17.0, theme::with_alpha(theme::glass(0.09 + 0.07 * h), vis));
+            super::widgets::icon_at(ui, r_exit.center(), icon::SHRINK, 18.0, theme::with_alpha(theme::lerp_color(theme::text_dim(), Color32::WHITE, h), vis));
+            if resp.clicked() {
+                app.set_fullscreen(ui.ctx(), false);
+            }
         }
     }
-    let r = corner(ui, pos2(area.right() - 20.0, area.bottom() - 20.0), "queue", "Up next");
-    let h = theme::anim_bool(ui.ctx(), r.id.with("h"), r.hovered(), 0.15);
-    let on = app.np_tab == NpTab::UpNext;
-    ui.painter().circle_filled(r.rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
-    glyphs::draw(ui, r.rect.center(), 18.0, glyphs::QUEUE, if on { accent } else { ink(h) });
-    if r.clicked() {
-        app.np_tab = if on { NpTab::Art } else { NpTab::UpNext };
+
+    // Floating animated volume pill when volume changes in now playing / full screen
+    let vol_popped = now < app.vol_pop_until;
+    let v_vis = theme::anim_bool(ui.ctx(), "np-vol-pill-vis", vol_popped, 0.18);
+    if v_vis > 0.001 {
+        let vol = app.audio.volume();
+        let anim_vol = ui.ctx().animate_value_with_time(ui.scope_id().with("np-anim-vol"), vol, 0.15).clamp(0.0, 1.0);
+        if (anim_vol - vol).abs() > 0.002 || (v_vis > 0.001 && v_vis < 0.999) || vol_popped {
+            ui.ctx().request_repaint();
+        }
+        let pill_w = 210.0;
+        let pill_h = 36.0;
+        let pill_y = area.top() + 24.0;
+        let pill_rect = Rect::from_center_size(pos2(area.center().x, pill_y), vec2(pill_w, pill_h));
+
+        // Background capsule with glass effect
+        ui.painter().rect_filled(pill_rect, 18.0, theme::with_alpha(theme::glass(0.24), v_vis));
+        ui.painter().rect_stroke(pill_rect, 18.0, egui::Stroke::new(1.0, theme::with_alpha(theme::glass(0.20), v_vis)), egui::StrokeKind::Inside);
+
+        // Speaker icon
+        let step = glyphs::volume_step(vol);
+        let vicon_pos = pos2(pill_rect.left() + 20.0, pill_rect.center().y);
+        glyphs::draw(ui, vicon_pos, 16.0, glyphs::VOLUME[step], theme::with_alpha(theme::text(), v_vis));
+
+        // Volume track
+        let track_left = pill_rect.left() + 38.0;
+        let track_w = 116.0;
+        let track_r = Rect::from_min_size(pos2(track_left, pill_rect.center().y - 2.0), vec2(track_w, 4.0));
+        ui.painter().rect_filled(track_r, 2.0, theme::with_alpha(theme::glass(0.18), v_vis));
+
+        // Animated fill
+        let fill_r = Rect::from_min_size(track_r.min, vec2(track_r.width() * anim_vol, 4.0));
+        let accent = app.accent_color();
+        ui.painter().rect_filled(fill_r, 2.0, theme::with_alpha(accent, v_vis));
+        ui.painter().circle_filled(pos2(fill_r.right(), track_r.center().y), 5.5, theme::with_alpha(Color32::WHITE, v_vis));
+
+        // Percentage label
+        let pct = format!("{:.0}%", (vol * 100.0).round());
+        ui.painter().text(pos2(pill_rect.right() - 24.0, pill_rect.center().y), egui::Align2::CENTER_CENTER, pct, theme::semibold(11.5), theme::with_alpha(theme::text(), v_vis));
+
+        // Interactive: click or drag track, or scroll over pill
+        let resp = ui.interact(pill_rect, ui.scope_id().with("np-vol-pill-resp"), Sense::click_and_drag());
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if let Some(p) = resp.interact_pointer_pos()
+            && (resp.dragged() || resp.clicked())
+        {
+            let new_v = ((p.x - track_r.left()) / track_r.width()).clamp(0.0, 1.0);
+            app.audio.set_volume(new_v);
+            app.vol_pop_until = now + 1.8;
+            app.last_vol = new_v;
+        }
+        if resp.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                let new_v = (vol + scroll / 600.0).clamp(0.0, 1.0);
+                app.audio.set_volume(new_v);
+                app.vol_pop_until = now + 1.8;
+                app.last_vol = new_v;
+            }
+        }
     }
 }
 
@@ -305,8 +382,18 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     let heard = if hold.is_some() { track.clone() } else { app.playing_track().cloned().unwrap_or_else(|| track.clone()) };
     let look = app.look();
     let cs = &look.cover;
-    let side = art_side(cs, col);
-    let art = Rect::from_center_size(pos2(col.center().x, col.top() + side / 2.0 + (col.height() - side - 190.0).max(0.0) * 0.42), Vec2::splat(side));
+    let side = if app.fullscreen {
+        let max_h = if app.fullscreen_show_info { col.height() * 0.72 } else { col.height() * 0.85 };
+        (col.width() * 0.85).min(max_h).max(180.0)
+    } else {
+        art_side(cs, col)
+    };
+    let art = if app.fullscreen {
+        let center_y = if app.fullscreen_show_info { col.center().y - 28.0 } else { col.center().y };
+        Rect::from_center_size(pos2(col.center().x, center_y), Vec2::splat(side))
+    } else {
+        Rect::from_center_size(pos2(col.center().x, col.top() + side / 2.0 + (col.height() - side - 190.0).max(0.0) * 0.42), Vec2::splat(side))
+    };
     let round = cs.shape != Shape::Rounded;
     let radius = if round { side / 2.0 } else { cs.radius.clamp(0.0, side / 2.0) };
     let cr = egui::CornerRadius::same(radius.min(255.0) as u8);
@@ -347,6 +434,29 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
         if cs.brightness < 0.99 {
             ui.painter().rect_filled(art, cr, theme::shade(1.0 - cs.brightness));
         }
+    }
+    // In full screen mode, only the cover and lyrics are visible (plus song & artist if enabled). Tapping the cover stops the music.
+    if app.fullscreen {
+        let art_resp = ui.interact(art, ui.scope_id().with("np-fullscreen-art"), Sense::click());
+        let art_resp = named(art_resp, if app.playing() { "Stop music" } else { "Play music" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if art_resp.clicked() {
+            app.toggle();
+        }
+        let art_scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if art_resp.hovered() && art_scroll != 0.0 {
+            let new_v = (app.audio.volume() + art_scroll / 600.0).clamp(0.0, 1.0);
+            app.audio.set_volume(new_v);
+            app.vol_pop_until = now + 1.8;
+            app.last_vol = new_v;
+        }
+        if app.fullscreen_show_info {
+            let info_y = art.bottom() + 20.0;
+            let text_w = side;
+            text_at(ui, pos2(art.left(), info_y), &track.title, theme::semibold(18.0), Color32::WHITE, text_w);
+            let line = track.artist_line();
+            widgets::linked_text(ui, pos2(art.left(), info_y + 24.0), &line, &track.artists, theme::regular(15.0), theme::text_dim(), text_w, &mut app.actions);
+        }
+        return;
     }
     // A handoff still shows the outgoing song; the stats are the incoming one's.
     if hold.is_none() {
@@ -416,7 +526,7 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     }
     // The song's options, beside the star.
     let options = Rect::from_center_size(pos2(art.right() - 15.0, info_y + 14.0), Vec2::splat(34.0));
-    options_menu(app, ui, options, &heard, app.np_tab == NpTab::Lyrics && !no_lyrics);
+    options_menu(app, ui, options, &heard, app.np_tab == NpTab::Lyrics && !no_lyrics, 1.0);
 
     // Seek: a 4 px line that grows under the pointer, its times below.
     let status = app.audio.status.clone();
@@ -499,15 +609,15 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
         }
     }
 
-    // Transport: the reference's row — shuffle, previous, play, next, repeat — 52 tall,
-    // no wider than 315, its buttons 36/48/56/48/36 with icons of 30/40/48/40/30.
+    // Transport: lyrics · shuffle | previous · play · next | repeat · queue.
     let ty = info_y + 99.0 + 26.0;
-    let row_w = w.min(315.0);
-    let sizes = [36.0f32, 48.0, 56.0, 48.0, 36.0];
-    let icons = [30.0f32, 40.0, 48.0, 40.0, 30.0];
-    let gap = ((row_w - sizes.iter().sum::<f32>()) / 4.0).max(4.0);
-    let mut xs = [0.0f32; 5];
-    let mut cx = art.center().x - row_w / 2.0;
+    let row_w = w.min(380.0);
+    let sizes = [36.0f32, 36.0, 48.0, 56.0, 48.0, 36.0, 36.0];
+    let icons = [18.0f32, 28.0, 40.0, 48.0, 40.0, 28.0, 22.0];
+    let gap = ((row_w - sizes.iter().sum::<f32>()) / 6.0).max(4.0);
+    let mut xs = [0.0f32; 7];
+    let total_w = sizes.iter().sum::<f32>() + gap * 6.0;
+    let mut cx = art.center().x - total_w / 2.0;
     for (i, s) in sizes.iter().enumerate() {
         xs[i] = cx + s / 2.0;
         cx += s + gap;
@@ -529,19 +639,34 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
         }
         (resp, h, p)
     };
-    let (r, h, p) = btn(ui, 0, "shuffle", "Shuffle up next", true);
-    super::glyphs::draw(ui, r.rect.center(), icons[0] * (1.0 - 0.1 * p), super::glyphs::SHUFFLE, ink(h, 0.55, 1.0));
+
+    let lyrics_on = app.np_tab == NpTab::Lyrics;
+    let (r, h, p) = btn(ui, 0, "lyrics", "Lyrics", true);
+    let glyph = if lyrics_on { super::glyphs::LYRICS } else { super::glyphs::LYRICS_OFF };
+    super::glyphs::draw(ui, r.rect.center(), icons[0] * (1.0 - 0.1 * p), glyph, if lyrics_on { app.accent_color() } else { ink(h, 0.55, 1.0) });
+    if r.clicked() {
+        if lyrics_on {
+            app.np_tab = NpTab::Art;
+        } else {
+            ask_lyrics(app, ui.ctx());
+        }
+    }
+
+    let (r, h, p) = btn(ui, 1, "shuffle", "Shuffle up next", true);
+    super::glyphs::draw(ui, r.rect.center(), icons[1] * (1.0 - 0.1 * p), super::glyphs::SHUFFLE, ink(h, 0.55, 1.0));
     if r.clicked() {
         app.shuffle_upcoming();
     }
-    let (r, h, p) = btn(ui, 1, "prev", "Previous", enabled);
-    super::glyphs::draw(ui, r.rect.center(), icons[1] * (1.0 - 0.1 * p), super::glyphs::PREVIOUS, ink(h, 1.0, dim));
+
+    let (r, h, p) = btn(ui, 2, "prev", "Previous", enabled);
+    super::glyphs::draw(ui, r.rect.center(), icons[2] * (1.0 - 0.1 * p), super::glyphs::PREVIOUS, ink(h, 1.0, dim));
     if r.clicked() && enabled {
         app.prev();
     }
-    let (r, h, p) = btn(ui, 2, "play", if app.playing() || app.buffering { "Pause" } else { "Play" }, enabled);
+
+    let (r, h, p) = btn(ui, 3, "play", if app.playing() || app.buffering { "Pause" } else { "Play" }, enabled);
     let c = r.rect.center();
-    let size = icons[2] * (1.0 - 0.1 * p);
+    let size = icons[3] * (1.0 - 0.1 * p);
     let mark = ink(h, 1.0, dim);
     let morph = theme::anim_bool(ui.ctx(), "np-play-morph", app.playing() || app.buffering, 0.18);
     if app.buffering {
@@ -562,24 +687,33 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     if r.clicked() && enabled {
         app.toggle();
     }
-    let (r, h, p) = btn(ui, 3, "next", "Next", enabled);
-    super::glyphs::draw(ui, r.rect.center(), icons[3] * (1.0 - 0.1 * p), super::glyphs::NEXT, ink(h, 1.0, dim));
+
+    let (r, h, p) = btn(ui, 4, "next", "Next", enabled);
+    super::glyphs::draw(ui, r.rect.center(), icons[4] * (1.0 - 0.1 * p), super::glyphs::NEXT, ink(h, 1.0, dim));
     if r.clicked() && enabled {
         app.next();
     }
+
     let (glyph, on) = match app.queue.repeat {
         Repeat::Off => (super::glyphs::REPEAT, false),
         Repeat::All => (super::glyphs::REPEAT, true),
         Repeat::One => (super::glyphs::REPEAT_ONE, true),
     };
-    let (r, h, p) = btn(ui, 4, "repeat", "Repeat", true);
-    super::glyphs::draw(ui, r.rect.center(), icons[4] * (1.0 - 0.1 * p), glyph, if on { app.accent_color() } else { ink(h, 0.55, 1.0) });
+    let (r, h, p) = btn(ui, 5, "repeat", "Repeat", true);
+    super::glyphs::draw(ui, r.rect.center(), icons[5] * (1.0 - 0.1 * p), glyph, if on { app.accent_color() } else { ink(h, 0.55, 1.0) });
     if r.clicked() {
         app.queue.repeat = match app.queue.repeat {
             Repeat::Off => Repeat::All,
             Repeat::All => Repeat::One,
             Repeat::One => Repeat::Off,
         };
+    }
+
+    let queue_on = app.np_tab == NpTab::UpNext;
+    let (r, h, p) = btn(ui, 6, "queue", "Up next (Q)", true);
+    super::glyphs::draw(ui, r.rect.center(), icons[6] * (1.0 - 0.1 * p), super::glyphs::QUEUE, if queue_on { app.accent_color() } else { ink(h, 0.55, 1.0) });
+    if r.clicked() {
+        app.np_tab = if queue_on { if app.no_lyrics() { NpTab::Art } else { NpTab::Lyrics } } else { NpTab::UpNext };
     }
 }
 
@@ -782,17 +916,21 @@ fn sync_label(k: SyncKind) -> &'static str {
 
 /// The ⋯ menu: the song's actions, and with lyrics showing, the source picker,
 /// translation and romanization toggles, and this song's timing offset above them.
-fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Track, lyrics: bool) {
+fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Track, lyrics: bool, alpha: f32) {
     let resp = ui.interact(rect, ui.scope_id().with("np-options"), Sense::click());
     let resp = named(resp, "Options").on_hover_cursor(egui::CursorIcon::PointingHand);
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || open, 0.12);
-    ui.painter().circle_filled(rect.center(), 17.0, theme::glass(0.09 + 0.07 * h));
+    ui.painter().circle_filled(rect.center(), 17.0, theme::with_alpha(theme::glass(0.09 + 0.07 * h), alpha));
     for dx in [-6.0, 0.0, 6.0] {
-        ui.painter().circle_filled(rect.center() + vec2(dx, 0.0), 1.9, theme::with_alpha(Color32::WHITE, 0.75 + 0.25 * h));
+        ui.painter().circle_filled(rect.center() + vec2(dx, 0.0), 1.9, theme::with_alpha(Color32::WHITE, (0.75 + 0.25 * h) * alpha));
     }
-    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_width(270.0);
+    let mut menu_resp = resp.clone();
+    if rect.top() > 100.0 {
+        menu_resp.rect = menu_resp.rect.translate(vec2(0.0, -70.0));
+    }
+    egui::Popup::menu(&menu_resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_width(300.0);
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         ui.add_space(4.0);
         // Lyrics first: the source, translation and timing are what the menu is for
@@ -811,6 +949,12 @@ fn options_menu(app: &mut App, ui: &mut Ui, rect: Rect, track: &crate::model::Tr
         if widgets::menu_action(ui, Some(icon::RADIO), "Start radio") {
             app.actions.push(Action::Radio(track.clone()));
         }
+        let fs_icon = if app.fullscreen { icon::SHRINK } else { icon::EXPAND };
+        let fs_text = if app.fullscreen { "Exit full screen" } else { "Full screen" };
+        if widgets::menu_action(ui, Some(fs_icon), fs_text) {
+            app.set_fullscreen(ui.ctx(), !app.fullscreen);
+        }
+        switch_row(ui, "Show song & artist in full screen", &mut app.fullscreen_show_info);
         // Quality toggle at the bottom: revert when hi-res is playing, upgrade when not.
         let hires_playing = app.audio_info.as_ref().is_some_and(|(_, i)| i.lossless() || i.atmos);
         if hires_playing || !app.hires_sources.is_empty() {
@@ -1214,7 +1358,7 @@ fn switch_row(ui: &mut Ui, label: &str, on: &mut bool) {
     }
     ui.painter().text(pos2(rect.left() + 12.0, rect.center().y), egui::Align2::LEFT_CENTER, label, theme::regular(14.0), theme::text());
     let t = theme::anim_bool(ui.ctx(), resp.id.with("t"), *on, 0.16);
-    let track = Rect::from_center_size(pos2(rect.right() - 30.0, rect.center().y), vec2(36.0, 20.0));
+    let track = Rect::from_center_size(pos2(rect.right() - 26.0, rect.center().y), vec2(36.0, 20.0));
     let accent = ui.ctx().data(|d| d.get_temp::<Color32>(egui::Id::unique("accent"))).unwrap_or(theme::RED);
     ui.painter().rect_filled(track, 10.0, theme::lerp_color(theme::glass(0.16 + 0.06 * h), accent, t));
     let knob = pos2(egui::lerp(track.left() + 10.0..=track.right() - 10.0, t), track.center().y);

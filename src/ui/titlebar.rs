@@ -16,10 +16,10 @@ const BUTTON_W: f32 = 46.0;
 const EDGE: f32 = 5.0;
 const CORNER: f32 = 14.0;
 
-/// Whether the app draws the title bar itself: on Windows, unless `YTM_NATIVE_TITLEBAR`
-/// asks for the system's.
+/// Whether the app draws the title bar itself: false by default since native
+/// window decorations and buttons are used. Can still be forced via YTM_CUSTOM_TITLEBAR.
 pub fn custom() -> bool {
-    cfg!(windows) && std::env::var_os("YTM_NATIVE_TITLEBAR").is_none()
+    cfg!(windows) && std::env::var_os("YTM_CUSTOM_TITLEBAR").is_some()
 }
 
 /// Full screen has no title bar. The app's own full screen (`crate::fullscreen`) goes
@@ -250,6 +250,7 @@ pub fn set_hwnd(hwnd: *mut std::ffi::c_void) {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 mod frame {
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;

@@ -550,9 +550,28 @@ fn recent_searches(ui: &mut Ui, app: &mut App) {
         ui.label(RichText::new("Search for artists, songs, albums and playlists.").font(theme::regular(15.0)).color(theme::text_dim()));
         return;
     }
-    ui.label(RichText::new("Recently Searched").font(theme::bold(22.0)).color(theme::text()));
-    ui.add_space(12.0);
     let w = ui.available_width().min(620.0);
+    let mut clear_all = false;
+    ui.allocate_ui_with_layout(vec2(w, 32.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.label(RichText::new("Recently Searched").font(theme::bold(22.0)).color(theme::text()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (cr, cresp) = ui.allocate_exact_size(vec2(76.0, 28.0), Sense::click());
+            let cresp = named(cresp, "Clear all").on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Clear all recently searched");
+            let ch = theme::anim_bool(ui.ctx(), cresp.id.with("h"), cresp.hovered(), 0.12);
+            if ch > 0.0 {
+                ui.painter().rect_filled(cr, 14.0, theme::glass(0.12 * ch));
+            }
+            ui.painter().text(cr.center(), egui::Align2::CENTER_CENTER, "Clear all", theme::semibold(13.5), theme::lerp_color(theme::text_dim(), theme::text(), ch));
+            if cresp.clicked() {
+                clear_all = true;
+            }
+        });
+    });
+    if clear_all {
+        app.recent_searches.clear();
+        return;
+    }
+    ui.add_space(12.0);
     // The rows are cloned so a removal can be applied after the list is drawn.
     let recents = app.recent_searches.clone();
     let mut remove = None;
@@ -572,9 +591,25 @@ fn recent_searches(ui: &mut Ui, app: &mut App) {
                 ui.painter().rect_filled(art, radius, theme::glass(0.1));
             }
         }
+        let del_rect = Rect::from_center_size(pos2(rect.right() - 26.0, rect.center().y), Vec2::splat(32.0));
+        let del_resp = ui.interact(del_rect, ui.scope_id().with(("del-recent", i)), Sense::click());
+        let del_resp = named(del_resp, "Remove from recently searched")
+            .on_hover_text("Remove")
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let dh = theme::anim_bool(ui.ctx(), del_resp.id.with("h"), del_resp.hovered(), 0.12);
+        if dh > 0.0 {
+            ui.painter().circle_filled(del_rect.center(), 15.0, theme::glass(0.12 * dh));
+        }
+        let del_color = theme::lerp_color(theme::text_dim(), theme::text(), dh);
+        super::widgets::icon_at(ui, del_rect.center(), icon::X, 14.0, del_color);
+        if del_resp.clicked() {
+            remove = Some(i);
+        }
+
         let x = art.right() + 14.0;
-        widgets::text_at(ui, pos2(x, rect.center().y - 17.0), &r.title, theme::semibold(15.0), theme::text(), rect.right() - x - 12.0);
-        widgets::text_at(ui, pos2(x, rect.center().y + 4.0), &r.subtitle, theme::regular(13.0), theme::text_dim(), rect.right() - x - 12.0);
+        let text_max_w = (del_rect.left() - x - 12.0).max(0.0);
+        widgets::text_at(ui, pos2(x, rect.center().y - 17.0), &r.title, theme::semibold(15.0), theme::text(), text_max_w);
+        widgets::text_at(ui, pos2(x, rect.center().y + 4.0), &r.subtitle, theme::regular(13.0), theme::text_dim(), text_max_w);
         egui::Popup::context_menu(&resp).show(|ui| {
             ui.set_min_width(200.0);
             if ui.button("Remove from Recently Searched").clicked() {
@@ -582,7 +617,7 @@ fn recent_searches(ui: &mut Ui, app: &mut App) {
                 ui.close();
             }
         });
-        if resp.clicked() {
+        if resp.clicked() && !del_resp.clicked() && !del_resp.hovered() {
             app.actions.push(match &r.target {
                 Some(t) => Action::Open(t.clone()),
                 // An entry from an earlier version kept only the search.
@@ -1016,8 +1051,10 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
                 if tab == t {
                     app.refresh();
                 } else {
+                    let changed = app.page_changed;
                     app.page = Page::Library(t);
                     app.page_loaded();
+                    app.page_changed = changed;
                 }
             }
         }

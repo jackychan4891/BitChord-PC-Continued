@@ -27,10 +27,10 @@ use crate::theme::{self, icon};
 
 /// The strip when first opened. It's as tall as its contents; the width goes from
 /// `MIN_W` to `MAX_W` by its sides.
-pub const SIZE: Vec2 = vec2(400.0, 112.0);
+pub const SIZE: Vec2 = vec2(400.0, 148.0);
 /// The line being sung, when lyrics are on: a band above the strip the strip's own size,
 /// so the window doubles in height and the line gets the strip's whole width.
-pub const LYR_H: f32 = SIZE.y;
+pub const LYR_H: f32 = 112.0;
 const MIN_W: f32 = 330.0;
 const MAX_W: f32 = 720.0;
 /// Kept above other windows until unpinned.
@@ -480,7 +480,7 @@ impl Mini {
                     let w = std::env::var("YTM_MINI_W").ok().and_then(|w| w.parse().ok()).unwrap_or(SIZE.x);
                     clamp_size(Place { w, ..here }, self.lyrics)
                 }
-                (Some(p), _) if self.visible(p, frame) => p,
+                (Some(p), _) if self.visible(p, frame) => clamp_size(p, self.lyrics),
                 (_, here) => {
                     let scale = here.map_or(1.0, |h| h.scale);
                     // Not Windows: the bottom right of the full window, where the player bar was.
@@ -639,7 +639,7 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     let want = app.mini.lyrics_want;
     let band = if side { Rect::from_min_max(r.min, pos2(r.right(), r.top() + LYR_H)) } else { r };
     let col = if side { Rect::from_min_max(pos2(r.left(), band.bottom()), r.max) } else { r };
-    let art = Rect::from_min_size(col.min + Vec2::splat(pad), Vec2::splat(col.height() - 2.0 * pad - 4.0));
+    let art = Rect::from_min_size(col.min + Vec2::splat(pad), Vec2::splat(84.0));
     match &track {
         Some(t) => paint_cover(ui, art, &t.thumbs, theme::thumb_radius() + 1.0, 1.0),
         None => {
@@ -770,6 +770,14 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     let cx = (x0 + x1) / 2.0;
     let enabled = track.is_some();
     let vol = app.audio.volume();
+    if app.last_vol >= 0.0 && (app.last_vol - vol).abs() > 0.005 {
+        app.vol_pop_until = now + 1.8;
+    }
+    app.last_vol = vol;
+    let vol_popped = now < app.vol_pop_until;
+    if vol_popped {
+        ctx.request_repaint();
+    }
     let vpos = pos2(cx + 88.0, cy);
     let vhit = Rect::from_center_size(vpos, Vec2::splat(32.0));
     let slider = Rect::from_min_max(pos2(cx - 88.0, cy - 10.0), pos2(cx + 58.0, cy + 10.0));
@@ -779,7 +787,7 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     // (window chrome, the drag regions) would otherwise hide the pointer from it.
     let hover = |r: Rect| ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
     let vol_band = Rect::from_min_max(pos2(slider.left() - 4.0, cy - 14.0), pos2(vhit.right(), cy + 14.0));
-    let open = hover(vhit) || ui.rect_contains_pointer(vhit) || (was_open && (hover(vol_band) || ui.input(|i| i.pointer.any_down())));
+    let open = hover(vhit) || ui.rect_contains_pointer(vhit) || (was_open && (hover(vol_band) || ui.input(|i| i.pointer.any_down()))) || vol_popped;
     ui.data_mut(|d| d.insert_temp(open_id, open));
     if open != was_open {
         ctx.request_repaint();
@@ -853,7 +861,12 @@ pub fn strip(app: &mut App, ui: &mut Ui, now: f64) {
     } else {
         let track_r = Rect::from_center_size(slider.center(), vec2(slider.width(), 4.0));
         ui.painter().rect_filled(track_r, 2.0, theme::glass(0.16));
-        let fill = Rect::from_min_size(track_r.min, vec2(track_r.width() * vol, 4.0));
+        let anim_id = ui.scope_id().with("mini-anim-vol");
+        let anim_vol = ui.ctx().animate_value_with_time(anim_id, vol, 0.15).clamp(0.0, 1.0);
+        if (anim_vol - vol).abs() > 0.002 {
+            ui.ctx().request_repaint();
+        }
+        let fill = Rect::from_min_size(track_r.min, vec2(track_r.width() * anim_vol, 4.0));
         ui.painter().rect_filled(fill, 2.0, theme::text());
         ui.painter().circle_filled(pos2(fill.right(), track_r.center().y), 6.0, theme::text());
         let sresp = ui.interact(slider.expand2(vec2(0.0, 8.0)), ui.scope_id().with("mini-vol-slider"), Sense::click_and_drag());
@@ -1149,21 +1162,21 @@ mod tests {
     fn first_place_is_the_work_areas_corner() {
         let area = Rect::from_min_max(pos2(0.0, 0.0), pos2(2560.0, 1400.0));
         let p = corner_place(area, Vec2::ZERO, 1.0, 1.0);
-        assert_eq!((p.x, p.y, p.w, p.h), (2560.0 - 400.0 - 16.0, 1400.0 - 112.0 - 16.0, SIZE.x, SIZE.y));
+        assert_eq!((p.x, p.y, p.w, p.h), (2560.0 - 400.0 - 16.0, 1400.0 - 148.0 - 16.0, SIZE.x, SIZE.y));
         // Scaled: pixels grow with the scale, points don't.
         let p = corner_place(area, vec2(0.0, 0.0), 1.5, 1.0);
-        assert_eq!((p.x, p.y, p.w), (2560.0 - 600.0 - 24.0, 1400.0 - 168.0 - 24.0, SIZE.x));
+        assert_eq!((p.x, p.y, p.w), (2560.0 - 600.0 - 24.0, 1400.0 - 222.0 - 24.0, SIZE.x));
         // A second monitor left of the main one has negative coordinates.
         let left = Rect::from_min_max(pos2(-1920.0, 100.0), pos2(0.0, 1140.0));
         let p = corner_place(left, vec2(2.0, 2.0), 1.0, 1.0);
-        assert_eq!((p.x, p.y), (-402.0 - 16.0, 1140.0 - 114.0 - 16.0));
+        assert_eq!((p.x, p.y), (-402.0 - 16.0, 1140.0 - 150.0 - 16.0));
         // Never past the area's top left, however small it is.
         let tiny = Rect::from_min_max(pos2(10.0, 20.0), pos2(200.0, 50.0));
         let p = corner_place(tiny, Vec2::ZERO, 1.0, 1.0);
         assert_eq!((p.x, p.y), (10.0, 20.0));
         // Zoomed in, a point is bigger: the strip still ends at the margin.
         let p = corner_place(area, Vec2::ZERO, 1.0, 2.0);
-        assert_eq!((p.x, p.y, p.zoom), (2560.0 - 800.0 - 16.0, 1400.0 - 224.0 - 16.0, 2.0));
+        assert_eq!((p.x, p.y, p.zoom), (2560.0 - 800.0 - 16.0, 1400.0 - 296.0 - 16.0, 2.0));
     }
 
     #[test]
